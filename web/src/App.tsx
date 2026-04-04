@@ -56,6 +56,8 @@ export default function App() {
   const [syncCode, setSyncCode] = useState('');
   const [notification, setNotification] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [lastCmdError, setLastCmdError] = useState<{ command: string; output: string } | null>(null);
+  const [fixLoading, setFixLoading] = useState(false);
   const [hoveredResource, setHoveredResource] = useState<CatalogResource | null>(null);
   const [hoverPos, setHoverPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   // Resizable panel sizes
@@ -76,7 +78,13 @@ export default function App() {
   const handleWSMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'terminal' && msg.output) {
       setTerminalOutput(prev => [...prev, ...msg.output!.split('\n')]);
-      if (msg.error) setTerminalOutput(prev => [...prev, `ERROR: ${msg.error}`]);
+      if (msg.error) {
+        setTerminalOutput(prev => [...prev, `ERROR: ${msg.error}`]);
+        // Capture the error for "Fix with AI" — include last command output
+        setLastCmdError({ command: (msg as any).status || 'unknown', output: msg.output + '\n' + msg.error });
+      } else {
+        setLastCmdError(null); // Clear on success
+      }
     }
     if (msg.type === 'file_changed') {
       setNotification(`File changed externally: ${msg.file?.split('/').pop()}`);
@@ -885,13 +893,73 @@ export default function App() {
         <div style={S.term}>
           <div style={S.termHead}>
             <span>⬛ Terminal</span>
-            <button style={S.termClear} onClick={() => setTerminalOutput([])}>Clear</button>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              {lastCmdError && (
+                <button style={{ background: '#ef444422', border: '1px solid #ef444444', borderRadius: 6, padding: '3px 10px', color: '#ef4444', fontSize: 10, cursor: 'pointer', fontFamily: 'JetBrains Mono', fontWeight: 600 }}
+                  disabled={fixLoading}
+                  onClick={async () => {
+                    setFixLoading(true);
+                    try {
+                      const provider = detectProvider();
+                      const result = await api.analyzePlan({
+                        tool: tool!,
+                        provider,
+                        command: lastCmdError.command,
+                        output: lastCmdError.output,
+                        exit_code: 1,
+                        canvas: nodes.map(n => ({ type: n.type, name: n.name })),
+                      });
+                      // Show AI diagnosis in terminal
+                      setTerminalOutput(prev => [...prev, '', `✦ AI Diagnosis: ${result.message}`]);
+                      // Apply property fixes to existing nodes
+                      if (result.fixes?.length > 0) {
+                        setTerminalOutput(prev => [...prev, `✦ Suggested fixes:`]);
+                        result.fixes.forEach(fix => {
+                          setTerminalOutput(prev => [...prev, `  → ${fix.resource_type}.${fix.resource_name}: ${fix.field} = "${fix.new_value}" (${fix.reason})`]);
+                          // Auto-apply the fix to the matching node
+                          setNodes(prev => prev.map(n => {
+                            if (n.type === fix.resource_type && n.name === fix.resource_name) {
+                              return { ...n, properties: { ...n.properties, [fix.field]: fix.new_value } };
+                            }
+                            return n;
+                          }));
+                        });
+                        setTerminalOutput(prev => [...prev, `✦ Fixes applied to canvas. Run plan again to verify.`]);
+                      }
+                      // Add new resources the AI says are missing
+                      if (result.new_resources?.length > 0) {
+                        setTerminalOutput(prev => [...prev, `✦ Adding missing resources:`]);
+                        result.new_resources.forEach(r => {
+                          setTerminalOutput(prev => [...prev, `  + ${r.type}.${r.name}`]);
+                          const meta = catalogResources.find(c => c.type === r.type);
+                          addNode({
+                            type: r.type,
+                            label: meta?.label ?? r.type,
+                            icon: meta?.icon ?? '📦',
+                            defaults: r.properties,
+                          });
+                        });
+                      }
+                      // Also show in chat for reference
+                      setChatMessages(prev => [...prev, { role: 'ai', text: `Plan fix: ${result.message}` }]);
+                      setLastCmdError(null);
+                    } catch {
+                      setTerminalOutput(prev => [...prev, '✦ AI fix analysis failed. Check that Ollama is running.']);
+                    }
+                    setFixLoading(false);
+                  }}>
+                  {fixLoading ? '✦ Analyzing...' : '✦ Fix with AI'}
+                </button>
+              )}
+              <button style={S.termClear} onClick={() => { setTerminalOutput([]); setLastCmdError(null); }}>Clear</button>
+            </div>
           </div>
           <div style={S.termContent}>
             {terminalOutput.length === 0 && <span style={{ color: '#444' }}>Run init, plan, or apply to see output...</span>}
             {terminalOutput.map((line, i) => (
               <div key={i} style={{ color: line.startsWith('✓') || line.includes('Apply complete') ? '#4ade80' :
                 line.startsWith('$') ? ct.color : line.startsWith('  +') ? '#60a5fa' :
+                line.startsWith('✦') ? '#a78bfa' :
                 line.startsWith('Error') || line.startsWith('ERROR') ? '#ef4444' : '#999' }}>
                 {line || '\u00A0'}
               </div>

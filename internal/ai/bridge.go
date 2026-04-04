@@ -115,6 +115,184 @@ func (c *OllamaClient) GenerateIaC(ctx context.Context, req ChatRequest) (string
 	return parseAIResponse(ollamaResp.Response)
 }
 
+// PlanFixRequest is a request to analyze plan/apply output and suggest fixes.
+type PlanFixRequest struct {
+	Tool        string           `json:"tool"`
+	Provider    string           `json:"provider"`
+	Command     string           `json:"command"`     // "plan", "apply", "init", "validate"
+	Output      string           `json:"output"`      // raw CLI output
+	ExitCode    int              `json:"exit_code"`
+	Canvas      []CanvasResource `json:"canvas"`
+}
+
+// PlanFix is a suggested fix from the AI.
+type PlanFix struct {
+	Message    string            `json:"message"`     // explanation of the problem
+	Fixes      []ResourceFix     `json:"fixes"`       // specific changes to make
+	NewResources []parser.Resource `json:"new_resources"` // resources to add
+}
+
+// ResourceFix is a specific property change on an existing resource.
+type ResourceFix struct {
+	ResourceType string `json:"resource_type"`
+	ResourceName string `json:"resource_name"`
+	Field        string `json:"field"`
+	OldValue     string `json:"old_value"`
+	NewValue     string `json:"new_value"`
+	Reason       string `json:"reason"`
+}
+
+// AnalyzePlanOutput sends terraform plan/apply output to the AI for diagnosis and fix suggestions.
+func (c *OllamaClient) AnalyzePlanOutput(ctx context.Context, req PlanFixRequest) (*PlanFix, error) {
+	// Truncate output to avoid overwhelming the model
+	output := req.Output
+	if len(output) > 4000 {
+		output = output[:2000] + "\n\n... (truncated) ...\n\n" + output[len(output)-2000:]
+	}
+
+	var canvasLines []string
+	for _, r := range req.Canvas {
+		canvasLines = append(canvasLines, fmt.Sprintf("  - %s.%s", r.Type, r.Name))
+	}
+	canvasCtx := ""
+	if len(canvasLines) > 0 {
+		canvasCtx = "\n\nResources on canvas:\n" + strings.Join(canvasLines, "\n")
+	}
+
+	prompt := fmt.Sprintf(`You are an Infrastructure as Code debugging assistant for %s (%s provider).
+
+The user ran "%s %s" and got this output:
+
+---
+%s
+---
+%s
+
+Analyze the output and respond with a JSON object:
+{
+  "message": "Clear explanation of what went wrong and how to fix it",
+  "fixes": [
+    {
+      "resource_type": "aws_instance",
+      "resource_name": "web_server",
+      "field": "ami",
+      "old_value": "ami-invalid",
+      "new_value": "ami-0c55b159cbfafe1f0",
+      "reason": "The AMI ID doesn't exist in this region"
+    }
+  ],
+  "new_resources": [
+    {
+      "type": "aws_security_group",
+      "name": "web_sg",
+      "properties": {"name": "web-sg"}
+    }
+  ]
+}
+
+Rules:
+- "fixes" are changes to EXISTING resources on the canvas
+- "new_resources" are resources that need to be ADDED (e.g., missing security group)
+- If the output shows success with no errors, set message to a success summary and leave fixes/new_resources empty
+- Be specific — name exact fields and values
+- Only respond with valid JSON`, req.Tool, req.Provider, req.Tool, req.Command, output, canvasCtx)
+
+	reqBody := ollamaRequest{
+		Model:  c.model,
+		Prompt: prompt,
+		Stream: false,
+		Format: "json",
+	}
+
+	body, _ := json.Marshal(reqBody)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/api/generate", bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("ollama unavailable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var ollamaResp ollamaResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return nil, err
+	}
+
+	return parsePlanFixResponse(ollamaResp.Response)
+}
+
+func parsePlanFixResponse(raw string) (*PlanFix, error) {
+	raw = strings.TrimSpace(raw)
+	raw = strings.TrimPrefix(raw, "```json")
+	raw = strings.TrimPrefix(raw, "```")
+	raw = strings.TrimSuffix(raw, "```")
+	raw = strings.TrimSpace(raw)
+
+	var result struct {
+		Message      string `json:"message"`
+		Fixes        []ResourceFix `json:"fixes"`
+		NewResources []struct {
+			Type       string                 `json:"type"`
+			Name       string                 `json:"name"`
+			Properties map[string]interface{} `json:"properties"`
+		} `json:"new_resources"`
+	}
+
+	if err := json.Unmarshal([]byte(raw), &result); err != nil {
+		// If not valid JSON, return the raw text as the message
+		return &PlanFix{Message: raw}, nil
+	}
+
+	fix := &PlanFix{
+		Message: result.Message,
+		Fixes:   result.Fixes,
+	}
+
+	for i, r := range result.NewResources {
+		fix.NewResources = append(fix.NewResources, parser.Resource{
+			ID:         fmt.Sprintf("fix_%d_%d", time.Now().Unix(), i),
+			Type:       r.Type,
+			Name:       r.Name,
+			Properties: r.Properties,
+		})
+	}
+
+	return fix, nil
+}
+
+// AnalyzePlanFallback provides basic error analysis without AI.
+func AnalyzePlanFallback(output string, exitCode int) *PlanFix {
+	fix := &PlanFix{}
+	lower := strings.ToLower(output)
+
+	switch {
+	case exitCode == 0 && !strings.Contains(lower, "error"):
+		fix.Message = "Command completed successfully. No issues detected."
+	case strings.Contains(lower, "no valid credential"):
+		fix.Message = "AWS credentials not configured. Run `aws configure` or set AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY environment variables."
+	case strings.Contains(lower, "could not find plugin") || strings.Contains(lower, "provider registry"):
+		fix.Message = "Terraform provider not initialized. Run `terraform init` first to download the required providers."
+	case strings.Contains(lower, "unsupported attribute") || strings.Contains(lower, "unsupported argument"):
+		fix.Message = "One or more resource properties are invalid. Check the highlighted fields against the provider documentation."
+	case strings.Contains(lower, "error creating") || strings.Contains(lower, "error configuring"):
+		fix.Message = "Resource creation failed. Check your provider credentials, region settings, and resource quotas."
+	case strings.Contains(lower, "already exists"):
+		fix.Message = "A resource with this name already exists. Use `terraform import` to bring it under management, or change the resource name."
+	case strings.Contains(lower, "access denied") || strings.Contains(lower, "unauthorized"):
+		fix.Message = "Permission denied. Your credentials don't have the required IAM permissions for this operation."
+	case strings.Contains(lower, "limit exceeded") || strings.Contains(lower, "quota"):
+		fix.Message = "Service quota exceeded. Request a limit increase or reduce the number of resources."
+	default:
+		fix.Message = "Command failed. Review the output above for specific error details."
+	}
+
+	return fix
+}
+
 // GenerateIaCSimple is the legacy single-message interface (used by pattern matching fallback).
 func (c *OllamaClient) GenerateIaCSimple(ctx context.Context, message, tool string) (string, []parser.Resource, error) {
 	return c.GenerateIaC(ctx, ChatRequest{

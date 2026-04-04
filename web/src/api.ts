@@ -137,6 +137,27 @@ export const api = {
     return (await check(res)).json();
   },
 
+  // Analyze plan/apply output and get AI fix suggestions
+  async analyzePlan(req: {
+    tool: string;
+    provider: string;
+    command: string;
+    output: string;
+    exit_code: number;
+    canvas: { type: string; name: string }[];
+  }): Promise<{
+    message: string;
+    fixes: { resource_type: string; resource_name: string; field: string; old_value: string; new_value: string; reason: string }[];
+    new_resources: Resource[];
+  }> {
+    const res = await fetch(`${BASE}/api/ai/fix`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
   // Smart resource suggestions
   async suggest(tool: string, provider: string, canvas: { type: string; name: string }[]): Promise<Suggestion[]> {
     const res = await fetch(`${BASE}/api/ai/suggest`, {

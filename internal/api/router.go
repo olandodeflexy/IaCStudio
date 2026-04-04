@@ -363,6 +363,24 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		json.NewEncoder(w).Encode(suggestions)
 	})
 
+	// Analyze plan/apply output and suggest fixes
+	mux.HandleFunc("POST /api/ai/fix", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var req ai.PlanFixRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+
+		fix, err := aiClient.AnalyzePlanOutput(r.Context(), req)
+		if err != nil {
+			log.Printf("AI unavailable for plan fix, using fallback: %v", err)
+			fix = ai.AnalyzePlanFallback(req.Output, req.ExitCode)
+		}
+
+		json.NewEncoder(w).Encode(fix)
+	})
+
 	// WebSocket for live sync
 	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, r *http.Request) {
 		ServeWS(hub, w, r)
