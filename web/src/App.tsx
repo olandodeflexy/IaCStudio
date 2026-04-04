@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { api, Resource, ToolInfo, CatalogResource } from './api';
+import { api, Resource, ToolInfo, CatalogResource, Suggestion } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 
 // ─── Tool Definitions (UI metadata only — resources loaded from backend catalog) ───
@@ -47,7 +47,9 @@ export default function App() {
   const [chatMessages, setChatMessages] = useState<{ role: string; text: string }[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
+  const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activePanel, setActivePanel] = useState('palette');
+  const [showGuide, setShowGuide] = useState(true);
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
   const [dragging, setDragging] = useState<{ id: string; ox: number; oy: number } | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
@@ -259,6 +261,35 @@ export default function App() {
 
   const onMouseUp = () => setDragging(null);
 
+  // Detect the dominant cloud provider from canvas nodes
+  const detectProvider = useCallback((): string => {
+    const counts: Record<string, number> = { aws: 0, google: 0, azurerm: 0 };
+    nodes.forEach(n => {
+      if (n.type.startsWith('aws_')) counts.aws++;
+      else if (n.type.startsWith('google_')) counts.google++;
+      else if (n.type.startsWith('azurerm_')) counts.azurerm++;
+    });
+    // Also check chat history for provider hints
+    const chatText = chatMessages.map(m => m.text).join(' ').toLowerCase();
+    if (chatText.includes('azure') || chatText.includes('azurerm')) counts.azurerm += 3;
+    if (chatText.includes('gcp') || chatText.includes('google cloud')) counts.google += 3;
+    if (chatText.includes('aws') || chatText.includes('amazon')) counts.aws += 3;
+
+    const max = Math.max(counts.aws, counts.google, counts.azurerm);
+    if (max === 0) return 'aws';
+    if (counts.google === max) return 'google';
+    if (counts.azurerm === max) return 'azurerm';
+    return 'aws';
+  }, [nodes, chatMessages]);
+
+  // Fetch suggestions when canvas changes
+  useEffect(() => {
+    if (!tool) return;
+    const provider = detectProvider();
+    const canvas = nodes.map(n => ({ type: n.type, name: n.name }));
+    api.suggest(tool, provider, canvas).then(setSuggestions).catch(() => {});
+  }, [nodes, tool, detectProvider]);
+
   const handleChat = async () => {
     if (!chatInput.trim() || !tool) return;
     const input = chatInput;
@@ -267,20 +298,25 @@ export default function App() {
     setChatLoading(true);
 
     try {
-      const result = await api.chat(input, tool);
+      const provider = detectProvider();
+      const result = await api.chat({
+        message: input,
+        tool,
+        provider,
+        history: chatMessages.map(m => ({ role: m.role === 'ai' ? 'ai' : 'user', content: m.text })),
+        canvas: nodes.map(n => ({ type: n.type, name: n.name })),
+      });
       setChatMessages(prev => [...prev, { role: 'ai', text: result.message }]);
+      if (result.suggestions) setSuggestions(result.suggestions);
       if (result.resources) {
         result.resources.forEach(r => {
           const meta = catalogResources.find(def => def.type === r.type);
-          const node = {
-            ...r,
-            id: uid(),
-            icon: meta?.icon ?? '📦',
+          addNode({
+            type: r.type,
             label: meta?.label ?? r.type,
-            x: 100 + Math.random() * 280,
-            y: 80 + Math.random() * 180,
-          };
-          setNodes(prev => [...prev, node]);
+            icon: meta?.icon ?? '📦',
+            defaults: r.properties,
+          });
         });
       }
     } catch {
@@ -351,6 +387,52 @@ export default function App() {
               </div>
             ))}
           </div>
+
+          {/* Project name & directory */}
+          <div style={{ marginTop: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+              <label style={{ fontSize: 12, color: '#555', fontFamily: 'JetBrains Mono' }}>Project:</label>
+              <input style={{ background: '#111120', border: '1px solid #2a2a3e', borderRadius: 8, padding: '8px 14px', color: '#ccc', fontSize: 13, fontFamily: 'JetBrains Mono', outline: 'none', width: 200 }}
+                value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="my-infra-project" />
+            </div>
+            <div style={{ fontSize: 11, color: '#444', fontFamily: 'JetBrains Mono' }}>
+              Creates ~/iac-projects/{projectName}/
+            </div>
+
+            {/* Import existing project */}
+            <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>
+              <button style={{ background: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: 8, padding: '8px 16px', color: '#888', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans' }}
+                onClick={async () => {
+                  const name = prompt('Enter existing project directory name (under ~/iac-projects/):');
+                  if (!name) return;
+                  setProjectName(name);
+                  // Try to load and parse the existing project
+                  const firstTool = detectedTools.find(t => t.available);
+                  const toolKey = firstTool?.name === 'OpenTofu' ? 'opentofu' : firstTool?.name === 'Ansible' ? 'ansible' : 'terraform';
+                  setProjectId(name);
+                  setTool(toolKey);
+                  hasCreatedProject.current = true;
+                  try {
+                    const resources = await api.getResources(name, toolKey);
+                    if (resources && resources.length > 0) {
+                      setNodes(resources.map((r, i) => ({
+                        ...r,
+                        x: 80 + (i % 4) * 200,
+                        y: 80 + Math.floor(i / 4) * 120,
+                        icon: catalogResources.find(c => c.type === r.type)?.icon ?? '📦',
+                        label: catalogResources.find(c => c.type === r.type)?.label ?? r.type,
+                      })));
+                      setNotification(`Imported ${resources.length} resources from ${name}`);
+                      setTimeout(() => setNotification(null), 4000);
+                    }
+                  } catch {
+                    // Project might not exist yet, that's ok
+                  }
+                }}>
+                📂 Import Existing Project
+              </button>
+            </div>
+          </div>
         </div>
       </div>
     );
@@ -397,10 +479,17 @@ export default function App() {
         {/* Sidebar — resizable */}
         <aside style={{ ...S.sidebar, width: sidebarWidth }}>
           <div style={S.tabs}>
-            {['palette', 'files'].map(t => (
-              <button key={t} style={{ ...S.tab, ...(activePanel === t ? { color: ct.color, borderBottomColor: ct.color } : {}) }}
-                onClick={() => setActivePanel(t)}>
-                {t === 'palette' ? 'Resources' : 'Files'}
+            {[
+              { key: 'palette', label: 'Resources' },
+              { key: 'suggest', label: 'Next' },
+              { key: 'guide', label: 'Guide' },
+            ].map(t => (
+              <button key={t.key} style={{ ...S.tab, ...(activePanel === t.key ? { color: ct.color, borderBottomColor: ct.color } : {}), fontSize: 10 }}
+                onClick={() => setActivePanel(t.key)}>
+                {t.label}
+                {t.key === 'suggest' && suggestions.length > 0 && (
+                  <span style={{ marginLeft: 4, background: ct.color + '33', color: ct.color, padding: '1px 5px', borderRadius: 8, fontSize: 9 }}>{suggestions.length}</span>
+                )}
               </button>
             ))}
           </div>
@@ -460,6 +549,67 @@ export default function App() {
               <div style={{ marginTop: 24, padding: 12, background: '#111122', borderRadius: 8, fontSize: 11, color: '#555', lineHeight: 1.6 }}>
                 Files sync to:<br /><code style={{ color: ct.color, fontFamily: 'JetBrains Mono' }}>~/{projectName}/</code>
               </div>
+            </div>
+          )}
+          {/* Suggestions panel */}
+          {activePanel === 'suggest' && (
+            <div style={S.palScroll}>
+              {suggestions.length === 0 ? (
+                <div style={{ padding: 20, textAlign: 'center', color: '#555', fontSize: 12 }}>
+                  Add resources to get smart suggestions based on IaC best practices.
+                </div>
+              ) : (
+                suggestions.map(s => {
+                  const meta = catalogResources.find(c => c.type === s.type);
+                  return (
+                    <button key={s.type} style={{ ...S.palItem, flexDirection: 'column' as const, alignItems: 'flex-start', gap: 4, padding: '10px 16px' }}
+                      onClick={() => meta && addNode(meta)}
+                      onMouseEnter={e => { (e.currentTarget as any).style.background = '#1a1a2e'; }}
+                      onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
+                        <span>{meta?.icon ?? '📦'}</span>
+                        <span style={{ flex: 1, fontWeight: 600, color: '#ddd' }}>{s.label}</span>
+                        <span style={{ color: s.priority === 1 ? ct.color : s.priority === 2 ? '#888' : '#555', fontSize: 9, fontFamily: 'JetBrains Mono' }}>
+                          {s.priority === 1 ? 'NEXT' : s.priority === 2 ? 'RECOMMENDED' : 'OPTIONAL'}
+                        </span>
+                      </div>
+                      <div style={{ fontSize: 11, color: '#666', lineHeight: 1.4, paddingLeft: 28 }}>{s.reason}</div>
+                    </button>
+                  );
+                })
+              )}
+            </div>
+          )}
+          {/* Guide panel */}
+          {activePanel === 'guide' && (
+            <div style={{ ...S.palScroll, padding: 16 }}>
+              <div style={{ fontSize: 14, fontWeight: 700, color: '#ddd', marginBottom: 16 }}>Getting Started</div>
+              {[
+                { step: '1', title: 'Add a foundation', desc: tool === 'ansible' ? 'Start with package installation (apt/yum)' : detectProvider() === 'google' ? 'Start with a VPC Network (google_compute_network)' : detectProvider() === 'azurerm' ? 'Start with a Resource Group (azurerm_resource_group)' : 'Start with a VPC (aws_vpc)' },
+                { step: '2', title: 'Build networking', desc: tool === 'ansible' ? 'Configure services and users' : 'Add subnets, security groups, and routing' },
+                { step: '3', title: 'Add compute', desc: tool === 'ansible' ? 'Deploy application files and templates' : 'Deploy VMs, containers, or serverless functions' },
+                { step: '4', title: 'Add data layer', desc: tool === 'ansible' ? 'Configure databases and cron jobs' : 'Add databases, caches, and storage buckets' },
+                { step: '5', title: 'Secure & monitor', desc: tool === 'ansible' ? 'Configure firewall and enable services' : 'Add IAM roles, encryption keys, and alarms' },
+              ].map(g => (
+                <div key={g.step} style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
+                  <div style={{ width: 24, height: 24, borderRadius: '50%', background: ct.color + '22', color: ct.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{g.step}</div>
+                  <div>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: '#bbb' }}>{g.title}</div>
+                    <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>{g.desc}</div>
+                  </div>
+                </div>
+              ))}
+              <div style={{ marginTop: 20, padding: 12, background: '#111122', borderRadius: 8, fontSize: 11, color: '#666', lineHeight: 1.6 }}>
+                <div style={{ fontWeight: 600, color: '#888', marginBottom: 6 }}>Tips</div>
+                <div>Drag the <span style={{ color: ct.color }}>circle port</span> on a node to connect it to another resource.</div>
+                <div style={{ marginTop: 4 }}>Use the <span style={{ color: ct.color }}>AI chat</span> below to describe what you need in plain language.</div>
+                <div style={{ marginTop: 4 }}>Check the <span style={{ color: ct.color }}>Next</span> tab for smart suggestions based on what's on your canvas.</div>
+                <div style={{ marginTop: 4 }}>The code preview on the right updates live as you build.</div>
+              </div>
+              <button style={{ ...S.cmd, background: ct.color + '22', color: ct.color, width: '100%', marginTop: 16, padding: '8px 0' }}
+                onClick={() => setActivePanel('suggest')}>
+                View Suggestions →
+              </button>
             </div>
           )}
         </aside>

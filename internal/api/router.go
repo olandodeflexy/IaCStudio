@@ -325,26 +325,42 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 	// AI chat
 	mux.HandleFunc("POST /api/ai/chat", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
-		var req struct {
-			Message string `json:"message"`
-			Tool    string `json:"tool"`
-		}
+		var req ai.ChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
 			return
 		}
 
-		response, resources, err := aiClient.GenerateIaC(r.Context(), req.Message, req.Tool)
+		response, resources, err := aiClient.GenerateIaC(r.Context(), req)
 		if err != nil {
-			// Fallback to pattern matching if AI is unavailable
 			log.Printf("AI unavailable, using pattern matching: %v", err)
-			response, resources = ai.PatternMatch(req.Message, req.Tool)
+			response, resources = ai.PatternMatch(req.Message, req.Tool, req.Provider)
 		}
 
+		// Also return suggestions for what to add next
+		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
+
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message":   response,
-			"resources": resources,
+			"message":     response,
+			"resources":   resources,
+			"suggestions": suggestions,
 		})
+	})
+
+	// Smart resource suggestions based on canvas state
+	mux.HandleFunc("POST /api/ai/suggest", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var req struct {
+			Tool     string             `json:"tool"`
+			Provider string             `json:"provider"`
+			Canvas   []ai.CanvasResource `json:"canvas"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
+		json.NewEncoder(w).Encode(suggestions)
 	})
 
 	// WebSocket for live sync

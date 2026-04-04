@@ -29,6 +29,13 @@ export interface Project {
   tool?: string;
 }
 
+export interface Suggestion {
+  type: string;
+  label: string;
+  reason: string;
+  priority: number;
+}
+
 export interface CatalogResource {
   type: string;
   label: string;
@@ -114,12 +121,28 @@ export const api = {
     return (await check(res)).json();
   },
 
-  // AI chat
-  async chat(message: string, tool: string): Promise<{ message: string; resources: Resource[] | null }> {
+  // AI chat with conversation context
+  async chat(req: {
+    message: string;
+    tool: string;
+    provider: string;
+    history: { role: string; content: string }[];
+    canvas: { type: string; name: string }[];
+  }): Promise<{ message: string; resources: Resource[] | null; suggestions?: Suggestion[] }> {
     const res = await fetch(`${BASE}/api/ai/chat`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ message, tool }),
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
+  // Smart resource suggestions
+  async suggest(tool: string, provider: string, canvas: { type: string; name: string }[]): Promise<Suggestion[]> {
+    const res = await fetch(`${BASE}/api/ai/suggest`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool, provider, canvas }),
     });
     return (await check(res)).json();
   },

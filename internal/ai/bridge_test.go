@@ -20,7 +20,7 @@ func TestPatternMatch_Terraform(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		msg, resources := PatternMatch(tt.input, "terraform")
+		msg, resources := PatternMatch(tt.input, "terraform", "aws")
 		if msg == "" {
 			t.Errorf("PatternMatch(%q) returned empty message", tt.input)
 		}
@@ -55,7 +55,7 @@ func TestPatternMatch_Ansible(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		_, resources := PatternMatch(tt.input, "ansible")
+		_, resources := PatternMatch(tt.input, "ansible", "")
 		if len(resources) == 0 {
 			t.Errorf("PatternMatch(%q, ansible) returned no resources", tt.input)
 			continue
@@ -67,7 +67,7 @@ func TestPatternMatch_Ansible(t *testing.T) {
 }
 
 func TestPatternMatch_ResourceProperties(t *testing.T) {
-	_, resources := PatternMatch("add a vpc", "terraform")
+	_, resources := PatternMatch("add a vpc", "terraform", "aws")
 	if len(resources) == 0 {
 		t.Fatal("Expected a resource")
 	}
