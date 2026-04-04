@@ -48,6 +48,7 @@ export default function App() {
   const [tool, setTool] = useState<string | null>(null);
   const [detectedTools, setDetectedTools] = useState<ToolInfo[]>([]);
   const [projectName, setProjectName] = useState('my-infra-project');
+  const [projectId, setProjectId] = useState(''); // immutable after creation — used for API calls
   const [nodes, setNodes] = useState<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [chatMessages, setChatMessages] = useState<{ role: string; text: string }[]>([]);
@@ -113,15 +114,17 @@ export default function App() {
     setSyncCode(code);
   }, [nodes, tool]);
 
-  // Sync to disk (debounced)
+  // Sync to disk (debounced) — syncs even when nodes is empty so that
+  // deleting the last resource clears the generated file on disk.
   const syncTimer = useRef<ReturnType<typeof setTimeout>>();
+  const hasCreatedProject = useRef(false);
   useEffect(() => {
-    if (!tool || !nodes.length) return;
+    if (!tool || !hasCreatedProject.current) return;
     clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(() => {
-      api.syncToDisk(projectName, tool, nodes).catch(() => {});
+      api.syncToDisk(projectId, tool, nodes).catch(() => {});
     }, 1000);
-  }, [nodes, tool, projectName]);
+  }, [nodes, tool, projectId]);
 
   // ─── Handlers ───
 
@@ -204,13 +207,17 @@ export default function App() {
   const runCmd = (command: string) => {
     if (!tool) return;
     setTerminalOutput(prev => [...prev, `$ ${command}`, '']);
-    api.runCommand(projectName, tool, command).catch(err => {
+    api.runCommand(projectId, tool, command).catch(err => {
       setTerminalOutput(prev => [...prev, `Error: ${err.message}`]);
     });
   };
 
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
+    // Lock the project ID at creation time so renaming the display input
+    // can't silently redirect API calls to a different directory.
+    setProjectId(projectName);
+    hasCreatedProject.current = true;
     try {
       await api.createProject(projectName, selectedTool);
     } catch {

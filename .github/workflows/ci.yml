@@ -29,8 +29,6 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: "npm"
-          cache-dependency-path: web/package-lock.json
 
       - name: Go lint
         uses: golangci/golangci-lint-action@v4
@@ -41,10 +39,13 @@ jobs:
         run: go test ./... -v -race -coverprofile=coverage.out
 
       - name: Frontend deps
-        run: cd web && npm ci
+        run: cd web && npm install
 
       - name: Frontend lint
         run: cd web && npm run lint
+
+      - name: Frontend build
+        run: cd web && npm run build
 
       - name: Frontend test
         run: cd web && npm test -- --run
@@ -73,7 +74,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Build frontend
-        run: cd web && npm ci && npm run build
+        run: cd web && npm install && npm run build
+
+      - name: Copy frontend to embed path
+        run: rm -rf cmd/server/frontend/dist && cp -r web/dist cmd/server/frontend/dist
 
       - name: Cross-compile
         run: |

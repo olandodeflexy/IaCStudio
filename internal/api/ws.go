@@ -57,15 +57,26 @@ func (h *Hub) Run() {
 
 		case message := <-h.broadcast:
 			h.mu.RLock()
+			var dead []*Client
 			for client := range h.clients {
 				select {
 				case client.send <- message:
 				default:
-					close(client.send)
-					delete(h.clients, client)
+					dead = append(dead, client)
 				}
 			}
 			h.mu.RUnlock()
+			// Clean up slow/dead clients under a write lock
+			if len(dead) > 0 {
+				h.mu.Lock()
+				for _, client := range dead {
+					if _, ok := h.clients[client]; ok {
+						close(client.send)
+						delete(h.clients, client)
+					}
+				}
+				h.mu.Unlock()
+			}
 		}
 	}
 }

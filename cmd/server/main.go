@@ -25,7 +25,17 @@ const (
 	AppVersion = "0.1.0"
 )
 
-//go:embed web/dist/*
+// frontendFS holds the built React frontend. The directory is created by
+// `make build-frontend` (or `cd web && npm run build`) before the Go
+// build runs. During development (`make dev`), Vite serves the frontend
+// directly so this embed is not used.
+//
+// The Makefile copies web/dist/ into cmd/server/frontend/dist/ before
+// building the Go binary so the embed path is relative to this file.
+// A bootstrap index.html is committed so `go build` never fails on a
+// clean checkout; `make build` replaces it with the real bundle.
+
+//go:embed frontend/dist/*
 var frontendFS embed.FS
 
 func main() {
@@ -62,7 +72,7 @@ func main() {
 	router := api.NewRouter(hub, fw, aiClient, run, *projectsDir)
 
 	// Serve embedded frontend
-	frontendContent, _ := fs.Sub(frontendFS, "web/dist")
+	frontendContent, _ := fs.Sub(frontendFS, "frontend/dist")
 	router.Handle("GET /", http.FileServer(http.FS(frontendContent)))
 
 	addr := fmt.Sprintf("%s:%d", *host, *port)

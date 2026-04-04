@@ -258,6 +258,87 @@ Global keyboard handler that ignores input fields:
 
 **To wire in**: Call from App.tsx with a shortcut map for undo, redo, delete, escape, save, etc.
 
+### `internal/runner/safe_runner.go` — Execution Safety
+Wraps the Runner with production-grade safety for DevOps workflows:
+- **Timeouts**: init=5m, plan=10m, apply=30m (configurable per command)
+- **Context cancellation**: every execution respects `context.Context` for clean abort
+- **Kill switch**: `Kill(projectDir)` cancels a running command instantly
+- **Output limiting**: caps at 10MB to prevent OOM from huge terraform plans
+- **Approval gates**: `RequiresApproval("apply")` returns true — blocks apply without plan review
+- **Active tracking**: `ActiveExecutions()` shows all running commands
+- **JSON plan**: `ExecutePlanJSON()` runs `terraform plan -json` for structured parsing
+
+**To wire in**: Replace `runner.Execute()` calls in `router.go` with `SafeRunner.Execute(ctx, ...)`. Add `POST /api/projects/{name}/kill` endpoint that calls `SafeRunner.Kill()`. Add `GET /api/executions` for active execution monitoring.
+
+### `internal/plan/plan.go` — Terraform Plan Parser
+Converts raw `terraform plan -json` output into structured diffs the frontend can render:
+- **Stream parser**: `ParseStreamOutput()` handles line-by-line JSON from `plan -json`
+- **Full plan parser**: `ParseFullPlan()` handles `terraform show -json planfile`
+- **Field-level diffs**: computes per-attribute changes between before/after state
+- **PlanSummary**: "3 to add, 1 to change, 0 to destroy" structured data
+- **ResourceChange**: address, type, action, before/after state, field changes
+- **RequiresApproval**: auto-true when any resource will be destroyed
+
+**To wire in**: Add `POST /api/projects/{name}/plan-review` that calls `SafeRunner.ExecutePlanJSON()` then `Parser.ParseStreamOutput()`. Frontend renders changes as a visual diff table with color-coded actions (green=create, yellow=update, red=destroy).
+
+### `internal/blast/blast.go` — Blast Radius Analyzer
+Answers "what breaks if I delete this?" before you touch anything:
+- **Dependency graph**: `BuildGraph()` scans all resources for references (explicit `aws_vpc.main.id` and inferred `vpc_id` → `aws_vpc`)
+- **Blast radius**: `Analyze(graph, target, action)` walks dependents recursively
+- **Direct vs indirect impact**: depth-1 (references target) vs depth-2 (references something that references target)
+- **Severity classification**: low (0 affected) → critical (6+ affected)
+- **Data loss warnings**: flags database resources in the blast radius
+- **Full overview**: `AnalyzeAll()` computes blast radius for every resource
+
+**To wire in**: Add `GET /api/projects/{name}/blast?resource=aws_vpc.main&action=delete`. Frontend shows impacted resources highlighted on canvas with severity colors. Add tooltip showing "Deleting this affects 4 resources".
+
+### `internal/policy/policy.go` — Policy Engine (Guardrails)
+Lightweight OPA/Sentinel that runs locally before plan/apply — 15 built-in rules:
+- **Tagging**: required tags (Environment, Team, ManagedBy), PascalCase naming
+- **Encryption**: S3 SSE, RDS storage encryption, EBS encryption
+- **Networking**: no 0.0.0.0/0 on non-web ports, no default VPC, private subnet NAT check
+- **Access**: no public S3 ACL
+- **Naming**: snake_case convention, descriptive names
+- **Cost**: flags oversized EC2 instances
+- **Durability**: RDS backup retention, Multi-AZ check
+- **Logging**: S3 access logs, VPC flow logs
+- Rules can be enabled/disabled individually via `EnableRule(id)` / `DisableRule(id)`
+
+**To wire in**: Add `POST /api/projects/{name}/policy` endpoint. Frontend shows policy report as a compliance panel: green checkmarks for passing rules, red/yellow badges for violations with suggested fixes. Block apply button when `report.Compliant == false`.
+
+### `internal/workspace/workspace.go` — Environment Manager
+Maps dev → staging → prod to terraform workspaces with promotion controls:
+- **InitEnvironments()**: creates dev/staging/prod workspaces with env-specific tfvars
+- **Promotion pipeline**: `PlanPromotion(from, to)` validates order, checks locks, assesses risk
+- **Environment locking**: `LockEnvironment("prod", "release freeze")` prevents accidental applies
+- **Drift detection**: `CompareEnvironments("dev", "prod")` diffs tfvars between envs
+- **Default sizing**: dev=t3.small/1-2, staging=t3.medium/2-4, prod=t3.large/3-10
+- **Per-env approval**: staging/prod require manual approval, dev auto-applies
+
+**To wire in**: Add environment endpoints: `POST /api/projects/{name}/envs/init`, `GET /api/projects/{name}/envs`, `POST /api/projects/{name}/envs/{env}/switch`, `POST /api/projects/{name}/envs/promote`. Frontend adds an "Environments" tab showing a pipeline visualization (dev → staging → prod) with status badges and promote buttons.
+
+### `internal/cost/cost.go` — Cost Estimator
+Offline cost estimation with zero API calls — instant feedback before apply:
+- **EstimateProject()**: total monthly/yearly cost for all resources
+- **EstimatePlanDelta()**: cost impact of a terraform plan (+$150/mo, -$50/mo)
+- **Built-in pricing**: 30+ AWS resource types with us-east-1 on-demand pricing
+- **Instance-aware**: knows t3.large=$60.74/mo, db.t3.small=$24.82/mo, NAT gateway=$32.40/mo
+- **Size-sensitive**: reads `instance_type` / `instance_class` fields for accurate pricing
+- **Free tier awareness**: marks VPC, subnets, IAM, Lambda, S3 as free/usage-based
+
+**To wire in**: Add `GET /api/projects/{name}/cost` and `POST /api/projects/{name}/cost-delta` (accepts plan result). Frontend shows cost breakdown per resource and a total monthly estimate in the header. On plan review, show "+$X/mo" or "-$X/mo" delta with color coding.
+
+### `internal/pipeline/pipeline.go` — CI/CD Pipeline Generator
+Generates production-ready CI/CD configs from UI settings:
+- **GitHub Actions**: multi-environment with plan-on-PR, apply-on-merge, PR plan comments
+- **GitLab CI**: stages, manual approval gates, artifact passing
+- **Environment promotion**: dev auto-applies, staging/prod require manual approval
+- **Workspace-aware**: selects correct terraform workspace per environment
+- **Slack notifications**: optional deploy notifications per environment
+- **Plan commenting**: posts terraform plan output as PR comment for review
+
+**To wire in**: Add `POST /api/pipeline/generate` endpoint. Frontend adds a "Pipeline" settings page where users select GitHub/GitLab, pick environments, toggle auto-plan/slack, then generate + download the config file.
+
 ## Current Focus
 
 Currently working on **Phase 1: getting the project to compile and run** (Tasks 1.1–1.3 in TASKS.md).

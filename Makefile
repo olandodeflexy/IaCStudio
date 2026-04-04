@@ -22,10 +22,14 @@ dev:
 
 ## ─── Build ───
 
-build: build-frontend build-backend
+build: build-frontend embed-frontend build-backend
 
 build-frontend:
 	cd web && npm run build
+
+embed-frontend:
+	rm -rf cmd/server/frontend/dist
+	cp -r web/dist cmd/server/frontend/dist
 
 build-backend:
 	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/$(APP_NAME) ./cmd/server
@@ -61,7 +65,7 @@ install: build
 
 ## ─── Release (cross-compile) ───
 
-release: build-frontend
+release: build-frontend embed-frontend
 	@mkdir -p dist
 	GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-linux-amd64   ./cmd/server
 	GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-linux-arm64   ./cmd/server

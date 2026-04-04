@@ -376,3 +376,157 @@ The go.mod has dependency declarations but no go.sum. The code compiles conceptu
 2. YAML-based resource definitions that can be loaded at startup
 3. Plugin directory: `~/.iac-studio/plugins/`
 4. Community resource packs (Azure, GCP, Kubernetes)
+
+---
+
+## Phase 8: DevOps Workflow (Safety, Visibility, Automation)
+
+These modules are implemented in `internal/` but need API endpoints and frontend wiring.
+
+### Task 8.1: Wire execution safety into the API
+
+The `SafeRunner` in `internal/runner/safe_runner.go` replaces the unsafe `Runner.Execute()`.
+
+**Steps:**
+1. Replace `runner.Runner` with `runner.SafeRunner` in `router.go`
+2. Pass `r.Context()` from HTTP request into `SafeRunner.Execute(ctx, ...)`
+3. Add `POST /api/projects/{name}/kill` — calls `SafeRunner.Kill(projectDir)`
+4. Add `GET /api/executions` — returns `SafeRunner.ActiveExecutions()`
+5. When `SafeRunner.RequiresApproval(command)` is true, return 409 with plan gate instead of executing
+6. Update frontend: add a "Stop" button next to running commands, show execution timer
+
+**Acceptance criteria:**
+- `terraform apply` that hangs is automatically killed after 30 minutes
+- User can click "Stop" to cancel a running command
+- Apply requires reviewing the plan first (can't skip straight to apply)
+- Terminal shows elapsed time for running commands
+
+### Task 8.2: Wire plan parser for visual plan review
+
+The plan parser in `internal/plan/plan.go` turns raw JSON into structured diffs.
+
+**Steps:**
+1. Add `POST /api/projects/{name}/plan-review` endpoint:
+   - Calls `SafeRunner.ExecutePlanJSON()` to get JSON plan output
+   - Calls `plan.Parser.ParseStreamOutput()` to structure it
+   - Returns `PlanResult` with changes, summary, warnings
+2. Frontend: create a `PlanReview` component showing:
+   - Summary bar: "3 to add, 1 to change, 0 to destroy"
+   - Resource list with color-coded actions (green/yellow/red)
+   - Expandable field-level diffs per resource
+   - "Approve & Apply" button (only active after review)
+3. Block the Apply button until plan is reviewed
+
+**Acceptance criteria:**
+- Clicking "Plan" shows a visual diff, not raw terminal output
+- Each resource shows its action (create/update/delete) with color
+- Field-level changes show old → new values
+- Must click "Approve" before Apply becomes available
+
+### Task 8.3: Wire blast radius analyzer
+
+The blast radius analyzer in `internal/blast/blast.go` shows impact before changes.
+
+**Steps:**
+1. Add `GET /api/projects/{name}/blast?resource=aws_vpc.main&action=delete`
+   - Parses project resources, builds dependency graph, runs analysis
+2. Add `GET /api/projects/{name}/dependencies` — returns full dependency graph
+3. Frontend: when hovering a resource on canvas, show blast radius tooltip
+4. Frontend: when selecting "Delete" on a resource, show blast radius modal:
+   - Lists all directly and indirectly affected resources
+   - Color-codes by severity (green/yellow/orange/red)
+   - Shows "This will break 4 resources" warning
+5. Draw dependency lines on canvas using the graph data
+
+**Acceptance criteria:**
+- Hovering a VPC node shows "4 resources depend on this"
+- Deleting a resource shows a confirmation with full impact list
+- Dependency lines visible on canvas between connected resources
+- Critical severity (6+ affected) shows a red warning modal
+
+### Task 8.4: Wire policy engine
+
+The policy engine in `internal/policy/policy.go` enforces guardrails.
+
+**Steps:**
+1. Add `POST /api/projects/{name}/policy` — runs all rules, returns `PolicyReport`
+2. Add `GET /api/policy/rules` — lists all available rules with enabled status
+3. Add `PUT /api/policy/rules/{id}` — enable/disable individual rules
+4. Frontend: add a "Compliance" panel in the sidebar:
+   - Shows pass/fail counts by category
+   - Each violation links to the offending resource on canvas
+   - Suggested fixes are copyable
+5. Run policy check automatically before plan/apply
+6. Block apply when `report.Compliant == false`
+
+**Acceptance criteria:**
+- Creating an S3 bucket without encryption shows an error badge
+- Creating a security group with 0.0.0.0/0 on port 22 is flagged
+- Resources without required tags show warnings
+- Apply button disabled when policy errors exist
+- Policy rules are configurable (can disable individual rules)
+
+### Task 8.5: Wire workspace/environment manager
+
+The workspace manager in `internal/workspace/workspace.go` handles dev/staging/prod.
+
+**Steps:**
+1. Add environment endpoints:
+   - `POST /api/projects/{name}/envs/init` — creates dev/staging/prod workspaces
+   - `GET /api/projects/{name}/envs` — lists environments with status
+   - `POST /api/projects/{name}/envs/{env}/switch` — changes active workspace
+   - `POST /api/projects/{name}/envs/promote` — promotes from one env to next
+   - `POST /api/projects/{name}/envs/{env}/lock` — locks environment
+   - `GET /api/projects/{name}/envs/compare?env1=dev&env2=prod` — drift check
+2. Frontend: add "Environments" tab with pipeline visualization:
+   - Three columns: dev → staging → prod
+   - Each shows status, last apply time, resource count
+   - "Promote" arrow buttons between columns
+   - Lock icon on prod (click to unlock/lock)
+   - Drift indicator between envs
+
+**Acceptance criteria:**
+- Creating a project offers "Set up environments" option
+- Can switch between dev/staging/prod with one click
+- Promoting from dev to staging shows a diff and risk level
+- Prod is locked by default — must explicitly unlock before apply
+- Can compare environments to see configuration drift
+
+### Task 8.6: Wire cost estimator
+
+The cost estimator in `internal/cost/cost.go` shows money before you spend it.
+
+**Steps:**
+1. Add `GET /api/projects/{name}/cost` — returns full cost breakdown
+2. Add `POST /api/projects/{name}/cost-delta` — accepts plan result, returns cost impact
+3. Frontend: show monthly cost estimate in the project header ("~$247/mo")
+4. Frontend: on plan review, show cost delta per resource and total
+5. Cost badges on canvas nodes (e.g., NAT Gateway shows "$32/mo")
+
+**Acceptance criteria:**
+- Project header shows estimated monthly cost
+- Each resource node shows its individual cost
+- Plan review shows "+$60/mo" or "-$32/mo" delta
+- Free resources (VPC, subnets, IAM) show "Free"
+- Total yearly estimate visible in project settings
+
+### Task 8.7: Wire pipeline generator
+
+The pipeline generator in `internal/pipeline/pipeline.go` creates CI/CD configs.
+
+**Steps:**
+1. Add `POST /api/pipeline/generate` — accepts `PipelineConfig`, returns generated YAML
+2. Add `GET /api/pipeline/defaults?tool=terraform` — returns sensible defaults
+3. Frontend: add "Pipeline" page in project settings:
+   - Provider selector (GitHub Actions / GitLab CI)
+   - Environment checkboxes
+   - Toggle: auto-plan on PR, auto-apply dev, Slack notifications
+   - "Generate" button → shows preview → "Download" button
+4. Write generated file to project directory
+
+**Acceptance criteria:**
+- Selecting "GitHub Actions" + 3 environments generates a working workflow
+- Generated workflow includes plan-on-PR with PR comment
+- Generated workflow chains environments: dev → staging → prod
+- Staging and prod require manual approval (GitHub environment protection)
+- Generated YAML is valid and ready to commit

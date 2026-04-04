@@ -2,10 +2,12 @@ package api
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/iac-studio/iac-studio/internal/ai"
 	"github.com/iac-studio/iac-studio/internal/generator"
@@ -13,6 +15,32 @@ import (
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/watcher"
 )
+
+// safeProjectPath validates a project name and returns its absolute path under projectsDir.
+// It rejects names containing path separators, "..", or other traversal attempts.
+func safeProjectPath(projectsDir, name string) (string, error) {
+	// Reject empty, dot-prefixed, or names with path separators
+	if name == "" || name == "." || name == ".." ||
+		strings.ContainsAny(name, `/\`) ||
+		strings.Contains(name, "..") {
+		return "", fmt.Errorf("invalid project name: %q", name)
+	}
+	// Only allow alphanumeric, hyphens, and underscores
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return "", fmt.Errorf("invalid project name: %q (only alphanumeric, hyphens, underscores)", name)
+		}
+	}
+	resolved := filepath.Join(projectsDir, name)
+	// Belt-and-suspenders: verify the resolved path is still under projectsDir
+	absResolved, _ := filepath.Abs(resolved)
+	absProjects, _ := filepath.Abs(projectsDir)
+	if !strings.HasPrefix(absResolved, absProjects+string(filepath.Separator)) {
+		return "", fmt.Errorf("project path escapes root: %q", name)
+	}
+	return resolved, nil
+}
 
 // NewRouter creates the HTTP router with all endpoints.
 func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run *runner.Runner, projectsDir string) *http.ServeMux {
@@ -59,7 +87,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 
-		projectPath := filepath.Join(projectsDir, req.Name)
+		projectPath, err := safeProjectPath(projectsDir, req.Name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 		if err := os.MkdirAll(projectPath, 0755); err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -86,7 +118,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 	mux.HandleFunc("GET /api/projects/{name}/resources", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		tool := r.URL.Query().Get("tool")
-		projectPath := filepath.Join(projectsDir, name)
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 
 		p := parser.ForTool(tool)
 		resources, err := p.ParseDir(projectPath)
@@ -101,7 +137,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 	mux.HandleFunc("POST /api/projects/{name}/sync", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		tool := r.URL.Query().Get("tool")
-		projectPath := filepath.Join(projectsDir, name)
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 
 		var resources []parser.Resource
 		if err := json.NewDecoder(r.Body).Decode(&resources); err != nil {
@@ -137,7 +177,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 	// Run IaC command (init, plan, apply)
 	mux.HandleFunc("POST /api/projects/{name}/run", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
-		projectPath := filepath.Join(projectsDir, name)
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 
 		var req struct {
 			Tool    string `json:"tool"`

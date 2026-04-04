@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/iac-studio/iac-studio/internal/catalog"
 	"github.com/iac-studio/iac-studio/internal/parser"
 )
 
@@ -43,24 +44,89 @@ func (g *HCLGenerator) Generate(resources []parser.Resource) (string, error) {
 	b.WriteString("# Do not remove this comment — it enables bidirectional sync\n\n")
 	b.WriteString("provider \"aws\" {\n  region = \"us-east-1\"\n}\n\n")
 
+	// Build index: resource type -> first instance name, for reference generation
+	typeIndex := make(map[string]string) // e.g., "aws_vpc" -> "main"
+	for _, res := range resources {
+		if _, exists := typeIndex[res.Type]; !exists {
+			typeIndex[res.Type] = res.Name
+		}
+	}
+
+	// Build connection rules from catalog
+	cat := catalog.GetCatalog(g.tool)
+	connectsVia := make(map[string]map[string]string) // resource type -> field -> target type
+	for _, cr := range cat.Resources {
+		if len(cr.ConnectsVia) > 0 {
+			connectsVia[cr.Type] = cr.ConnectsVia
+		}
+	}
+
 	for _, res := range resources {
 		b.WriteString(fmt.Sprintf("resource \"%s\" \"%s\" {\n", res.Type, res.Name))
-		for k, v := range res.Properties {
-			switch val := v.(type) {
-			case bool:
-				b.WriteString(fmt.Sprintf("  %s = %t\n", k, val))
-			case float64:
-				b.WriteString(fmt.Sprintf("  %s = %g\n", k, val))
-			case int:
-				b.WriteString(fmt.Sprintf("  %s = %d\n", k, val))
-			default:
-				b.WriteString(fmt.Sprintf("  %s = \"%v\"\n", k, val))
+
+		// Emit connection references first (e.g., vpc_id = aws_vpc.main.id)
+		if connections, ok := connectsVia[res.Type]; ok {
+			for field, targetType := range connections {
+				if targetName, found := typeIndex[targetType]; found {
+					// Don't emit as reference if the user already set a literal value
+					if _, hasLiteral := res.Properties[field]; hasLiteral {
+						continue
+					}
+					b.WriteString(fmt.Sprintf("  %s = %s.%s.id\n", field, targetType, targetName))
+				}
 			}
+		}
+
+		for k, v := range res.Properties {
+			// Skip fields that were already emitted as references
+			if connections, ok := connectsVia[res.Type]; ok {
+				if _, isConnection := connections[k]; isConnection {
+					if typeIndex[connections[k]] != "" {
+						continue // already emitted as a reference above
+					}
+				}
+			}
+			writeHCLValue(&b, k, v)
 		}
 		b.WriteString("}\n\n")
 	}
 
 	return b.String(), nil
+}
+
+// writeHCLValue writes a single key = value line with proper type handling.
+func writeHCLValue(b *strings.Builder, k string, v interface{}) {
+	switch val := v.(type) {
+	case bool:
+		b.WriteString(fmt.Sprintf("  %s = %t\n", k, val))
+	case float64:
+		if val == float64(int64(val)) {
+			b.WriteString(fmt.Sprintf("  %s = %d\n", k, int64(val)))
+		} else {
+			b.WriteString(fmt.Sprintf("  %s = %g\n", k, val))
+		}
+	case int:
+		b.WriteString(fmt.Sprintf("  %s = %d\n", k, val))
+	case int64:
+		b.WriteString(fmt.Sprintf("  %s = %d\n", k, val))
+	case []interface{}:
+		b.WriteString(fmt.Sprintf("  %s = [", k))
+		for i, item := range val {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			b.WriteString(fmt.Sprintf("%q", fmt.Sprintf("%v", item)))
+		}
+		b.WriteString("]\n")
+	case map[string]interface{}:
+		b.WriteString(fmt.Sprintf("  %s = {\n", k))
+		for mk, mv := range val {
+			b.WriteString(fmt.Sprintf("    %s = %q\n", mk, fmt.Sprintf("%v", mv)))
+		}
+		b.WriteString("  }\n")
+	default:
+		b.WriteString(fmt.Sprintf("  %s = %q\n", k, fmt.Sprintf("%v", val)))
+	}
 }
 
 func (g *HCLGenerator) WriteScaffold(dir string) error {

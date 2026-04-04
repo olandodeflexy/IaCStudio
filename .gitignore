@@ -1,6 +1,6 @@
 # Go
 bin/
-dist/
+/dist/
 *.exe
 *.test
 *.out
@@ -10,6 +10,9 @@ coverage.out
 web/node_modules/
 web/dist/
 web/.vite/
+
+# Embed — bootstrap index.html is tracked; real build replaces it via `make build`
+# Do not ignore cmd/server/frontend/dist/index.html (the bootstrap placeholder)
 
 # IDE
 .idea/

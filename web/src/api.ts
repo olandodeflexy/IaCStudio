@@ -29,23 +29,33 @@ export interface Project {
   tool?: string;
 }
 
+// Checks res.ok and throws with the backend's error message instead of
+// letting callers hit an opaque JSON parse failure on text/plain errors.
+async function check(res: Response): Promise<Response> {
+  if (!res.ok) {
+    const text = await res.text().catch(() => res.statusText);
+    throw new Error(text || `HTTP ${res.status}`);
+  }
+  return res;
+}
+
 export const api = {
   // Health check
   async health(): Promise<{ status: string; version: string }> {
     const res = await fetch(`${BASE}/api/health`);
-    return res.json();
+    return (await check(res)).json();
   },
 
   // Detect installed IaC tools
   async detectTools(): Promise<ToolInfo[]> {
     const res = await fetch(`${BASE}/api/tools`);
-    return res.json();
+    return (await check(res)).json();
   },
 
   // List projects
   async listProjects(): Promise<Project[]> {
     const res = await fetch(`${BASE}/api/projects`);
-    return res.json();
+    return (await check(res)).json();
   },
 
   // Create a new project
@@ -55,13 +65,13 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, tool }),
     });
-    return res.json();
+    return (await check(res)).json();
   },
 
   // Parse project files into resources
   async getResources(projectName: string, tool: string): Promise<Resource[]> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/resources?tool=${tool}`);
-    return res.json();
+    return (await check(res)).json();
   },
 
   // Sync resources from UI to disk
@@ -71,7 +81,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(resources),
     });
-    return res.json();
+    return (await check(res)).json();
   },
 
   // Run IaC command
@@ -81,7 +91,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tool, command }),
     });
-    return res.json();
+    return (await check(res)).json();
   },
 
   // AI chat
@@ -91,6 +101,6 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ message, tool }),
     });
-    return res.json();
+    return (await check(res)).json();
   },
 };
