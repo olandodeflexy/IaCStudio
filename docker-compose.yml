@@ -1,0 +1,29 @@
+version: "3.9"
+
+services:
+  iac-studio:
+    build: .
+    ports:
+      - "3000:3000"
+    volumes:
+      - "${HOME}/iac-projects:/projects"
+      - "${HOME}/.ssh:/root/.ssh:ro"     # For git operations
+    environment:
+      - IAC_STUDIO_AI_ENDPOINT=http://ollama:11434
+      - IAC_STUDIO_AI_MODEL=deepseek-coder:6.7b
+    depends_on:
+      - ollama
+    restart: unless-stopped
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama-models:/root/.ollama
+    # Pull the model on first run:
+    # docker exec -it iac-studio-ollama-1 ollama pull deepseek-coder:6.7b
+    restart: unless-stopped
+
+volumes:
+  ollama-models:

@@ -1,0 +1,30 @@
+# Go
+bin/
+dist/
+*.exe
+*.test
+*.out
+coverage.out
+
+# Node
+web/node_modules/
+web/dist/
+web/.vite/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IaC Studio
+.iac-studio/
+iac-projects/
+
+# Docker
+.docker/

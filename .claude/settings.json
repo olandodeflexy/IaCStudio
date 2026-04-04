@@ -1,0 +1,29 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "go vet ./... 2>&1 | head -20",
+            "description": "Run go vet after editing Go files",
+            "matcher": "\\.(go)$"
+          }
+        ]
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(make test)",
+      "Bash(make deps)",
+      "Bash(go build ./...)",
+      "Bash(go test ./...)",
+      "Bash(go vet ./...)",
+      "Bash(go mod tidy)",
+      "Bash(cd web && npm install)",
+      "Bash(cd web && npm run build)"
+    ]
+  }
+}
