@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/iac-studio/iac-studio/internal/ai"
+	"github.com/iac-studio/iac-studio/internal/catalog"
 	"github.com/iac-studio/iac-studio/internal/generator"
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/runner"
@@ -94,6 +95,22 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 	mux.HandleFunc("GET /api/tools", func(w http.ResponseWriter, r *http.Request) {
 		tools := run.DetectTools()
 		json.NewEncoder(w).Encode(tools)
+	})
+
+	// Resource catalog — returns all resources for a tool, optionally filtered by provider
+	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) {
+		tool := r.URL.Query().Get("tool")
+		if tool == "" {
+			tool = "terraform"
+		}
+		provider := r.URL.Query().Get("provider") // optional: "aws", "google", "azurerm"
+		var cat catalog.Catalog
+		if provider != "" {
+			cat = catalog.GetCatalogByProvider(tool, provider)
+		} else {
+			cat = catalog.GetCatalog(tool)
+		}
+		json.NewEncoder(w).Encode(cat)
 	})
 
 	// List projects

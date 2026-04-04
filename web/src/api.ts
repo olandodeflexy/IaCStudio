@@ -29,6 +29,18 @@ export interface Project {
   tool?: string;
 }
 
+export interface CatalogResource {
+  type: string;
+  label: string;
+  icon: string;
+  category: string;
+  provider?: string;
+  defaults?: Record<string, any>;
+  fields?: { name: string; type: string; required?: boolean; default?: any; description?: string; options?: string[] }[];
+  connects_to?: string[];
+  connects_via?: Record<string, string>;
+}
+
 // Checks res.ok and throws with the backend's error message instead of
 // letting callers hit an opaque JSON parse failure on text/plain errors.
 async function check(res: Response): Promise<Response> {
@@ -40,6 +52,14 @@ async function check(res: Response): Promise<Response> {
 }
 
 export const api = {
+  // Fetch resource catalog for a tool (optionally filtered by provider)
+  async getCatalog(tool: string, provider?: string): Promise<{ tool: string; resources: CatalogResource[] }> {
+    const params = new URLSearchParams({ tool });
+    if (provider) params.set('provider', provider);
+    const res = await fetch(`${BASE}/api/catalog?${params}`);
+    return (await check(res)).json();
+  },
+
   // Health check
   async health(): Promise<{ status: string; version: string }> {
     const res = await fetch(`${BASE}/api/health`);

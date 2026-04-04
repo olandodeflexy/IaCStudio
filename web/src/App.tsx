@@ -1,190 +1,22 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { api, Resource, ToolInfo } from './api';
+import { api, Resource, ToolInfo, CatalogResource } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 
-// ─── Tool Definitions (UI metadata) ───
-const TOOLS: Record<string, { name: string; icon: string; color: string; ext: string; resources: any[] }> = {
-  terraform: {
-    name: 'Terraform', icon: '⬡', color: '#7B42F6', ext: '.tf',
-    resources: [
-      // ─── AWS ───
-      { type: 'aws_vpc', label: 'AWS VPC', icon: '🌐', category: 'AWS Networking' },
-      { type: 'aws_subnet', label: 'AWS Subnet', icon: '📡', category: 'AWS Networking' },
-      { type: 'aws_internet_gateway', label: 'Internet Gateway', icon: '🌍', category: 'AWS Networking' },
-      { type: 'aws_nat_gateway', label: 'NAT Gateway', icon: '🔄', category: 'AWS Networking' },
-      { type: 'aws_security_group', label: 'Security Group', icon: '🛡️', category: 'AWS Networking' },
-      { type: 'aws_route_table', label: 'Route Table', icon: '🗺️', category: 'AWS Networking' },
-      { type: 'aws_instance', label: 'EC2 Instance', icon: '🖥️', category: 'AWS Compute' },
-      { type: 'aws_lambda_function', label: 'Lambda', icon: '⚡', category: 'AWS Compute' },
-      { type: 'aws_ecs_cluster', label: 'ECS Cluster', icon: '🚢', category: 'AWS Compute' },
-      { type: 'aws_eks_cluster', label: 'EKS Cluster', icon: '☸️', category: 'AWS Compute' },
-      { type: 'aws_s3_bucket', label: 'S3 Bucket', icon: '🪣', category: 'AWS Storage' },
-      { type: 'aws_ecr_repository', label: 'ECR Repository', icon: '📦', category: 'AWS Storage' },
-      { type: 'aws_rds_instance', label: 'RDS Database', icon: '🗄️', category: 'AWS Database' },
-      { type: 'aws_dynamodb_table', label: 'DynamoDB', icon: '📊', category: 'AWS Database' },
-      { type: 'aws_elasticache_cluster', label: 'ElastiCache', icon: '⚡', category: 'AWS Database' },
-      { type: 'aws_rds_cluster', label: 'Aurora Cluster', icon: '🌌', category: 'AWS Database' },
-      { type: 'aws_lb', label: 'Load Balancer', icon: '⚖️', category: 'AWS Load Balancing' },
-      { type: 'aws_lb_target_group', label: 'Target Group', icon: '🎯', category: 'AWS Load Balancing' },
-      { type: 'aws_cloudfront_distribution', label: 'CloudFront CDN', icon: '🌍', category: 'AWS Networking' },
-      { type: 'aws_api_gateway_rest_api', label: 'API Gateway', icon: '🚪', category: 'AWS Networking' },
-      { type: 'aws_iam_role', label: 'IAM Role', icon: '🔑', category: 'AWS Security' },
-      { type: 'aws_iam_policy', label: 'IAM Policy', icon: '📜', category: 'AWS Security' },
-      { type: 'aws_kms_key', label: 'KMS Key', icon: '🔐', category: 'AWS Security' },
-      { type: 'aws_secretsmanager_secret', label: 'Secrets Manager', icon: '🤫', category: 'AWS Security' },
-      { type: 'aws_acm_certificate', label: 'ACM Certificate', icon: '📜', category: 'AWS Security' },
-      { type: 'aws_route53_zone', label: 'Route53 Zone', icon: '🌐', category: 'AWS DNS' },
-      { type: 'aws_sns_topic', label: 'SNS Topic', icon: '📢', category: 'AWS Messaging' },
-      { type: 'aws_sqs_queue', label: 'SQS Queue', icon: '📬', category: 'AWS Messaging' },
-      { type: 'aws_cloudwatch_log_group', label: 'CloudWatch Logs', icon: '📋', category: 'AWS Monitoring' },
-      { type: 'aws_cloudwatch_metric_alarm', label: 'CloudWatch Alarm', icon: '🚨', category: 'AWS Monitoring' },
-      // ─── GCP ───
-      { type: 'google_compute_network', label: 'VPC Network', icon: '🌐', category: 'GCP Networking' },
-      { type: 'google_compute_subnetwork', label: 'Subnet', icon: '📡', category: 'GCP Networking' },
-      { type: 'google_compute_firewall', label: 'Firewall Rule', icon: '🧱', category: 'GCP Networking' },
-      { type: 'google_compute_router', label: 'Cloud Router', icon: '🔄', category: 'GCP Networking' },
-      { type: 'google_compute_router_nat', label: 'Cloud NAT', icon: '🔀', category: 'GCP Networking' },
-      { type: 'google_dns_managed_zone', label: 'Cloud DNS', icon: '🌐', category: 'GCP Networking' },
-      { type: 'google_compute_instance', label: 'VM Instance', icon: '🖥️', category: 'GCP Compute' },
-      { type: 'google_container_cluster', label: 'GKE Cluster', icon: '☸️', category: 'GCP Compute' },
-      { type: 'google_cloud_run_service', label: 'Cloud Run', icon: '🚀', category: 'GCP Compute' },
-      { type: 'google_cloudfunctions_function', label: 'Cloud Function', icon: '⚡', category: 'GCP Compute' },
-      { type: 'google_app_engine_application', label: 'App Engine', icon: '🌐', category: 'GCP Compute' },
-      { type: 'google_storage_bucket', label: 'Cloud Storage', icon: '🪣', category: 'GCP Storage' },
-      { type: 'google_sql_database_instance', label: 'Cloud SQL', icon: '🗄️', category: 'GCP Database' },
-      { type: 'google_redis_instance', label: 'Memorystore Redis', icon: '⚡', category: 'GCP Database' },
-      { type: 'google_spanner_instance', label: 'Cloud Spanner', icon: '🌍', category: 'GCP Database' },
-      { type: 'google_firestore_database', label: 'Firestore', icon: '🔥', category: 'GCP Database' },
-      { type: 'google_bigquery_dataset', label: 'BigQuery Dataset', icon: '📊', category: 'GCP Data' },
-      { type: 'google_pubsub_topic', label: 'Pub/Sub Topic', icon: '📬', category: 'GCP Messaging' },
-      { type: 'google_service_account', label: 'Service Account', icon: '🔑', category: 'GCP Security' },
-      { type: 'google_kms_key_ring', label: 'KMS Key Ring', icon: '🔐', category: 'GCP Security' },
-      { type: 'google_secret_manager_secret', label: 'Secret Manager', icon: '🤫', category: 'GCP Security' },
-      { type: 'google_compute_backend_service', label: 'Backend Service', icon: '⚖️', category: 'GCP Load Balancing' },
-      { type: 'google_monitoring_alert_policy', label: 'Alert Policy', icon: '🚨', category: 'GCP Monitoring' },
-      // ─── Azure ───
-      { type: 'azurerm_resource_group', label: 'Resource Group', icon: '📁', category: 'Azure Core' },
-      { type: 'azurerm_virtual_network', label: 'Virtual Network', icon: '🌐', category: 'Azure Networking' },
-      { type: 'azurerm_subnet', label: 'Subnet', icon: '📡', category: 'Azure Networking' },
-      { type: 'azurerm_network_security_group', label: 'NSG', icon: '🛡️', category: 'Azure Networking' },
-      { type: 'azurerm_public_ip', label: 'Public IP', icon: '📌', category: 'Azure Networking' },
-      { type: 'azurerm_dns_zone', label: 'DNS Zone', icon: '🌐', category: 'Azure Networking' },
-      { type: 'azurerm_application_gateway', label: 'App Gateway', icon: '🚪', category: 'Azure Networking' },
-      { type: 'azurerm_linux_virtual_machine', label: 'Linux VM', icon: '🖥️', category: 'Azure Compute' },
-      { type: 'azurerm_windows_virtual_machine', label: 'Windows VM', icon: '🪟', category: 'Azure Compute' },
-      { type: 'azurerm_kubernetes_cluster', label: 'AKS Cluster', icon: '☸️', category: 'Azure Compute' },
-      { type: 'azurerm_container_registry', label: 'Container Registry', icon: '📦', category: 'Azure Compute' },
-      { type: 'azurerm_function_app', label: 'Function App', icon: '⚡', category: 'Azure Compute' },
-      { type: 'azurerm_service_plan', label: 'App Service Plan', icon: '📋', category: 'Azure Compute' },
-      { type: 'azurerm_linux_web_app', label: 'Web App', icon: '🌐', category: 'Azure Compute' },
-      { type: 'azurerm_storage_account', label: 'Storage Account', icon: '🪣', category: 'Azure Storage' },
-      { type: 'azurerm_mssql_server', label: 'SQL Server', icon: '🗄️', category: 'Azure Database' },
-      { type: 'azurerm_mssql_database', label: 'SQL Database', icon: '📊', category: 'Azure Database' },
-      { type: 'azurerm_postgresql_flexible_server', label: 'PostgreSQL', icon: '🐘', category: 'Azure Database' },
-      { type: 'azurerm_cosmosdb_account', label: 'Cosmos DB', icon: '🌍', category: 'Azure Database' },
-      { type: 'azurerm_redis_cache', label: 'Redis Cache', icon: '⚡', category: 'Azure Database' },
-      { type: 'azurerm_key_vault', label: 'Key Vault', icon: '🔐', category: 'Azure Security' },
-      { type: 'azurerm_user_assigned_identity', label: 'Managed Identity', icon: '🔑', category: 'Azure Security' },
-      { type: 'azurerm_lb', label: 'Load Balancer', icon: '⚖️', category: 'Azure Load Balancing' },
-      { type: 'azurerm_log_analytics_workspace', label: 'Log Analytics', icon: '📋', category: 'Azure Monitoring' },
-      { type: 'azurerm_application_insights', label: 'App Insights', icon: '🔍', category: 'Azure Monitoring' },
-      { type: 'azurerm_servicebus_namespace', label: 'Service Bus', icon: '📬', category: 'Azure Messaging' },
-      { type: 'azurerm_eventhub_namespace', label: 'Event Hub', icon: '📨', category: 'Azure Messaging' },
-    ],
-  },
-  opentofu: {
-    name: 'OpenTofu', icon: '🟢', color: '#FFDA18', ext: '.tf',
-    resources: [
-      // OpenTofu uses the same resource types as Terraform
-      // ─── AWS ───
-      { type: 'aws_vpc', label: 'AWS VPC', icon: '🌐', category: 'AWS Networking' },
-      { type: 'aws_subnet', label: 'AWS Subnet', icon: '📡', category: 'AWS Networking' },
-      { type: 'aws_security_group', label: 'Security Group', icon: '🛡️', category: 'AWS Networking' },
-      { type: 'aws_instance', label: 'EC2 Instance', icon: '🖥️', category: 'AWS Compute' },
-      { type: 'aws_lambda_function', label: 'Lambda', icon: '⚡', category: 'AWS Compute' },
-      { type: 'aws_eks_cluster', label: 'EKS Cluster', icon: '☸️', category: 'AWS Compute' },
-      { type: 'aws_s3_bucket', label: 'S3 Bucket', icon: '🪣', category: 'AWS Storage' },
-      { type: 'aws_rds_instance', label: 'RDS Database', icon: '🗄️', category: 'AWS Database' },
-      { type: 'aws_dynamodb_table', label: 'DynamoDB', icon: '📊', category: 'AWS Database' },
-      { type: 'aws_lb', label: 'Load Balancer', icon: '⚖️', category: 'AWS Load Balancing' },
-      { type: 'aws_iam_role', label: 'IAM Role', icon: '🔑', category: 'AWS Security' },
-      // ─── GCP ───
-      { type: 'google_compute_network', label: 'VPC Network', icon: '🌐', category: 'GCP Networking' },
-      { type: 'google_compute_instance', label: 'VM Instance', icon: '🖥️', category: 'GCP Compute' },
-      { type: 'google_container_cluster', label: 'GKE Cluster', icon: '☸️', category: 'GCP Compute' },
-      { type: 'google_cloud_run_service', label: 'Cloud Run', icon: '🚀', category: 'GCP Compute' },
-      { type: 'google_storage_bucket', label: 'Cloud Storage', icon: '🪣', category: 'GCP Storage' },
-      { type: 'google_sql_database_instance', label: 'Cloud SQL', icon: '🗄️', category: 'GCP Database' },
-      // ─── Azure ───
-      { type: 'azurerm_resource_group', label: 'Resource Group', icon: '📁', category: 'Azure Core' },
-      { type: 'azurerm_virtual_network', label: 'Virtual Network', icon: '🌐', category: 'Azure Networking' },
-      { type: 'azurerm_linux_virtual_machine', label: 'Linux VM', icon: '🖥️', category: 'Azure Compute' },
-      { type: 'azurerm_kubernetes_cluster', label: 'AKS Cluster', icon: '☸️', category: 'Azure Compute' },
-      { type: 'azurerm_storage_account', label: 'Storage Account', icon: '🪣', category: 'Azure Storage' },
-      { type: 'azurerm_mssql_database', label: 'SQL Database', icon: '📊', category: 'Azure Database' },
-    ],
-  },
-  ansible: {
-    name: 'Ansible', icon: '🅰️', color: '#EE0000', ext: '.yml',
-    resources: [
-      // ─── Packages ───
-      { type: 'apt', label: 'Install (apt)', icon: '📦', category: 'Packages' },
-      { type: 'yum', label: 'Install (yum)', icon: '📦', category: 'Packages' },
-      { type: 'dnf', label: 'Install (dnf)', icon: '📦', category: 'Packages' },
-      { type: 'pip', label: 'Python (pip)', icon: '🐍', category: 'Packages' },
-      { type: 'npm', label: 'NPM Package', icon: '📦', category: 'Packages' },
-      { type: 'snap', label: 'Snap Package', icon: '📦', category: 'Packages' },
-      // ─── System ───
-      { type: 'service', label: 'Manage Service', icon: '⚙️', category: 'System' },
-      { type: 'systemd', label: 'Systemd Service', icon: '🔧', category: 'System' },
-      { type: 'user', label: 'User Account', icon: '👤', category: 'System' },
-      { type: 'group', label: 'Group', icon: '👥', category: 'System' },
-      { type: 'cron', label: 'Cron Job', icon: '⏰', category: 'System' },
-      { type: 'hostname', label: 'Set Hostname', icon: '🏷️', category: 'System' },
-      { type: 'authorized_key', label: 'SSH Key', icon: '🔑', category: 'System' },
-      { type: 'reboot', label: 'Reboot', icon: '🔄', category: 'System' },
-      // ─── Files ───
-      { type: 'copy', label: 'Copy File', icon: '📄', category: 'Files' },
-      { type: 'template', label: 'Template', icon: '📝', category: 'Files' },
-      { type: 'file', label: 'File/Directory', icon: '📂', category: 'Files' },
-      { type: 'lineinfile', label: 'Line in File', icon: '✏️', category: 'Files' },
-      { type: 'unarchive', label: 'Unarchive', icon: '📦', category: 'Files' },
-      { type: 'synchronize', label: 'Rsync', icon: '🔄', category: 'Files' },
-      { type: 'get_url', label: 'Download File', icon: '⬇️', category: 'Files' },
-      // ─── Containers ───
-      { type: 'docker_container', label: 'Docker Container', icon: '🐳', category: 'Containers' },
-      { type: 'docker_image', label: 'Docker Image', icon: '🏗️', category: 'Containers' },
-      { type: 'docker_compose', label: 'Docker Compose', icon: '🐙', category: 'Containers' },
-      { type: 'docker_network', label: 'Docker Network', icon: '🔗', category: 'Containers' },
-      { type: 'k8s', label: 'Kubernetes', icon: '☸️', category: 'Containers' },
-      { type: 'helm', label: 'Helm Chart', icon: '⛵', category: 'Containers' },
-      // ─── Cloud ───
-      { type: 'amazon.aws.ec2_instance', label: 'AWS EC2', icon: '☁️', category: 'Cloud' },
-      { type: 'amazon.aws.s3_bucket', label: 'AWS S3', icon: '🪣', category: 'Cloud' },
-      { type: 'google.cloud.gcp_compute_instance', label: 'GCP VM', icon: '☁️', category: 'Cloud' },
-      { type: 'azure.azcollection.azure_rm_virtualmachine', label: 'Azure VM', icon: '☁️', category: 'Cloud' },
-      // ─── Networking ───
-      { type: 'ufw', label: 'UFW Firewall', icon: '🧱', category: 'Networking' },
-      { type: 'firewalld', label: 'Firewalld', icon: '🧱', category: 'Networking' },
-      { type: 'uri', label: 'HTTP Request', icon: '🌐', category: 'Networking' },
-      { type: 'wait_for', label: 'Wait for Port', icon: '⏳', category: 'Networking' },
-      // ─── Database ───
-      { type: 'mysql_db', label: 'MySQL DB', icon: '🐬', category: 'Database' },
-      { type: 'postgresql_db', label: 'PostgreSQL DB', icon: '🐘', category: 'Database' },
-      // ─── Commands ───
-      { type: 'command', label: 'Run Command', icon: '💻', category: 'Commands' },
-      { type: 'shell', label: 'Shell Script', icon: '🐚', category: 'Commands' },
-      { type: 'git', label: 'Git Clone', icon: '📥', category: 'Commands' },
-      { type: 'script', label: 'Run Script', icon: '📜', category: 'Commands' },
-      // ─── Debug & Flow ───
-      { type: 'debug', label: 'Debug Output', icon: '🐛', category: 'Debug' },
-      { type: 'assert', label: 'Assert', icon: '✅', category: 'Debug' },
-      { type: 'set_fact', label: 'Set Variable', icon: '📝', category: 'Debug' },
-      { type: 'include_role', label: 'Include Role', icon: '📂', category: 'Flow' },
-      { type: 'import_tasks', label: 'Import Tasks', icon: '📥', category: 'Flow' },
-    ],
-  },
+// ─── Tool Definitions (UI metadata only — resources loaded from backend catalog) ───
+const TOOLS: Record<string, { name: string; icon: string; color: string; ext: string }> = {
+  terraform: { name: 'Terraform', icon: '⬡', color: '#7B42F6', ext: '.tf' },
+  opentofu: { name: 'OpenTofu', icon: '🟢', color: '#FFDA18', ext: '.tf' },
+  ansible: { name: 'Ansible', icon: '🅰️', color: '#EE0000', ext: '.yml' },
 };
+
+// Fallback resources when backend is unreachable (small subset)
+const FALLBACK_RESOURCES: CatalogResource[] = [
+  { type: 'aws_vpc', label: 'VPC', icon: '🌐', category: 'Networking' },
+  { type: 'aws_subnet', label: 'Subnet', icon: '📡', category: 'Networking' },
+  { type: 'aws_instance', label: 'EC2 Instance', icon: '🖥️', category: 'Compute' },
+  { type: 'aws_s3_bucket', label: 'S3 Bucket', icon: '🪣', category: 'Storage' },
+  { type: 'aws_security_group', label: 'Security Group', icon: '🛡️', category: 'Security' },
+];
 
 let _id = 0;
 const uid = () => `node_${++_id}_${Date.now()}`;
@@ -193,6 +25,7 @@ export default function App() {
   const [tool, setTool] = useState<string | null>(null);
   const [detectedTools, setDetectedTools] = useState<ToolInfo[]>([]);
   const [projectName, setProjectName] = useState('my-infra-project');
+  const [catalogResources, setCatalogResources] = useState<CatalogResource[]>([]);
   const [projectId, setProjectId] = useState(''); // immutable after creation — used for API calls
   const [nodes, setNodes] = useState<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -248,6 +81,16 @@ export default function App() {
 
   useEffect(() => { setWsConnected(connected); }, [connected]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+
+  // Fetch resource catalog from backend when tool changes
+  useEffect(() => {
+    if (!tool) return;
+    api.getCatalog(tool).then(cat => {
+      setCatalogResources(cat.resources || []);
+    }).catch(() => {
+      setCatalogResources(FALLBACK_RESOURCES);
+    });
+  }, [tool]);
 
   // Generate code preview whenever nodes change
   useEffect(() => {
@@ -331,7 +174,7 @@ export default function App() {
       setChatMessages(prev => [...prev, { role: 'ai', text: result.message }]);
       if (result.resources) {
         result.resources.forEach(r => {
-          const meta = TOOLS[tool]?.resources.find(def => def.type === r.type);
+          const meta = catalogResources.find(def => def.type === r.type);
           const node = {
             ...r,
             id: uid(),
@@ -418,7 +261,7 @@ export default function App() {
 
   const ct = TOOLS[tool];
   const selected = nodes.find(n => n.id === selectedNode);
-  const categories = [...new Set(ct.resources.map((r: any) => r.category))];
+  const categories = [...new Set(catalogResources.map((r: any) => r.category))];
 
   // ─── Main UI ───
   return (
@@ -469,7 +312,7 @@ export default function App() {
               {categories.map(cat => (
                 <div key={cat}>
                   <div style={S.catTitle}>{cat}</div>
-                  {ct.resources.filter((r: any) => r.category === cat).map((r: any) => (
+                  {catalogResources.filter((r: any) => r.category === cat).map((r: any) => (
                     <button key={r.type} style={S.palItem} onClick={() => addNode(r)}
                       onMouseEnter={e => { (e.currentTarget as any).style.background = '#1a1a2e'; }}
                       onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
