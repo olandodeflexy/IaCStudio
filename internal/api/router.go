@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/iac-studio/iac-studio/internal/ai"
 	"github.com/iac-studio/iac-studio/internal/generator"
@@ -45,6 +47,28 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 		return "", fmt.Errorf("project path escapes root: %q", name)
 	}
 	return resolved, nil
+}
+
+// planGate tracks which projects have had a recent plan run.
+// Apply/destroy is only allowed after a plan has been run for the same project.
+var planGate = struct {
+	mu    sync.Mutex
+	plans map[string]time.Time // projectPath -> last plan time
+}{plans: make(map[string]time.Time)}
+
+// recordPlan marks that a plan was run for a project.
+func recordPlan(projectPath string) {
+	planGate.mu.Lock()
+	planGate.plans[projectPath] = time.Now()
+	planGate.mu.Unlock()
+}
+
+// hasPlan checks that a plan was run for a project within the last hour.
+func hasPlan(projectPath string) bool {
+	planGate.mu.Lock()
+	defer planGate.mu.Unlock()
+	t, ok := planGate.plans[projectPath]
+	return ok && time.Since(t) < time.Hour
 }
 
 // maxRequestBody is the maximum allowed request body size (1MB).
@@ -211,15 +235,33 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 
-		// Block apply/destroy unless the client explicitly acknowledges
-		if run.RequiresApproval(req.Command) && !req.Approved {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusConflict)
-			json.NewEncoder(w).Encode(map[string]string{
-				"error":  "approval_required",
-				"detail": "apply/destroy requires approved:true — run plan first, then re-submit with approved:true",
-			})
-			return
+		// Record plan runs so we can enforce plan-before-apply server-side
+		if req.Command == "plan" || req.Command == "check" {
+			recordPlan(projectPath)
+		}
+
+		// Block apply/destroy unless:
+		// 1. A plan was run for this project within the last hour (server-verified)
+		// 2. The client explicitly confirms (approved:true)
+		if run.RequiresApproval(req.Command) {
+			if !hasPlan(projectPath) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":  "plan_required",
+					"detail": "run plan first — no plan has been run for this project recently",
+				})
+				return
+			}
+			if !req.Approved {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusConflict)
+				json.NewEncoder(w).Encode(map[string]string{
+					"error":  "approval_required",
+					"detail": "plan exists — re-submit with approved:true to proceed",
+				})
+				return
+			}
 		}
 
 		// Execute in background. Use context.Background() — not r.Context() —
@@ -299,13 +341,25 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 // allowedOrigins is populated at startup from the server's actual bind address.
 var allowedOrigins = map[string]bool{}
 
+// serverPort stores the configured port for same-origin checks.
+var serverPort string
+
+// isWildcardBind is true when the server binds to 0.0.0.0 or [::].
+var isWildcardBind bool
+
 // InitAllowedOrigins builds the origin allowlist from the server's host and port.
 // Called once at startup so the list matches the actual deployment.
 func InitAllowedOrigins(host string, port int) {
-	portStr := fmt.Sprintf("%d", port)
-	// Always allow the configured bind address
-	for _, h := range []string{host, "localhost", "127.0.0.1"} {
-		allowedOrigins["http://"+h+":"+portStr] = true
+	serverPort = fmt.Sprintf("%d", port)
+	isWildcardBind = host == "0.0.0.0" || host == "::" || host == ""
+
+	// Always allow localhost variants
+	for _, h := range []string{"localhost", "127.0.0.1"} {
+		allowedOrigins["http://"+h+":"+serverPort] = true
+	}
+	// If binding a specific host, allow that too
+	if !isWildcardBind {
+		allowedOrigins["http://"+host+":"+serverPort] = true
 	}
 	// Also allow the Vite dev server (port 5173) for development
 	for _, h := range []string{"localhost", "127.0.0.1"} {
@@ -314,8 +368,18 @@ func InitAllowedOrigins(host string, port int) {
 }
 
 // IsAllowedOrigin checks whether an origin is in the allowlist.
+// When the server binds to 0.0.0.0, browsers send the LAN IP as the origin
+// (e.g. http://192.168.1.5:3000). We can't predict all LAN IPs at startup,
+// so for wildcard binds we also accept any origin whose port matches the
+// configured server port — the same trust level as listening on all interfaces.
 func IsAllowedOrigin(origin string) bool {
-	return allowedOrigins[origin]
+	if allowedOrigins[origin] {
+		return true
+	}
+	if isWildcardBind && strings.HasPrefix(origin, "http://") && strings.HasSuffix(origin, ":"+serverPort) {
+		return true
+	}
+	return false
 }
 
 // CORS restricts cross-origin requests to the localhost allowlist.
