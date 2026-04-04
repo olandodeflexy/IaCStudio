@@ -18,8 +18,20 @@ const FALLBACK_RESOURCES: CatalogResource[] = [
   { type: 'aws_security_group', label: 'Security Group', icon: '🛡️', category: 'Security' },
 ];
 
+// Connection edge between two resource nodes
+interface Edge {
+  id: string;
+  from: string;     // source node id
+  to: string;       // target node id
+  fromType: string; // source resource type
+  toType: string;   // target resource type
+  field: string;    // the field that creates this connection (e.g., "vpc_id")
+  label: string;    // human-readable label for the connection
+}
+
 let _id = 0;
 const uid = () => `node_${++_id}_${Date.now()}`;
+const edgeId = (from: string, to: string, field: string) => `${from}->${to}:${field}`;
 
 export default function App() {
   const [tool, setTool] = useState<string | null>(null);
@@ -28,7 +40,10 @@ export default function App() {
   const [catalogResources, setCatalogResources] = useState<CatalogResource[]>([]);
   const [projectId, setProjectId] = useState(''); // immutable after creation — used for API calls
   const [nodes, setNodes] = useState<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
+  const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
+  const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
+  const [connecting, setConnecting] = useState<{ fromId: string; x: number; y: number } | null>(null);
   const [chatMessages, setChatMessages] = useState<{ role: string; text: string }[]>([]);
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
@@ -98,9 +113,9 @@ export default function App() {
       setSyncCode(tool ? `# Add resources from the palette or use AI chat\n` : '');
       return;
     }
-    const code = generateLocalCode(tool, nodes);
+    const code = generateLocalCode(tool, nodes, edges);
     setSyncCode(code);
-  }, [nodes, tool]);
+  }, [nodes, edges, tool]);
 
   // Sync to disk (debounced) — syncs even when nodes is empty so that
   // deleting the last resource clears the generated file on disk.
@@ -120,21 +135,52 @@ export default function App() {
     const node = {
       id: uid(),
       type: resourceDef.type,
-      name: resourceDef.type.replace('aws_', ''),
+      name: resourceDef.type.replace(/^(aws_|google_|azurerm_)/, '').replace(/^compute_|^container_/, ''),
       label: resourceDef.label,
       icon: resourceDef.icon,
-      properties: {},
+      properties: { ...(resourceDef.defaults || {}) },
       x: 100 + Math.random() * 280,
       y: 80 + Math.random() * 180,
     };
-    setNodes(prev => [...prev, node]);
+    setNodes(prev => {
+      // Auto-connect: check if this resource type has ConnectsVia rules
+      const catEntry = catalogResources.find(c => c.type === resourceDef.type);
+      if (catEntry?.connects_via) {
+        const newEdges: Edge[] = [];
+        for (const [field, targetType] of Object.entries(catEntry.connects_via)) {
+          // Find existing nodes of the target type
+          const target = prev.find(n => n.type === targetType);
+          if (target) {
+            newEdges.push({
+              id: edgeId(node.id, target.id, field),
+              from: node.id,
+              to: target.id,
+              fromType: node.type,
+              toType: target.type,
+              field,
+              label: field.replace(/_/g, ' '),
+            });
+          }
+        }
+        if (newEdges.length > 0) {
+          setEdges(prevEdges => [...prevEdges, ...newEdges]);
+        }
+      }
+      return [...prev, node];
+    });
     setSelectedNode(node.id);
-  }, []);
+  }, [catalogResources]);
 
   const removeNode = useCallback((id: string) => {
     setNodes(prev => prev.filter(n => n.id !== id));
+    setEdges(prev => prev.filter(e => e.from !== id && e.to !== id));
     setSelectedNode(prev => prev === id ? null : prev);
-  }, []);
+    setSelectedEdge(prev => {
+      // Clear selected edge if it involved the removed node
+      const edge = edges.find(e => e.id === prev);
+      return edge && (edge.from === id || edge.to === id) ? null : prev;
+    });
+  }, [edges]);
 
   const updateProp = useCallback((id: string, key: string, value: any) => {
     setNodes(prev => prev.map(n => n.id === id ? { ...n, properties: { ...n.properties, [key]: value } } : n));
@@ -153,6 +199,11 @@ export default function App() {
   };
 
   const onMouseMove = (e: React.MouseEvent) => {
+    // Update connection drag preview
+    if (connecting) {
+      const rect = canvasRef.current!.getBoundingClientRect();
+      setConnecting(prev => prev ? { ...prev, x: e.clientX - rect.left, y: e.clientY - rect.top } : null);
+    }
     if (!dragging) return;
     const rect = canvasRef.current!.getBoundingClientRect();
     const x = Math.max(0, e.clientX - rect.left - dragging.ox);
@@ -339,9 +390,67 @@ export default function App() {
         </aside>
 
         {/* Canvas */}
-        <main style={S.canvas} ref={canvasRef} onMouseMove={onMouseMove} onMouseUp={onMouseUp} onMouseLeave={onMouseUp}
-          onClick={() => setSelectedNode(null)}>
+        <main style={S.canvas} ref={canvasRef} onMouseMove={onMouseMove} onMouseUp={(e) => {
+          onMouseUp(e);
+          // Finish manual connection if dragging to empty space
+          if (connecting) setConnecting(null);
+        }} onMouseLeave={() => { onMouseUp(null as any); setConnecting(null); }}
+          onClick={() => { setSelectedNode(null); setSelectedEdge(null); }}>
           <div style={S.grid} />
+
+          {/* SVG layer for connection lines */}
+          <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 1 }}>
+            <defs>
+              <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill={ct.color} opacity="0.6" />
+              </marker>
+              <marker id="arrowhead-hover" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+                <polygon points="0 0, 10 3.5, 0 7" fill={ct.color} />
+              </marker>
+            </defs>
+            {edges.map(edge => {
+              const fromNode = nodes.find(n => n.id === edge.from);
+              const toNode = nodes.find(n => n.id === edge.to);
+              if (!fromNode || !toNode) return null;
+              const NODE_W = 180, NODE_H = 70;
+              const x1 = fromNode.x + NODE_W / 2;
+              const y1 = fromNode.y + NODE_H;
+              const x2 = toNode.x + NODE_W / 2;
+              const y2 = toNode.y;
+              const mx = (x1 + x2) / 2;
+              const my = (y1 + y2) / 2;
+              const isSelected = selectedEdge === edge.id;
+              // Bezier curve for smooth connections
+              const path = `M ${x1} ${y1} C ${x1} ${y1 + 40}, ${x2} ${y2 - 40}, ${x2} ${y2}`;
+              return (
+                <g key={edge.id}>
+                  {/* Invisible wider path for click target */}
+                  <path d={path} fill="none" stroke="transparent" strokeWidth={12} style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
+                    onClick={(e) => { e.stopPropagation(); setSelectedEdge(edge.id); setSelectedNode(null); }} />
+                  {/* Visible path */}
+                  <path d={path} fill="none"
+                    stroke={isSelected ? ct.color : `${ct.color}55`}
+                    strokeWidth={isSelected ? 2.5 : 1.5}
+                    strokeDasharray={isSelected ? 'none' : '6 4'}
+                    markerEnd={isSelected ? 'url(#arrowhead-hover)' : 'url(#arrowhead)'}
+                    style={{ transition: 'stroke 0.2s, stroke-width 0.2s' }} />
+                  {/* Field label on the line */}
+                  <text x={mx} y={my - 6} textAnchor="middle" fill={isSelected ? ct.color : '#555'}
+                    fontSize={9} fontFamily="JetBrains Mono" style={{ pointerEvents: 'none' }}>
+                    {edge.field}
+                  </text>
+                </g>
+              );
+            })}
+            {/* Connection drag preview line */}
+            {connecting && (
+              <line x1={nodes.find(n => n.id === connecting.fromId)!.x + 90}
+                y1={nodes.find(n => n.id === connecting.fromId)!.y + 70}
+                x2={connecting.x} y2={connecting.y}
+                stroke={ct.color} strokeWidth={2} strokeDasharray="4 4" opacity={0.6} />
+            )}
+          </svg>
+
           {nodes.length === 0 && (
             <div style={S.empty}>
               <div style={{ fontSize: 48, opacity: 0.3, marginBottom: 16 }}>◇</div>
@@ -349,27 +458,103 @@ export default function App() {
               <div style={{ fontSize: 14, opacity: 0.3, marginTop: 4 }}>or use AI chat below</div>
             </div>
           )}
-          {nodes.map(node => (
+          {nodes.map(node => {
+            const nodeEdges = edges.filter(e => e.from === node.id || e.to === node.id);
+            const hasConnections = nodeEdges.length > 0;
+            return (
             <div key={node.id}
-              style={{ ...S.node, left: node.x, top: node.y,
-                borderColor: selectedNode === node.id ? ct.color : '#2a2a3e',
+              style={{ ...S.node, left: node.x, top: node.y, zIndex: 2,
+                borderColor: selectedNode === node.id ? ct.color : hasConnections ? `${ct.color}44` : '#2a2a3e',
                 boxShadow: selectedNode === node.id ? `0 0 20px ${ct.color}33` : '0 4px 12px rgba(0,0,0,0.3)' }}
               onMouseDown={e => onMouseDown(e, node.id)}
-              onClick={e => { e.stopPropagation(); setSelectedNode(node.id); }}>
+              onClick={e => { e.stopPropagation(); setSelectedNode(node.id); setSelectedEdge(null); }}
+              onMouseUp={() => {
+                // Complete manual connection
+                if (connecting && connecting.fromId !== node.id) {
+                  const fromNode = nodes.find(n => n.id === connecting.fromId);
+                  if (fromNode) {
+                    // Find a valid ConnectsVia field for this pair
+                    const catEntry = catalogResources.find(c => c.type === fromNode.type);
+                    let field = 'depends_on';
+                    if (catEntry?.connects_via) {
+                      const match = Object.entries(catEntry.connects_via).find(([, t]) => t === node.type);
+                      if (match) field = match[0];
+                    }
+                    const newEdge: Edge = {
+                      id: edgeId(connecting.fromId, node.id, field),
+                      from: connecting.fromId, to: node.id,
+                      fromType: fromNode.type, toType: node.type,
+                      field, label: field.replace(/_/g, ' '),
+                    };
+                    setEdges(prev => {
+                      if (prev.some(e => e.from === newEdge.from && e.to === newEdge.to && e.field === newEdge.field)) return prev;
+                      return [...prev, newEdge];
+                    });
+                  }
+                  setConnecting(null);
+                }
+              }}>
               <div style={S.nodeHead}>
                 <span style={{ fontSize: 18 }}>{node.icon}</span>
                 <span style={{ fontSize: 13, fontWeight: 600, color: '#ddd', flex: 1 }}>{node.label}</span>
+                {hasConnections && <span style={{ fontSize: 9, color: ct.color, fontFamily: 'JetBrains Mono' }}>{nodeEdges.length}</span>}
                 <button style={S.nodeDel} onClick={e => { e.stopPropagation(); removeNode(node.id); }}>×</button>
               </div>
               <div style={{ fontSize: 10, color: '#555', padding: '0 12px', fontFamily: 'JetBrains Mono' }}>{node.type}</div>
-              <div style={{ fontSize: 11, color: '#777', padding: '4px 12px 10px', fontFamily: 'JetBrains Mono' }}>{node.name}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 12px 8px' }}>
+                <span style={{ fontSize: 11, color: '#777', fontFamily: 'JetBrains Mono' }}>{node.name}</span>
+                {/* Connection port — drag from here to another node */}
+                <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${ct.color}55`, background: '#12121e',
+                  cursor: 'crosshair', flexShrink: 0 }}
+                  title="Drag to connect"
+                  onMouseDown={e => {
+                    e.stopPropagation();
+                    const rect = canvasRef.current!.getBoundingClientRect();
+                    setConnecting({ fromId: node.id, x: e.clientX - rect.left, y: e.clientY - rect.top });
+                  }} />
+              </div>
             </div>
-          ))}
+          );})}
         </main>
 
         {/* Right Panel */}
         <aside style={S.right}>
-          {selected && (
+          {/* Selected edge info */}
+          {selectedEdge && (() => {
+            const edge = edges.find(e => e.id === selectedEdge);
+            if (!edge) return null;
+            const fromNode = nodes.find(n => n.id === edge.from);
+            const toNode = nodes.find(n => n.id === edge.to);
+            return (
+              <div style={S.props}>
+                <div style={{ fontSize: 13, fontWeight: 600, color: '#bbb', marginBottom: 12 }}>🔗 Connection</div>
+                <div style={S.field}>
+                  <label style={S.flabel}>From</label>
+                  <div style={{ fontSize: 12, color: '#aaa', fontFamily: 'JetBrains Mono' }}>{fromNode?.icon} {fromNode?.type}.{fromNode?.name}</div>
+                </div>
+                <div style={S.field}>
+                  <label style={S.flabel}>To</label>
+                  <div style={{ fontSize: 12, color: '#aaa', fontFamily: 'JetBrains Mono' }}>{toNode?.icon} {toNode?.type}.{toNode?.name}</div>
+                </div>
+                <div style={S.field}>
+                  <label style={S.flabel}>Via Field</label>
+                  <div style={{ fontSize: 12, color: ct.color, fontFamily: 'JetBrains Mono' }}>{edge.field}</div>
+                </div>
+                <div style={S.field}>
+                  <label style={S.flabel}>Generated Reference</label>
+                  <div style={{ fontSize: 11, color: '#888', fontFamily: 'JetBrains Mono', background: '#111120', padding: '6px 8px', borderRadius: 4 }}>
+                    {edge.field} = {toNode?.type}.{toNode?.name}.id
+                  </div>
+                </div>
+                <button style={{ ...S.cmd, background: '#ef444433', color: '#ef4444', width: '100%', marginTop: 8 }}
+                  onClick={() => { setEdges(prev => prev.filter(e => e.id !== selectedEdge)); setSelectedEdge(null); }}>
+                  Delete Connection
+                </button>
+              </div>
+            );
+          })()}
+          {/* Selected node properties */}
+          {selected && !selectedEdge && (
             <div style={S.props}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#bbb', marginBottom: 12 }}>{selected.icon} Properties</div>
               <div style={S.field}>
@@ -389,6 +574,29 @@ export default function App() {
                   )}
                 </div>
               ))}
+              {/* Show connections for this node */}
+              {(() => {
+                const nodeEdges = edges.filter(e => e.from === selected.id || e.to === selected.id);
+                if (nodeEdges.length === 0) return null;
+                return (
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #1a1a2e' }}>
+                    <label style={S.flabel}>Connections ({nodeEdges.length})</label>
+                    {nodeEdges.map(e => {
+                      const other = nodes.find(n => n.id === (e.from === selected.id ? e.to : e.from));
+                      const direction = e.from === selected.id ? '→' : '←';
+                      return (
+                        <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 11, color: '#777', fontFamily: 'JetBrains Mono', cursor: 'pointer' }}
+                          onClick={() => setSelectedEdge(e.id)}>
+                          <span>{direction}</span>
+                          <span>{other?.icon}</span>
+                          <span style={{ color: '#aaa' }}>{other?.name}</span>
+                          <span style={{ color: ct.color, marginLeft: 'auto', fontSize: 9 }}>{e.field}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
           )}
           <div style={S.codePanel}>
@@ -456,25 +664,67 @@ export default function App() {
 }
 
 // Local code generation (mirrors the Go backend for instant preview)
-function generateLocalCode(tool: string, nodes: any[]): string {
+function generateLocalCode(tool: string, nodes: any[], edges: Edge[]): string {
   if (tool === 'ansible') {
     let c = '---\n- name: IaC Studio Playbook\n  hosts: all\n  become: true\n  tasks:\n';
     nodes.forEach(n => {
       c += `    - name: ${n.name || n.type}\n      ${n.type}:\n`;
       Object.entries(n.properties).forEach(([k, v]) => {
-        c += `        ${k}: ${typeof v === 'boolean' ? (v ? 'yes' : 'no') : `"${v}"`}\n`;
+        if (typeof v === 'boolean') c += `        ${k}: ${v ? 'yes' : 'no'}\n`;
+        else if (typeof v === 'number') c += `        ${k}: ${v}\n`;
+        else c += `        ${k}: "${v}"\n`;
       });
       c += '\n';
     });
     return c;
   }
-  let c = 'provider "aws" {\n  region = "us-east-1"\n}\n\n';
+
+  // Determine provider from resource types
+  const hasGCP = nodes.some(n => n.type.startsWith('google_'));
+  const hasAzure = nodes.some(n => n.type.startsWith('azurerm_'));
+  const hasAWS = nodes.some(n => n.type.startsWith('aws_'));
+
+  let c = '';
+  if (hasAWS) c += 'provider "aws" {\n  region = "us-east-1"\n}\n\n';
+  if (hasGCP) c += 'provider "google" {\n  project = "my-project"\n  region  = "us-central1"\n}\n\n';
+  if (hasAzure) c += 'provider "azurerm" {\n  features {}\n}\n\n';
+
+  // Build edge lookup: nodeId -> outgoing edges
+  const edgesByFrom = new Map<string, Edge[]>();
+  edges.forEach(e => {
+    const list = edgesByFrom.get(e.from) || [];
+    list.push(e);
+    edgesByFrom.set(e.from, list);
+  });
+
+  // Build node lookup by id
+  const nodeById = new Map(nodes.map(n => [n.id, n]));
+
   nodes.forEach(n => {
-    const name = n.name || n.type.replace('aws_', '');
+    const name = n.name || n.type.replace(/^(aws_|google_|azurerm_|google_compute_|google_container_)/, '');
     c += `resource "${n.type}" "${name}" {\n`;
-    Object.entries(n.properties).forEach(([k, v]) => {
-      c += typeof v === 'boolean' ? `  ${k} = ${v}\n` : `  ${k} = "${v}"\n`;
+
+    // Emit connection references first (e.g., vpc_id = aws_vpc.main.id)
+    const nodeEdges = edgesByFrom.get(n.id) || [];
+    const emittedFields = new Set<string>();
+    nodeEdges.forEach(edge => {
+      const target = nodeById.get(edge.to);
+      if (target && edge.field !== 'depends_on') {
+        const targetName = target.name || target.type.replace(/^(aws_|google_|azurerm_|google_compute_|google_container_)/, '');
+        c += `  ${edge.field} = ${target.type}.${targetName}.id\n`;
+        emittedFields.add(edge.field);
+      }
     });
+
+    // Emit regular properties (skip fields already emitted as references)
+    Object.entries(n.properties).forEach(([k, v]) => {
+      if (emittedFields.has(k)) return;
+      if (typeof v === 'boolean') c += `  ${k} = ${v}\n`;
+      else if (typeof v === 'number') c += `  ${k} = ${v}\n`;
+      else if (Array.isArray(v)) c += `  ${k} = ${JSON.stringify(v)}\n`;
+      else c += `  ${k} = "${v}"\n`;
+    });
+
     c += '}\n\n';
   });
   return c;
