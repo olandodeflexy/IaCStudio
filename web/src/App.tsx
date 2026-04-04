@@ -54,6 +54,8 @@ export default function App() {
   const [syncCode, setSyncCode] = useState('');
   const [notification, setNotification] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
+  const [hoveredResource, setHoveredResource] = useState<CatalogResource | null>(null);
+  const [hoverPos, setHoverPos] = useState<{ x: number; y: number }>({ x: 0, y: 0 });
   // Resizable panel sizes
   const [sidebarWidth, setSidebarWidth] = useState(240);
   const [rightWidth, setRightWidth] = useState(300);
@@ -424,8 +426,16 @@ export default function App() {
                     <div style={S.catTitle}>{cat}</div>
                     {filteredResources.filter((r: any) => r.category === cat).map((r: any) => (
                       <button key={r.type} style={S.palItem} onClick={() => addNode(r)}
-                        onMouseEnter={e => { (e.currentTarget as any).style.background = '#1a1a2e'; }}
-                        onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
+                        onMouseEnter={e => {
+                          (e.currentTarget as any).style.background = '#1a1a2e';
+                          const rect = e.currentTarget.getBoundingClientRect();
+                          setHoverPos({ x: rect.right + 8, y: rect.top });
+                          setHoveredResource(r);
+                        }}
+                        onMouseLeave={e => {
+                          (e.currentTarget as any).style.background = 'transparent';
+                          setHoveredResource(null);
+                        }}>
                         <span>{r.icon}</span>
                         <span style={{ flex: 1 }}>{r.label}</span>
                         <span style={{ color: '#444' }}>+</span>
@@ -739,6 +749,65 @@ export default function App() {
           </div>
         </div>
       </div>
+
+      {/* Resource hover tooltip */}
+      {hoveredResource && (
+        <div style={{
+          position: 'fixed', left: hoverPos.x, top: hoverPos.y,
+          background: '#16162a', border: '1px solid #2a2a4e', borderRadius: 10,
+          padding: '12px 16px', zIndex: 1000, maxWidth: 300, minWidth: 220,
+          boxShadow: '0 8px 24px rgba(0,0,0,0.5)', pointerEvents: 'none',
+          fontFamily: 'DM Sans',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            <span style={{ fontSize: 20 }}>{hoveredResource.icon}</span>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#e0e0f0' }}>{hoveredResource.label}</div>
+              <div style={{ fontSize: 10, color: '#666', fontFamily: 'JetBrains Mono' }}>{hoveredResource.type}</div>
+            </div>
+          </div>
+          {hoveredResource.provider && (
+            <div style={{ fontSize: 10, color: '#888', marginBottom: 6 }}>
+              Provider: <span style={{ color: ct.color }}>{hoveredResource.provider}</span>
+            </div>
+          )}
+          {hoveredResource.fields && hoveredResource.fields.length > 0 && (
+            <div style={{ marginBottom: 6 }}>
+              <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4, fontFamily: 'JetBrains Mono' }}>Fields</div>
+              {hoveredResource.fields.slice(0, 6).map(f => (
+                <div key={f.name} style={{ fontSize: 11, color: '#999', display: 'flex', gap: 4, lineHeight: 1.6, fontFamily: 'JetBrains Mono' }}>
+                  <span style={{ color: f.required ? '#ef4444' : '#555' }}>{f.required ? '*' : ' '}</span>
+                  <span style={{ color: '#aaa' }}>{f.name}</span>
+                  <span style={{ color: '#555', marginLeft: 'auto' }}>{f.type}</span>
+                </div>
+              ))}
+              {hoveredResource.fields.length > 6 && (
+                <div style={{ fontSize: 10, color: '#444', marginTop: 2 }}>+{hoveredResource.fields.length - 6} more</div>
+              )}
+            </div>
+          )}
+          {hoveredResource.connects_via && Object.keys(hoveredResource.connects_via).length > 0 && (
+            <div>
+              <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4, fontFamily: 'JetBrains Mono' }}>Connects To</div>
+              {Object.entries(hoveredResource.connects_via).map(([field, target]) => (
+                <div key={field} style={{ fontSize: 11, color: '#777', fontFamily: 'JetBrains Mono', lineHeight: 1.6 }}>
+                  <span style={{ color: ct.color }}>{field}</span> → <span style={{ color: '#aaa' }}>{target}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {hoveredResource.defaults && Object.keys(hoveredResource.defaults).length > 0 && (
+            <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #1e1e30' }}>
+              <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4, fontFamily: 'JetBrains Mono' }}>Defaults</div>
+              {Object.entries(hoveredResource.defaults).slice(0, 4).map(([k, v]) => (
+                <div key={k} style={{ fontSize: 10, color: '#666', fontFamily: 'JetBrains Mono', lineHeight: 1.5 }}>
+                  {k}: <span style={{ color: '#888' }}>{String(v)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
