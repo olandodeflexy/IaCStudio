@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -201,23 +202,32 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 
 		limitBody(w, r)
 		var req struct {
-			Tool    string `json:"tool"`
-			Command string `json:"command"` // init | plan | apply | check | playbook
+			Tool     string `json:"tool"`
+			Command  string `json:"command"`  // init | plan | apply | check | playbook
+			Approved bool   `json:"approved"` // must be true for apply/destroy
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
 			return
 		}
 
-		// Block apply/destroy behind approval gate
-		if run.RequiresApproval(req.Command) {
-			http.Error(w, "apply/destroy requires plan review first — use /plan-review then /run with approved=true", http.StatusConflict)
+		// Block apply/destroy unless the client explicitly acknowledges
+		if run.RequiresApproval(req.Command) && !req.Approved {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusConflict)
+			json.NewEncoder(w).Encode(map[string]string{
+				"error":  "approval_required",
+				"detail": "apply/destroy requires approved:true — run plan first, then re-submit with approved:true",
+			})
 			return
 		}
 
-		// Execute with context cancellation and timeouts via SafeRunner
+		// Execute in background. Use context.Background() — not r.Context() —
+		// because the HTTP handler returns 202 immediately, which would cancel
+		// a request-scoped context and kill the command. SafeRunner applies its
+		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
-			result, err := run.Execute(r.Context(), projectPath, req.Tool, req.Command)
+			result, err := run.Execute(context.Background(), projectPath, req.Tool, req.Command)
 			msg := map[string]interface{}{
 				"type":    "terminal",
 				"project": name,
@@ -286,13 +296,21 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 	return mux
 }
 
-// allowedOrigins are the only origins accepted for CORS and WebSocket.
-// These cover the default dev and production bind addresses.
-var allowedOrigins = map[string]bool{
-	"http://localhost:3000":   true,
-	"http://127.0.0.1:3000":  true,
-	"http://localhost:5173":   true, // Vite dev server
-	"http://127.0.0.1:5173":  true,
+// allowedOrigins is populated at startup from the server's actual bind address.
+var allowedOrigins = map[string]bool{}
+
+// InitAllowedOrigins builds the origin allowlist from the server's host and port.
+// Called once at startup so the list matches the actual deployment.
+func InitAllowedOrigins(host string, port int) {
+	portStr := fmt.Sprintf("%d", port)
+	// Always allow the configured bind address
+	for _, h := range []string{host, "localhost", "127.0.0.1"} {
+		allowedOrigins["http://"+h+":"+portStr] = true
+	}
+	// Also allow the Vite dev server (port 5173) for development
+	for _, h := range []string{"localhost", "127.0.0.1"} {
+		allowedOrigins["http://"+h+":5173"] = true
+	}
 }
 
 // IsAllowedOrigin checks whether an origin is in the allowlist.

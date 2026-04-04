@@ -84,12 +84,12 @@ export const api = {
     return (await check(res)).json();
   },
 
-  // Run IaC command
-  async runCommand(projectName: string, tool: string, command: string): Promise<{ status: string }> {
+  // Run IaC command. For apply/destroy, pass approved:true after plan review.
+  async runCommand(projectName: string, tool: string, command: string, approved = false): Promise<{ status: string }> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool, command }),
+      body: JSON.stringify({ tool, command, approved }),
     });
     return (await check(res)).json();
   },

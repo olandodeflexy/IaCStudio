@@ -206,8 +206,13 @@ export default function App() {
 
   const runCmd = (command: string) => {
     if (!tool) return;
+    // apply/destroy require explicit confirmation
+    const needsApproval = command === 'apply' || command === 'destroy';
+    if (needsApproval && !confirm(`Are you sure you want to run "${command}"? This will modify real infrastructure.`)) {
+      return;
+    }
     setTerminalOutput(prev => [...prev, `$ ${command}`, '']);
-    api.runCommand(projectId, tool, command).catch(err => {
+    api.runCommand(projectId, tool, command, needsApproval).catch(err => {
       setTerminalOutput(prev => [...prev, `Error: ${err.message}`]);
     });
   };

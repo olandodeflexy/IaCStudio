@@ -68,6 +68,9 @@ func main() {
 	aiClient := ai.NewOllamaClient(*aiEndpoint, *aiModel)
 	safeRun := runner.NewSafeRunner(runner.DefaultSafetyConfig())
 
+	// Build origin allowlist from actual bind address
+	api.InitAllowedOrigins(*host, *port)
+
 	// Build router
 	router := api.NewRouter(hub, fw, aiClient, safeRun, *projectsDir)
 
