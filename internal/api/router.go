@@ -33,9 +33,13 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 		}
 	}
 	resolved := filepath.Join(projectsDir, name)
-	// Belt-and-suspenders: verify the resolved path is still under projectsDir
-	absResolved, _ := filepath.Abs(resolved)
+	// Resolve symlinks so a symlink at ~/iac-projects/evil -> /etc/ is caught
 	absProjects, _ := filepath.Abs(projectsDir)
+	absResolved, _ := filepath.Abs(resolved)
+	// If the directory already exists, resolve symlinks in the actual path
+	if evalResolved, err := filepath.EvalSymlinks(resolved); err == nil {
+		absResolved, _ = filepath.Abs(evalResolved)
+	}
 	if !strings.HasPrefix(absResolved, absProjects+string(filepath.Separator)) {
 		return "", fmt.Errorf("project path escapes root: %q", name)
 	}

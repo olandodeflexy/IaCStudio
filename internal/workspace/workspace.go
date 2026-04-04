@@ -68,6 +68,21 @@ func New(projectsDir string) *Manager {
 	return &Manager{projectsDir: projectsDir}
 }
 
+// validName checks that a name is safe to pass as a CLI argument.
+// Only allows alphanumeric, hyphens, and underscores.
+func validName(name string) error {
+	if name == "" {
+		return fmt.Errorf("name cannot be empty")
+	}
+	for _, r := range name {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return fmt.Errorf("invalid name %q: only alphanumeric, hyphens, underscores allowed", name)
+		}
+	}
+	return nil
+}
+
 // InitEnvironments sets up the standard dev/staging/prod workspace structure.
 func (m *Manager) InitEnvironments(projectName string) (*EnvironmentConfig, error) {
 	projectDir := filepath.Join(m.projectsDir, projectName)
@@ -148,6 +163,9 @@ func (m *Manager) ListEnvironments(projectName string) (*EnvironmentConfig, erro
 
 // SwitchEnvironment changes the active terraform workspace.
 func (m *Manager) SwitchEnvironment(projectName, envName string) error {
+	if err := validName(envName); err != nil {
+		return fmt.Errorf("invalid environment name: %w", err)
+	}
 	projectDir := filepath.Join(m.projectsDir, projectName)
 	cmd := exec.Command("terraform", "workspace", "select", envName)
 	cmd.Dir = projectDir
@@ -294,6 +312,9 @@ func (m *Manager) CompareEnvironments(projectName, env1, env2 string) (*DriftRes
 // --- internal helpers ---
 
 func (m *Manager) createWorkspace(projectDir, name string) error {
+	if err := validName(name); err != nil {
+		return err
+	}
 	cmd := exec.Command("terraform", "workspace", "new", name)
 	cmd.Dir = projectDir
 	out, err := cmd.CombinedOutput()

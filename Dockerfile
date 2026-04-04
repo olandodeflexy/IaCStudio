@@ -20,17 +20,21 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w" -o /iac-studio ./cmd/serv
 FROM alpine:3.19
 RUN apk add --no-cache ca-certificates curl git openssh-client
 
-# Install Terraform (for running plan/apply)
+# Install Terraform (for running plan/apply) — with checksum verification
 ARG TERRAFORM_VERSION=1.9.0
 RUN curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o tf.zip \
+    && curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_SHA256SUMS" -o tf.sha256 \
+    && grep "linux_amd64.zip" tf.sha256 | sha256sum -c - \
     && unzip tf.zip -d /usr/local/bin/ \
-    && rm tf.zip
+    && rm tf.zip tf.sha256
 
-# Install OpenTofu
+# Install OpenTofu — with checksum verification
 ARG TOFU_VERSION=1.8.0
 RUN curl -fsSL "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_linux_amd64.zip" -o tofu.zip \
+    && curl -fsSL "https://github.com/opentofu/opentofu/releases/download/v${TOFU_VERSION}/tofu_${TOFU_VERSION}_SHA256SUMS" -o tofu.sha256 \
+    && grep "linux_amd64.zip" tofu.sha256 | sha256sum -c - \
     && unzip tofu.zip -d /usr/local/bin/ \
-    && rm tofu.zip
+    && rm tofu.zip tofu.sha256
 
 WORKDIR /app
 COPY --from=backend /iac-studio /app/iac-studio

@@ -148,11 +148,36 @@ func (dc *DynamicCatalog) ConvertToResources(schema *ProviderSchema) []Resource 
 
 // ─── Helpers ───
 
+// validProviderName checks that a provider name segment is safe to embed in HCL.
+// Allows only lowercase alphanumeric and hyphens (matching Terraform registry naming).
+func validProviderName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, r := range s {
+		if !((r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-') {
+			return false
+		}
+	}
+	return true
+}
+
 func generateProviderConfig(providers []string) string {
 	var b strings.Builder
 	b.WriteString("terraform {\n  required_providers {\n")
 	for _, p := range providers {
 		parts := strings.Split(p, "/")
+		// Validate every segment of the provider name (e.g. "hashicorp/aws")
+		valid := true
+		for _, part := range parts {
+			if !validProviderName(part) {
+				valid = false
+				break
+			}
+		}
+		if !valid {
+			continue // skip invalid provider names
+		}
 		name := parts[len(parts)-1]
 		source := p
 		if !strings.Contains(p, "/") {

@@ -196,11 +196,34 @@ func (r *Repo) ListBranches() ([]string, error) {
 	return branches, nil
 }
 
+// validBranchName rejects names that could be interpreted as git flags
+// or contain unsafe characters for shell/filesystem use.
+func validBranchName(name string) error {
+	if name == "" {
+		return fmt.Errorf("branch name cannot be empty")
+	}
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("branch name %q cannot start with a dash", name)
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, " ") ||
+		strings.ContainsAny(name, "~^:?*[\\") {
+		return fmt.Errorf("branch name %q contains invalid characters", name)
+	}
+	return nil
+}
+
 func (r *Repo) Checkout(branch string) error {
-	return r.run("checkout", branch)
+	if err := validBranchName(branch); err != nil {
+		return err
+	}
+	// Use "--" to separate the branch name from flags
+	return r.run("checkout", "--", branch)
 }
 
 func (r *Repo) CreateBranch(name string) error {
+	if err := validBranchName(name); err != nil {
+		return err
+	}
 	return r.run("checkout", "-b", name)
 }
 
