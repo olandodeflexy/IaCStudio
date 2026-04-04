@@ -42,10 +42,24 @@ func GetCatalog(tool string) Catalog {
 	}
 }
 
+// GetCatalogByProvider returns resources filtered to a specific cloud provider.
+func GetCatalogByProvider(tool, provider string) Catalog {
+	full := GetCatalog(tool)
+	if provider == "" {
+		return full
+	}
+	var filtered []Resource
+	for _, r := range full.Resources {
+		if r.Provider == provider {
+			filtered = append(filtered, r)
+		}
+	}
+	return Catalog{Tool: tool, Resources: filtered}
+}
+
 func terraformCatalog() Catalog {
-	return Catalog{
-		Tool: "terraform",
-		Resources: []Resource{
+	// Start with base AWS resources, then append extra AWS, GCP, and Azure
+	resources := []Resource{
 			// ─── Networking ───
 			{
 				Type: "aws_vpc", Label: "VPC", Icon: "🌐", Category: "Networking", Provider: "aws",
@@ -252,14 +266,17 @@ func terraformCatalog() Catalog {
 				Type: "aws_sqs_queue", Label: "SQS Queue", Icon: "📬", Category: "Monitoring", Provider: "aws",
 				Defaults: map[string]any{"name": "my-queue", "visibility_timeout_seconds": 30},
 			},
-		},
-	}
+		}
+
+	resources = append(resources, awsExtraResources()...)
+	resources = append(resources, gcpResources()...)
+	resources = append(resources, azureResources()...)
+
+	return Catalog{Tool: "terraform", Resources: resources}
 }
 
 func ansibleCatalog() Catalog {
-	return Catalog{
-		Tool: "ansible",
-		Resources: []Resource{
+	resources := []Resource{
 			// ─── Packages ───
 			{Type: "apt", Label: "Install Package (apt)", Icon: "📦", Category: "Packages",
 				Defaults: map[string]any{"name": "nginx", "state": "present", "update_cache": true},
@@ -382,6 +399,9 @@ func ansibleCatalog() Catalog {
 			{Type: "iptables", Label: "iptables Rule", Icon: "🔥", Category: "Networking",
 				Defaults: map[string]any{"chain": "INPUT", "protocol": "tcp", "destination_port": "80", "jump": "ACCEPT"},
 			},
-		},
-	}
+		}
+
+	resources = append(resources, ansibleExtraResources()...)
+
+	return Catalog{Tool: "ansible", Resources: resources}
 }
