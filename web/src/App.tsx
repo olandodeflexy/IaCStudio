@@ -53,6 +53,12 @@ export default function App() {
   const [wsConnected, setWsConnected] = useState(false);
   const [syncCode, setSyncCode] = useState('');
   const [notification, setNotification] = useState<string | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  // Resizable panel sizes
+  const [sidebarWidth, setSidebarWidth] = useState(240);
+  const [rightWidth, setRightWidth] = useState(300);
+  const [bottomHeight, setBottomHeight] = useState(220);
+  const [resizing, setResizing] = useState<{ panel: string; startPos: number; startSize: number } | null>(null);
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
@@ -96,6 +102,44 @@ export default function App() {
 
   useEffect(() => { setWsConnected(connected); }, [connected]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMessages]);
+
+  // Global resize drag handler
+  useEffect(() => {
+    if (!resizing) return;
+    const onMove = (e: MouseEvent) => {
+      switch (resizing.panel) {
+        case 'sidebar':
+          setSidebarWidth(Math.max(160, Math.min(500, resizing.startSize + (e.clientX - resizing.startPos))));
+          break;
+        case 'right':
+          setRightWidth(Math.max(200, Math.min(600, resizing.startSize - (e.clientX - resizing.startPos))));
+          break;
+        case 'bottom':
+          setBottomHeight(Math.max(100, Math.min(500, resizing.startSize - (e.clientY - resizing.startPos))));
+          break;
+      }
+    };
+    const onUp = () => setResizing(null);
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+    document.body.style.cursor = resizing.panel === 'bottom' ? 'row-resize' : 'col-resize';
+    document.body.style.userSelect = 'none';
+    return () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+  }, [resizing]);
+
+  // Filter resources by search query
+  const filteredResources = searchQuery
+    ? catalogResources.filter(r =>
+        r.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        r.type.toLowerCase().includes(searchQuery.toLowerCase()) ||
+        r.category.toLowerCase().includes(searchQuery.toLowerCase()))
+    : catalogResources;
+  const filteredCategories = [...new Set(filteredResources.map(r => r.category))];
 
   // Fetch resource catalog from backend when tool changes
   useEffect(() => {
@@ -348,8 +392,8 @@ export default function App() {
       </header>
 
       <div style={S.main}>
-        {/* Sidebar */}
-        <aside style={S.sidebar}>
+        {/* Sidebar — resizable */}
+        <aside style={{ ...S.sidebar, width: sidebarWidth }}>
           <div style={S.tabs}>
             {['palette', 'files'].map(t => (
               <button key={t} style={{ ...S.tab, ...(activePanel === t ? { color: ct.color, borderBottomColor: ct.color } : {}) }}
@@ -359,22 +403,43 @@ export default function App() {
             ))}
           </div>
           {activePanel === 'palette' && (
-            <div style={S.palScroll}>
-              {categories.map(cat => (
-                <div key={cat}>
-                  <div style={S.catTitle}>{cat}</div>
-                  {catalogResources.filter((r: any) => r.category === cat).map((r: any) => (
-                    <button key={r.type} style={S.palItem} onClick={() => addNode(r)}
-                      onMouseEnter={e => { (e.currentTarget as any).style.background = '#1a1a2e'; }}
-                      onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
-                      <span>{r.icon}</span>
-                      <span style={{ flex: 1 }}>{r.label}</span>
-                      <span style={{ color: '#444' }}>+</span>
-                    </button>
-                  ))}
-                </div>
-              ))}
-            </div>
+            <>
+              {/* Search */}
+              <div style={{ padding: '8px 10px', borderBottom: '1px solid #1a1a2e' }}>
+                <input
+                  style={{ ...S.finput, fontSize: 12, padding: '6px 10px', background: '#0a0a14' }}
+                  placeholder="Search resources..."
+                  value={searchQuery}
+                  onChange={e => setSearchQuery(e.target.value)}
+                />
+                {searchQuery && (
+                  <div style={{ fontSize: 10, color: '#555', marginTop: 4, fontFamily: 'JetBrains Mono' }}>
+                    {filteredResources.length} result{filteredResources.length !== 1 ? 's' : ''}
+                  </div>
+                )}
+              </div>
+              <div style={S.palScroll}>
+                {filteredCategories.map(cat => (
+                  <div key={cat}>
+                    <div style={S.catTitle}>{cat}</div>
+                    {filteredResources.filter((r: any) => r.category === cat).map((r: any) => (
+                      <button key={r.type} style={S.palItem} onClick={() => addNode(r)}
+                        onMouseEnter={e => { (e.currentTarget as any).style.background = '#1a1a2e'; }}
+                        onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
+                        <span>{r.icon}</span>
+                        <span style={{ flex: 1 }}>{r.label}</span>
+                        <span style={{ color: '#444' }}>+</span>
+                      </button>
+                    ))}
+                  </div>
+                ))}
+                {filteredResources.length === 0 && searchQuery && (
+                  <div style={{ padding: '20px 16px', color: '#444', fontSize: 12, textAlign: 'center' }}>
+                    No resources matching "{searchQuery}"
+                  </div>
+                )}
+              </div>
+            </>
           )}
           {activePanel === 'files' && (
             <div style={{ padding: 16 }}>
@@ -388,6 +453,11 @@ export default function App() {
             </div>
           )}
         </aside>
+        {/* Sidebar resize handle */}
+        <div style={{ width: 4, cursor: 'col-resize', background: resizing?.panel === 'sidebar' ? ct.color + '44' : 'transparent', flexShrink: 0, transition: 'background 0.15s' }}
+          onMouseDown={e => setResizing({ panel: 'sidebar', startPos: e.clientX, startSize: sidebarWidth })}
+          onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = '#2a2a3e'; }}
+          onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
 
         {/* Canvas */}
         <main style={S.canvas} ref={canvasRef} onMouseMove={onMouseMove} onMouseUp={(e) => {
@@ -518,7 +588,12 @@ export default function App() {
         </main>
 
         {/* Right Panel */}
-        <aside style={S.right}>
+        {/* Right panel resize handle */}
+        <div style={{ width: 4, cursor: 'col-resize', background: resizing?.panel === 'right' ? ct.color + '44' : 'transparent', flexShrink: 0, transition: 'background 0.15s' }}
+          onMouseDown={e => setResizing({ panel: 'right', startPos: e.clientX, startSize: rightWidth })}
+          onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = '#2a2a3e'; }}
+          onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
+        <aside style={{ ...S.right, width: rightWidth }}>
           {/* Selected edge info */}
           {selectedEdge && (() => {
             const edge = edges.find(e => e.id === selectedEdge);
@@ -611,7 +686,12 @@ export default function App() {
       </div>
 
       {/* Bottom: Chat + Terminal */}
-      <div style={S.bottom}>
+      {/* Bottom panel resize handle */}
+      <div style={{ height: 4, cursor: 'row-resize', background: resizing?.panel === 'bottom' ? ct.color + '44' : 'transparent', flexShrink: 0, transition: 'background 0.15s' }}
+        onMouseDown={e => setResizing({ panel: 'bottom', startPos: e.clientY, startSize: bottomHeight })}
+        onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = '#2a2a3e'; }}
+        onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
+      <div style={{ ...S.bottom, height: bottomHeight }}>
         <div style={S.chat}>
           <div style={S.chatHead}>
             <span style={{ fontSize: 14, color: '#7B42F6' }}>✦</span>
