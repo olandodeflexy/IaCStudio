@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"log"
 	"net/http"
 	"sync"
@@ -9,7 +10,12 @@ import (
 )
 
 var upgrader = websocket.Upgrader{
-	CheckOrigin: func(r *http.Request) bool { return true }, // Allow local connections
+	CheckOrigin: func(r *http.Request) bool {
+		origin := r.Header.Get("Origin")
+		// Allow connections with no Origin header (non-browser clients)
+		// or from the localhost allowlist.
+		return origin == "" || IsAllowedOrigin(origin)
+	},
 }
 
 // Client represents a single WebSocket connection.
@@ -101,18 +107,39 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	go client.readPump()
 }
 
+// allowedClientMessageTypes are the only message types the server will
+// accept from WebSocket clients. Anything else is dropped silently.
+var allowedClientMessageTypes = map[string]bool{
+	"state_update": true, // canvas state sync
+	"ping":         true, // keepalive
+}
+
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
 		c.conn.Close()
 	}()
+	// Cap incoming message size to 1MB to prevent abuse
+	c.conn.SetReadLimit(1 << 20)
 	for {
 		_, message, err := c.conn.ReadMessage()
 		if err != nil {
 			break
 		}
-		// Messages from the UI (e.g., resource updates) are broadcast
-		// to trigger file sync on the backend
+		// Validate: must be JSON with an allowed "type" field.
+		// Reject anything else to prevent spoofed terminal output
+		// or file_changed events from untrusted clients.
+		var envelope struct {
+			Type string `json:"type"`
+		}
+		if err := json.Unmarshal(message, &envelope); err != nil {
+			log.Printf("WS: dropping non-JSON message from client")
+			continue
+		}
+		if !allowedClientMessageTypes[envelope.Type] {
+			log.Printf("WS: dropping disallowed message type %q from client", envelope.Type)
+			continue
+		}
 		c.hub.broadcast <- message
 	}
 }

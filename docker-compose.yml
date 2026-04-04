@@ -4,10 +4,11 @@ services:
   iac-studio:
     build: .
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"   # Bind to localhost only — not exposed to LAN
     volumes:
       - "${HOME}/iac-projects:/projects"
-      - "${HOME}/.ssh:/root/.ssh:ro"     # For git operations
+      # SSH keys are NOT mounted. If git push is needed in the future,
+      # use SSH agent forwarding or a deploy key mounted as a single file.
     environment:
       - IAC_STUDIO_AI_ENDPOINT=http://ollama:11434
       - IAC_STUDIO_AI_MODEL=deepseek-coder:6.7b
@@ -17,8 +18,7 @@ services:
 
   ollama:
     image: ollama/ollama:latest
-    ports:
-      - "11434:11434"
+    # No ports exposed to host — only reachable from iac-studio via Docker network
     volumes:
       - ollama-models:/root/.ollama
     # Pull the model on first run:

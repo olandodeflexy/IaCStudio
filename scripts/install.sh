@@ -54,9 +54,10 @@ get_latest_version() {
     info "Latest version: $VERSION"
 }
 
-# Download and install
+# Download and install with checksum verification
 install() {
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${VERSION}/${FILENAME}"
+    CHECKSUMS_URL="https://github.com/${REPO}/releases/download/${VERSION}/checksums.txt"
 
     info "Downloading ${FILENAME}..."
     TMPDIR=$(mktemp -d)
@@ -64,6 +65,30 @@ install() {
 
     if ! curl -fsSL "$DOWNLOAD_URL" -o "${TMPDIR}/${BINARY}"; then
         err "Download failed. Check https://github.com/${REPO}/releases for available binaries."
+    fi
+
+    # Verify checksum
+    info "Verifying checksum..."
+    if curl -fsSL "$CHECKSUMS_URL" -o "${TMPDIR}/checksums.txt" 2>/dev/null; then
+        EXPECTED=$(grep "${FILENAME}" "${TMPDIR}/checksums.txt" | awk '{print $1}')
+        if [ -n "$EXPECTED" ]; then
+            if command -v sha256sum &>/dev/null; then
+                ACTUAL=$(sha256sum "${TMPDIR}/${BINARY}" | awk '{print $1}')
+            elif command -v shasum &>/dev/null; then
+                ACTUAL=$(shasum -a 256 "${TMPDIR}/${BINARY}" | awk '{print $1}')
+            else
+                warn "No sha256sum or shasum found — skipping checksum verification"
+                ACTUAL="$EXPECTED"
+            fi
+            if [ "$EXPECTED" != "$ACTUAL" ]; then
+                err "Checksum mismatch!\n  Expected: ${EXPECTED}\n  Got:      ${ACTUAL}\n  The downloaded binary may be corrupted or tampered with."
+            fi
+            ok "Checksum verified"
+        else
+            warn "Binary not found in checksums.txt — skipping verification"
+        fi
+    else
+        warn "Could not download checksums.txt — skipping verification"
     fi
 
     chmod +x "${TMPDIR}/${BINARY}"

@@ -66,10 +66,10 @@ func main() {
 	defer fw.Close()
 
 	aiClient := ai.NewOllamaClient(*aiEndpoint, *aiModel)
-	run := runner.New()
+	safeRun := runner.NewSafeRunner(runner.DefaultSafetyConfig())
 
 	// Build router
-	router := api.NewRouter(hub, fw, aiClient, run, *projectsDir)
+	router := api.NewRouter(hub, fw, aiClient, safeRun, *projectsDir)
 
 	// Serve embedded frontend
 	frontendContent, _ := fs.Sub(frontendFS, "frontend/dist")

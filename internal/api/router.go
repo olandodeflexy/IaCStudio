@@ -42,8 +42,18 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 	return resolved, nil
 }
 
+// maxRequestBody is the maximum allowed request body size (1MB).
+// Prevents clients from sending oversized payloads to exhaust memory.
+const maxRequestBody = 1 << 20
+
+// limitBody wraps r.Body with a MaxBytesReader so oversized payloads
+// are rejected before the full body is read into memory.
+func limitBody(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
+}
+
 // NewRouter creates the HTTP router with all endpoints.
-func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run *runner.Runner, projectsDir string) *http.ServeMux {
+func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run *runner.SafeRunner, projectsDir string) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health
@@ -78,6 +88,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 
 	// Create project
 	mux.HandleFunc("POST /api/projects", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
 		var req struct {
 			Name string `json:"name"`
 			Tool string `json:"tool"` // terraform | opentofu | ansible
@@ -143,6 +154,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 
+		limitBody(w, r)
 		var resources []parser.Resource
 		if err := json.NewDecoder(r.Body).Decode(&resources); err != nil {
 			http.Error(w, "invalid resources", 400)
@@ -183,6 +195,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 
+		limitBody(w, r)
 		var req struct {
 			Tool    string `json:"tool"`
 			Command string `json:"command"` // init | plan | apply | check | playbook
@@ -192,13 +205,23 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 
-		// Stream output via WebSocket
+		// Block apply/destroy behind approval gate
+		if run.RequiresApproval(req.Command) {
+			http.Error(w, "apply/destroy requires plan review first — use /plan-review then /run with approved=true", http.StatusConflict)
+			return
+		}
+
+		// Execute with context cancellation and timeouts via SafeRunner
 		go func() {
-			output, err := run.Execute(projectPath, req.Tool, req.Command)
+			result, err := run.Execute(r.Context(), projectPath, req.Tool, req.Command)
 			msg := map[string]interface{}{
 				"type":    "terminal",
 				"project": name,
-				"output":  output,
+			}
+			if result != nil {
+				msg["output"] = result.Output
+				msg["status"] = result.Status
+				msg["duration"] = result.Duration.String()
 			}
 			if err != nil {
 				msg["error"] = err.Error()
@@ -211,8 +234,24 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		json.NewEncoder(w).Encode(map[string]string{"status": "running"})
 	})
 
+	// Kill a running command
+	mux.HandleFunc("POST /api/projects/{name}/kill", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := run.Kill(projectPath); err != nil {
+			http.Error(w, err.Error(), 404)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
+	})
+
 	// AI chat
 	mux.HandleFunc("POST /api/ai/chat", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
 		var req struct {
 			Message string `json:"message"`
 			Tool    string `json:"tool"`
@@ -243,12 +282,30 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 	return mux
 }
 
-// CORS wraps a handler with permissive CORS headers for local development.
+// allowedOrigins are the only origins accepted for CORS and WebSocket.
+// These cover the default dev and production bind addresses.
+var allowedOrigins = map[string]bool{
+	"http://localhost:3000":   true,
+	"http://127.0.0.1:3000":  true,
+	"http://localhost:5173":   true, // Vite dev server
+	"http://127.0.0.1:5173":  true,
+}
+
+// IsAllowedOrigin checks whether an origin is in the allowlist.
+func IsAllowedOrigin(origin string) bool {
+	return allowedOrigins[origin]
+}
+
+// CORS restricts cross-origin requests to the localhost allowlist.
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		origin := r.Header.Get("Origin")
+		if origin != "" && IsAllowedOrigin(origin) {
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+			w.Header().Set("Vary", "Origin")
+		}
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)
 			return
