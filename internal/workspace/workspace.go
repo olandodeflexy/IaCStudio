@@ -68,6 +68,21 @@ func New(projectsDir string) *Manager {
 	return &Manager{projectsDir: projectsDir}
 }
 
+// safeProjectDir validates projectName and returns the resolved path.
+// Rejects traversal characters — same logic as api.safeProjectPath.
+func (m *Manager) safeProjectDir(projectName string) (string, error) {
+	if err := validName(projectName); err != nil {
+		return "", fmt.Errorf("invalid project name: %w", err)
+	}
+	resolved := filepath.Join(m.projectsDir, projectName)
+	absResolved, _ := filepath.Abs(resolved)
+	absProjects, _ := filepath.Abs(m.projectsDir)
+	if !strings.HasPrefix(absResolved, absProjects+string(filepath.Separator)) {
+		return "", fmt.Errorf("project path escapes root: %q", projectName)
+	}
+	return resolved, nil
+}
+
 // validName checks that a name is safe to pass as a CLI argument.
 // Only allows alphanumeric, hyphens, and underscores.
 func validName(name string) error {
@@ -85,7 +100,10 @@ func validName(name string) error {
 
 // InitEnvironments sets up the standard dev/staging/prod workspace structure.
 func (m *Manager) InitEnvironments(projectName string) (*EnvironmentConfig, error) {
-	projectDir := filepath.Join(m.projectsDir, projectName)
+	projectDir, err := m.safeProjectDir(projectName)
+	if err != nil {
+		return nil, err
+	}
 
 	config := &EnvironmentConfig{
 		PromotionOrder: []string{"dev", "staging", "prod"},
@@ -166,7 +184,10 @@ func (m *Manager) SwitchEnvironment(projectName, envName string) error {
 	if err := validName(envName); err != nil {
 		return fmt.Errorf("invalid environment name: %w", err)
 	}
-	projectDir := filepath.Join(m.projectsDir, projectName)
+	projectDir, err := m.safeProjectDir(projectName)
+	if err != nil {
+		return err
+	}
 	cmd := exec.Command("terraform", "workspace", "select", envName)
 	cmd.Dir = projectDir
 	out, err := cmd.CombinedOutput()
@@ -178,7 +199,10 @@ func (m *Manager) SwitchEnvironment(projectName, envName string) error {
 
 // CurrentEnvironment returns the currently active workspace.
 func (m *Manager) CurrentEnvironment(projectName string) (string, error) {
-	projectDir := filepath.Join(m.projectsDir, projectName)
+	projectDir, err := m.safeProjectDir(projectName)
+	if err != nil {
+		return "", err
+	}
 	cmd := exec.Command("terraform", "workspace", "show")
 	cmd.Dir = projectDir
 	out, err := cmd.Output()
@@ -270,7 +294,10 @@ func (m *Manager) UnlockEnvironment(projectName, envName string) error {
 
 // CompareEnvironments shows drift between two environments.
 func (m *Manager) CompareEnvironments(projectName, env1, env2 string) (*DriftResult, error) {
-	projectDir := filepath.Join(m.projectsDir, projectName)
+	projectDir, err := m.safeProjectDir(projectName)
+	if err != nil {
+		return nil, err
+	}
 	result := &DriftResult{Env1: env1, Env2: env2}
 
 	// Compare tfvars files

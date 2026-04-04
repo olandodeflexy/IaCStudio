@@ -2,6 +2,7 @@ package pipeline
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
 
@@ -9,6 +10,26 @@ import (
 // Instead of writing YAML by hand, DevOps engineers configure their pipeline
 // through the UI and get a production-ready CI config generated.
 type Generator struct{}
+
+// safeYAMLValue checks that a string is safe to embed in generated YAML.
+// Rejects characters that could cause YAML injection or shell injection
+// in generated `run:` steps.
+var safeSlug = regexp.MustCompile(`^[a-zA-Z0-9._/-]+$`)
+
+func validateConfig(c PipelineConfig) error {
+	if c.WorkingDir != "" && !safeSlug.MatchString(c.WorkingDir) {
+		return fmt.Errorf("unsafe working directory %q: only alphanumeric, dots, slashes, hyphens allowed", c.WorkingDir)
+	}
+	for _, env := range c.Environments {
+		if !safeSlug.MatchString(env) {
+			return fmt.Errorf("unsafe environment name %q", env)
+		}
+	}
+	if c.TerraformVersion != "" && !safeSlug.MatchString(c.TerraformVersion) {
+		return fmt.Errorf("unsafe terraform version %q", c.TerraformVersion)
+	}
+	return nil
+}
 
 func New() *Generator {
 	return &Generator{}
@@ -41,6 +62,9 @@ type GeneratedPipeline struct {
 
 // Generate creates a CI/CD pipeline config file.
 func (g *Generator) Generate(config PipelineConfig) (*GeneratedPipeline, error) {
+	if err := validateConfig(config); err != nil {
+		return nil, err
+	}
 	switch config.Provider {
 	case "github":
 		return g.generateGitHub(config)

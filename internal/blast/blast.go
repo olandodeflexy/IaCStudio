@@ -79,8 +79,15 @@ func (a *Analyzer) BuildGraph(resources []parser.Resource) *DependencyGraph {
 			strVal := fmt.Sprintf("%v", fieldValue)
 
 			// Method 1: Explicit terraform reference (aws_vpc.main.id)
+			// Use exact address match with a trailing "." to avoid false positives
+			// like "aws_vpc.main" matching inside "aws_vpc.main_public".
 			for toAddr := range byAddress {
-				if strings.Contains(strVal, toAddr+".") || strings.Contains(strVal, toAddr) {
+				if toAddr == fromAddr {
+					continue // skip self-references
+				}
+				// Match "aws_vpc.main.id" or "aws_vpc.main." but NOT "aws_vpc.main_public"
+				ref := toAddr + "."
+				if strings.Contains(strVal, ref) {
 					dep := Dependency{From: fromAddr, To: toAddr, Field: fieldName}
 					graph.Dependencies[fromAddr] = append(graph.Dependencies[fromAddr], dep)
 					graph.Dependents[toAddr] = append(graph.Dependents[toAddr], dep)

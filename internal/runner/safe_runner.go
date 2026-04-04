@@ -5,8 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -114,6 +116,24 @@ func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command str
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = projectDir
 
+	// Create a new process group so we can kill Terraform AND its child
+	// provider plugin processes (terraform-provider-aws, etc.) together.
+	// Without this, context cancellation only kills the parent process,
+	// orphaning provider plugins that hold state locks and leak memory.
+	if runtime.GOOS != "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if runtime.GOOS == "windows" {
+			return cmd.Process.Kill()
+		}
+		// Kill the entire process group (negative PID)
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
+
 	var stdout, stderr bytes.Buffer
 	// Limit output to prevent OOM
 	cmd.Stdout = &limitedWriter{buf: &stdout, limit: sr.defaults.MaxOutputBytes}
@@ -210,6 +230,18 @@ func (sr *SafeRunner) ExecutePlanJSON(ctx context.Context, projectDir, tool stri
 
 	cmd := exec.CommandContext(ctx, binary, "plan", "-json", "-no-color")
 	cmd.Dir = projectDir
+	if runtime.GOOS != "windows" {
+		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	}
+	cmd.Cancel = func() error {
+		if cmd.Process == nil {
+			return nil
+		}
+		if runtime.GOOS == "windows" {
+			return cmd.Process.Kill()
+		}
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &limitedWriter{buf: &stdout, limit: sr.defaults.MaxOutputBytes}

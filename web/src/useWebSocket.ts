@@ -14,6 +14,14 @@ export function useWebSocket(onMessage: (msg: WSMessage) => void) {
   const [connected, setConnected] = useState(false);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout>>();
 
+  // Store the callback in a ref so that changes to onMessage don't
+  // cause the WebSocket to disconnect and reconnect. Without this,
+  // adding any dependency to the caller's useCallback (e.g., to read
+  // current state) would trigger an infinite reconnect loop on every
+  // render because connect → useEffect → cleanup → reconnect.
+  const onMessageRef = useRef(onMessage);
+  onMessageRef.current = onMessage;
+
   const connect = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -29,7 +37,7 @@ export function useWebSocket(onMessage: (msg: WSMessage) => void) {
     ws.onmessage = (event) => {
       try {
         const msg: WSMessage = JSON.parse(event.data);
-        onMessage(msg);
+        onMessageRef.current(msg);
       } catch (e) {
         console.warn('[WS] Invalid message:', event.data);
       }
@@ -45,7 +53,7 @@ export function useWebSocket(onMessage: (msg: WSMessage) => void) {
       console.error('[WS] Error:', err);
       ws.close();
     };
-  }, [onMessage]);
+  }, []); // no dependencies — connect is stable
 
   useEffect(() => {
     connect();

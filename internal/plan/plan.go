@@ -168,8 +168,12 @@ func (p *Parser) ParseStreamOutput(jsonLines string) (*PlanResult, error) {
 			result.Summary.NoOp++
 		}
 	}
-	result.Summary.Total = len(result.Changes)
-	result.HasChanges = result.Summary.Add > 0 || result.Summary.Change > 0 || result.Summary.Destroy > 0
+	// Total is the sum of individual action counts, NOT len(Changes).
+	// A "replace" increments both Add and Destroy, so the action totals
+	// will exceed the number of change entries — this is correct and
+	// matches terraform's own summary output.
+	result.Summary.Total = result.Summary.Add + result.Summary.Change + result.Summary.Destroy
+	result.HasChanges = result.Summary.Total > 0
 
 	return result, nil
 }
@@ -226,8 +230,8 @@ func (p *Parser) ParseFullPlan(jsonOutput string) (*PlanResult, error) {
 		}
 	}
 
-	result.Summary.Total = len(result.Changes)
-	result.HasChanges = result.Summary.Add > 0 || result.Summary.Change > 0 || result.Summary.Destroy > 0
+	result.Summary.Total = result.Summary.Add + result.Summary.Change + result.Summary.Destroy
+	result.HasChanges = result.Summary.Total > 0
 
 	return result, nil
 }
