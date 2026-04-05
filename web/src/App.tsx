@@ -50,6 +50,8 @@ export default function App() {
   const [importLoading, setImportLoading] = useState(false);
   const [topologyDesc, setTopologyDesc] = useState('');
   const [topologyProvider, setTopologyProvider] = useState('aws');
+  const [showSettings, setShowSettings] = useState(false);
+  const [aiSettings, setAiSettings] = useState({ type: 'ollama', endpoint: '', model: '', api_key: '' });
   const { state: nodes, set: setNodes, undo: undoNodes, redo: redoNodes, canUndo, canRedo, reset: resetNodes } = useHistory<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -95,6 +97,25 @@ export default function App() {
         setLastCmdError({ command: (msg as any).status || 'unknown', output: msg.output + '\n' + msg.error });
       } else {
         setLastCmdError(null); // Clear on success
+      }
+    }
+    if (msg.type === 'ai_progress') {
+      setNotification(msg.message || 'AI is working...');
+    }
+    if (msg.type === 'ai_topology_result') {
+      setImportLoading(false);
+      setNotification(null);
+      if (msg.error) {
+        setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: msg.error, warnings: [msg.error] });
+      } else if (msg.resources) {
+        setImportPreview({
+          tool: 'terraform',
+          provider: topologyProvider,
+          files: [],
+          resources: msg.resources,
+          edges: [],
+          summary: msg.message || 'Infrastructure generated',
+        });
       }
     }
     if (msg.type === 'file_changed') {
@@ -545,23 +566,19 @@ export default function App() {
                       disabled={!topologyDesc.trim() || importLoading}
                       onClick={async () => {
                         setImportLoading(true);
+                        setNotification('AI is designing your infrastructure...');
                         try {
                           const toolKey = detectedTools.find(t => t.available && t.name !== 'Ansible')?.name === 'OpenTofu' ? 'opentofu' : 'terraform';
-                          const result = await api.generateTopology(topologyDesc, toolKey, topologyProvider);
-                          setImportPreview({
-                            tool: toolKey,
-                            provider: topologyProvider,
-                            files: [],
-                            resources: result.resources || [],
-                            edges: [],
-                            summary: result.message,
-                          });
+                          // Fire and forget — result arrives via WebSocket
+                          await api.generateTopology(topologyDesc, toolKey, topologyProvider);
+                          // Don't setImportLoading(false) here — WebSocket handler does it
                         } catch (e: any) {
                           setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: e.message || 'Generation failed', warnings: [e.message] });
+                          setImportLoading(false);
+                          setNotification(null);
                         }
-                        setImportLoading(false);
                       }}>
-                      {importLoading ? '✦ Generating...' : '✦ Generate Infrastructure'}
+                      {importLoading ? '✦ AI is generating... (this may take a minute)' : '✦ Generate Infrastructure'}
                     </button>
                   </div>
                 )}
@@ -695,8 +712,85 @@ export default function App() {
             onClick={() => runCmd(tool === 'ansible' ? 'playbook' : 'apply')}>
             ▶ Apply
           </button>
+          <button style={{ ...S.cmd, background: '#1a1a2e', color: '#888' }}
+            onClick={() => { api.getAISettings().then(setAiSettings).catch(() => {}); setShowSettings(true); }}
+            title="AI Settings">
+            ⚙
+          </button>
         </div>
       </header>
+
+      {/* AI Settings Modal */}
+      {showSettings && (
+        <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)' }} onClick={() => setShowSettings(false)} />
+          <div style={{ position: 'relative', width: 480, background: '#12121e', border: '1px solid #2a2a4e', borderRadius: 16, padding: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+              <span style={{ fontSize: 16, fontWeight: 700, color: '#ddd' }}>AI Settings</span>
+              <button style={{ background: 'none', border: 'none', color: '#555', fontSize: 20, cursor: 'pointer' }} onClick={() => setShowSettings(false)}>×</button>
+            </div>
+
+            <div style={{ marginBottom: 16 }}>
+              <label style={S.flabel}>Provider Type</label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[
+                  { key: 'ollama', label: 'Ollama (Local)', desc: 'Free, private, runs on your machine' },
+                  { key: 'openai', label: 'OpenAI API', desc: 'GPT-4o, GPT-4-turbo' },
+                  { key: 'custom', label: 'Custom API', desc: 'Any OpenAI-compatible endpoint' },
+                ].map(p => (
+                  <button key={p.key} style={{ flex: 1, padding: '10px 8px', borderRadius: 8, border: aiSettings.type === p.key ? '1px solid #7B42F6' : '1px solid #2a2a3e', background: aiSettings.type === p.key ? '#7B42F622' : 'transparent', cursor: 'pointer', textAlign: 'left' }}
+                    onClick={() => {
+                      if (p.key === 'ollama') setAiSettings(s => ({ ...s, type: 'ollama', endpoint: 'http://localhost:11434', api_key: '' }));
+                      else if (p.key === 'openai') setAiSettings(s => ({ ...s, type: 'openai', endpoint: 'https://api.openai.com/v1', model: 'gpt-4o' }));
+                      else setAiSettings(s => ({ ...s, type: 'custom' }));
+                    }}>
+                    <div style={{ fontSize: 12, fontWeight: 600, color: aiSettings.type === p.key ? '#7B42F6' : '#aaa' }}>{p.label}</div>
+                    <div style={{ fontSize: 10, color: '#555', marginTop: 2 }}>{p.desc}</div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={S.flabel}>Endpoint</label>
+              <input style={S.finput} value={aiSettings.endpoint} onChange={e => setAiSettings(s => ({ ...s, endpoint: e.target.value }))}
+                placeholder={aiSettings.type === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'} />
+            </div>
+
+            <div style={{ marginBottom: 12 }}>
+              <label style={S.flabel}>Model</label>
+              <input style={S.finput} value={aiSettings.model} onChange={e => setAiSettings(s => ({ ...s, model: e.target.value }))}
+                placeholder={aiSettings.type === 'ollama' ? 'gemma4' : 'gpt-4o'} />
+            </div>
+
+            {aiSettings.type !== 'ollama' && (
+              <div style={{ marginBottom: 12 }}>
+                <label style={S.flabel}>API Key</label>
+                <input style={S.finput} type="password" value={aiSettings.api_key} onChange={e => setAiSettings(s => ({ ...s, api_key: e.target.value }))}
+                  placeholder="sk-..." />
+                <div style={{ fontSize: 10, color: '#444', marginTop: 4 }}>Your key is sent to the backend only — never stored on disk or sent to third parties.</div>
+              </div>
+            )}
+
+            <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
+              <button style={{ flex: 1, padding: '10px 0', background: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: 8, color: '#888', cursor: 'pointer', fontSize: 12 }}
+                onClick={() => setShowSettings(false)}>Cancel</button>
+              <button style={{ flex: 1, padding: '10px 0', background: '#7B42F6', border: 'none', borderRadius: 8, color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+                onClick={async () => {
+                  try {
+                    await api.updateAISettings(aiSettings);
+                    setNotification('AI settings updated');
+                    setTimeout(() => setNotification(null), 3000);
+                    setShowSettings(false);
+                  } catch (e: any) {
+                    setNotification(`Failed: ${e.message}`);
+                    setTimeout(() => setNotification(null), 4000);
+                  }
+                }}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div style={S.main}>
         {/* Sidebar — resizable */}

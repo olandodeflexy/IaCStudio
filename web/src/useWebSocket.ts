@@ -1,12 +1,15 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 
 export interface WSMessage {
-  type: 'file_changed' | 'terminal' | 'error';
+  type: 'file_changed' | 'terminal' | 'error' | 'ai_progress' | 'ai_topology_result';
   project?: string;
   file?: string;
   tool?: string;
   output?: string;
   error?: string;
+  status?: string;
+  message?: string;
+  resources?: any[];
 }
 
 export function useWebSocket(onMessage: (msg: WSMessage) => void) {

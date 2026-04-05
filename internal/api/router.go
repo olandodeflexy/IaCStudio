@@ -415,6 +415,29 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		json.NewEncoder(w).Encode(fix)
 	})
 
+	// ─── AI Settings ───
+
+	// Get current AI provider config
+	mux.HandleFunc("GET /api/ai/settings", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(aiClient.GetConfig())
+	})
+
+	// Update AI provider config (supports Ollama and OpenAI-compatible APIs)
+	mux.HandleFunc("PUT /api/ai/settings", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var req ai.ProviderConfig
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		if req.Endpoint == "" || req.Model == "" {
+			http.Error(w, "endpoint and model are required", 400)
+			return
+		}
+		aiClient.UpdateConfig(req.Endpoint, req.Model, req.APIKey)
+		json.NewEncoder(w).Encode(aiClient.GetConfig())
+	})
+
 	// ─── Import & Filesystem Browser ───
 
 	// Browse local filesystem directories
@@ -465,7 +488,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		json.NewEncoder(w).Encode(project)
 	})
 
-	// AI topology builder — generate full infrastructure from description
+	// AI topology builder — runs async, sends progress via WebSocket, returns result via HTTP
 	mux.HandleFunc("POST /api/ai/topology", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
 		var req ai.TopologyRequest
@@ -474,16 +497,35 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 
-		msg, resources, err := aiClient.GenerateTopology(r.Context(), req)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("AI topology generation failed: %v", err), 500)
-			return
-		}
+		// Send immediate acknowledgment
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]string{"status": "generating"})
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
-			"message":   msg,
-			"resources": resources,
-		})
+		// Run AI generation in background, broadcast result via WebSocket
+		go func() {
+			// Send progress indicator
+			progressMsg, _ := json.Marshal(map[string]string{
+				"type":    "ai_progress",
+				"status":  "generating",
+				"message": "AI is designing your infrastructure...",
+			})
+			hub.Broadcast(progressMsg)
+
+			msg, resources, err := aiClient.GenerateTopology(context.Background(), req)
+
+			result := map[string]interface{}{
+				"type": "ai_topology_result",
+			}
+			if err != nil {
+				result["error"] = err.Error()
+				result["message"] = fmt.Sprintf("Topology generation failed: %v", err)
+			} else {
+				result["message"] = msg
+				result["resources"] = resources
+			}
+			data, _ := json.Marshal(result)
+			hub.Broadcast(data)
+		}()
 	})
 
 	// WebSocket for live sync

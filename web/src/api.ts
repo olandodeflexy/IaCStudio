@@ -103,12 +103,27 @@ export const api = {
     return (await check(res)).json();
   },
 
-  // AI topology builder
-  async generateTopology(description: string, tool: string, provider: string): Promise<{ message: string; resources: Resource[] }> {
+  // AI topology builder (async — result comes via WebSocket)
+  async generateTopology(description: string, tool: string, provider: string): Promise<{ status: string }> {
     const res = await fetch(`${BASE}/api/ai/topology`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ description, tool, provider }),
+    });
+    return (await check(res)).json();
+  },
+
+  // AI provider settings
+  async getAISettings(): Promise<{ type: string; endpoint: string; model: string; api_key: string }> {
+    const res = await fetch(`${BASE}/api/ai/settings`);
+    return (await check(res)).json();
+  },
+
+  async updateAISettings(config: { type: string; endpoint: string; model: string; api_key: string }): Promise<any> {
+    const res = await fetch(`${BASE}/api/ai/settings`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(config),
     });
     return (await check(res)).json();
   },

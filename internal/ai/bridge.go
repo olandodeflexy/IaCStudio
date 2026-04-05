@@ -12,18 +12,52 @@ import (
 	"github.com/iac-studio/iac-studio/internal/parser"
 )
 
-// OllamaClient communicates with a local Ollama instance.
+// OllamaClient communicates with a local Ollama instance or OpenAI-compatible API.
 type OllamaClient struct {
 	endpoint string
 	model    string
+	apiKey   string // if set, uses OpenAI-compatible API instead of Ollama
 	client   *http.Client
+}
+
+// ProviderConfig holds configuration for an AI provider.
+type ProviderConfig struct {
+	Type     string `json:"type"`     // "ollama" | "openai" | "anthropic"
+	Endpoint string `json:"endpoint"` // API endpoint URL
+	Model    string `json:"model"`    // model name
+	APIKey   string `json:"api_key"`  // API key (for cloud providers)
 }
 
 func NewOllamaClient(endpoint, model string) *OllamaClient {
 	return &OllamaClient{
 		endpoint: endpoint,
 		model:    model,
-		client:   &http.Client{Timeout: 120 * time.Second},
+		client:   &http.Client{Timeout: 5 * time.Minute}, // Increased for large models
+	}
+}
+
+// UpdateConfig allows changing the model/endpoint/key at runtime.
+func (c *OllamaClient) UpdateConfig(endpoint, model, apiKey string) {
+	c.endpoint = endpoint
+	c.model = model
+	c.apiKey = apiKey
+}
+
+// GetConfig returns the current configuration (key is masked).
+func (c *OllamaClient) GetConfig() ProviderConfig {
+	provType := "ollama"
+	if c.apiKey != "" {
+		provType = "openai"
+	}
+	maskedKey := ""
+	if c.apiKey != "" {
+		maskedKey = c.apiKey[:4] + "..." + c.apiKey[len(c.apiKey)-4:]
+	}
+	return ProviderConfig{
+		Type:     provType,
+		Endpoint: c.endpoint,
+		Model:    c.model,
+		APIKey:   maskedKey,
 	}
 }
 
@@ -36,6 +70,111 @@ type ollamaRequest struct {
 
 type ollamaResponse struct {
 	Response string `json:"response"`
+}
+
+// OpenAI-compatible request/response for external providers
+type openAIRequest struct {
+	Model       string          `json:"model"`
+	Messages    []openAIMessage `json:"messages"`
+	Temperature float64         `json:"temperature,omitempty"`
+	MaxTokens   int             `json:"max_tokens,omitempty"`
+}
+
+type openAIMessage struct {
+	Role    string `json:"role"`
+	Content string `json:"content"`
+}
+
+type openAIResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error,omitempty"`
+}
+
+// callLLM sends a prompt to the configured LLM and returns the raw response text.
+// Supports both Ollama and OpenAI-compatible APIs.
+func (c *OllamaClient) callLLM(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	if c.apiKey != "" {
+		return c.callOpenAI(ctx, systemPrompt, userPrompt)
+	}
+	return c.callOllama(ctx, systemPrompt+"\n\n"+userPrompt)
+}
+
+func (c *OllamaClient) callOllama(ctx context.Context, prompt string) (string, error) {
+	reqBody := ollamaRequest{
+		Model:  c.model,
+		Prompt: prompt,
+		Stream: false,
+		Format: "json",
+	}
+	body, _ := json.Marshal(reqBody)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/api/generate", bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("ollama unavailable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var ollamaResp ollamaResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return "", err
+	}
+	return ollamaResp.Response, nil
+}
+
+func (c *OllamaClient) callOpenAI(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	reqBody := openAIRequest{
+		Model: c.model,
+		Messages: []openAIMessage{
+			{Role: "system", Content: systemPrompt},
+			{Role: "user", Content: userPrompt},
+		},
+		Temperature: 0.3,
+		MaxTokens:   4096,
+	}
+	body, _ := json.Marshal(reqBody)
+
+	endpoint := c.endpoint
+	if !strings.HasSuffix(endpoint, "/chat/completions") {
+		endpoint = strings.TrimSuffix(endpoint, "/") + "/chat/completions"
+	}
+
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("API unavailable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var openAIResp openAIResponse
+	if err := json.NewDecoder(resp.Body).Decode(&openAIResp); err != nil {
+		return "", err
+	}
+
+	if openAIResp.Error != nil {
+		return "", fmt.Errorf("API error: %s", openAIResp.Error.Message)
+	}
+
+	if len(openAIResp.Choices) == 0 {
+		return "", fmt.Errorf("no response from API")
+	}
+	return openAIResp.Choices[0].Message.Content, nil
 }
 
 // ChatMessage represents one message in a conversation.
@@ -59,60 +198,37 @@ type CanvasResource struct {
 	Name string `json:"name"`
 }
 
-// GenerateIaC sends a natural language request to Ollama with full conversation
-// context, provider awareness, and canvas state.
+// GenerateIaC sends a natural language request to the configured LLM with
+// full conversation context, provider awareness, and canvas state.
 func (c *OllamaClient) GenerateIaC(ctx context.Context, req ChatRequest) (string, []parser.Resource, error) {
 	systemPrompt := buildSystemPrompt(req.Tool, req.Provider, req.Canvas)
 
-	// Build conversation context
-	var conversationParts []string
-	for _, msg := range req.History {
-		if msg.Role == "user" {
-			conversationParts = append(conversationParts, fmt.Sprintf("User: %s", msg.Content))
-		} else {
-			conversationParts = append(conversationParts, fmt.Sprintf("Assistant: %s", msg.Content))
-		}
-	}
-
-	var prompt string
-	if len(conversationParts) > 0 {
-		// Include last 6 messages of conversation for context
-		history := conversationParts
+	// Build user prompt with conversation context
+	var userPrompt string
+	if len(req.History) > 0 {
+		var parts []string
+		history := req.History
 		if len(history) > 6 {
 			history = history[len(history)-6:]
 		}
-		prompt = fmt.Sprintf("%s\n\nConversation so far:\n%s\n\nUser request: %s\n\nRespond with JSON only.",
-			systemPrompt, strings.Join(history, "\n"), req.Message)
+		for _, msg := range history {
+			if msg.Role == "user" {
+				parts = append(parts, "User: "+msg.Content)
+			} else {
+				parts = append(parts, "Assistant: "+msg.Content)
+			}
+		}
+		userPrompt = fmt.Sprintf("Conversation so far:\n%s\n\nUser request: %s\n\nRespond with JSON only.",
+			strings.Join(parts, "\n"), req.Message)
 	} else {
-		prompt = fmt.Sprintf("%s\n\nUser request: %s\n\nRespond with JSON only.", systemPrompt, req.Message)
+		userPrompt = fmt.Sprintf("User request: %s\n\nRespond with JSON only.", req.Message)
 	}
 
-	reqBody := ollamaRequest{
-		Model:  c.model,
-		Prompt: prompt,
-		Stream: false,
-		Format: "json",
-	}
-
-	body, _ := json.Marshal(reqBody)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/api/generate", bytes.NewReader(body))
+	raw, err := c.callLLM(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return "", nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return "", nil, fmt.Errorf("ollama unavailable: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var ollamaResp ollamaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return "", nil, err
-	}
-
-	return parseAIResponse(ollamaResp.Response)
+	return parseAIResponse(raw)
 }
 
 // PlanFixRequest is a request to analyze plan/apply output and suggest fixes.
@@ -144,7 +260,6 @@ type ResourceFix struct {
 
 // AnalyzePlanOutput sends terraform plan/apply output to the AI for diagnosis and fix suggestions.
 func (c *OllamaClient) AnalyzePlanOutput(ctx context.Context, req PlanFixRequest) (*PlanFix, error) {
-	// Truncate output to avoid overwhelming the model
 	output := req.Output
 	if len(output) > 4000 {
 		output = output[:2000] + "\n\n... (truncated) ...\n\n" + output[len(output)-2000:]
@@ -159,70 +274,23 @@ func (c *OllamaClient) AnalyzePlanOutput(ctx context.Context, req PlanFixRequest
 		canvasCtx = "\n\nResources on canvas:\n" + strings.Join(canvasLines, "\n")
 	}
 
-	prompt := fmt.Sprintf(`You are an Infrastructure as Code debugging assistant for %s (%s provider).
-
-The user ran "%s %s" and got this output:
-
----
-%s
----
-%s
-
-Analyze the output and respond with a JSON object:
+	systemPrompt := fmt.Sprintf(`You are an Infrastructure as Code debugging assistant for %s (%s provider).
+Analyze command output and respond with a JSON object:
 {
   "message": "Clear explanation of what went wrong and how to fix it",
-  "fixes": [
-    {
-      "resource_type": "aws_instance",
-      "resource_name": "web_server",
-      "field": "ami",
-      "old_value": "ami-invalid",
-      "new_value": "ami-0c55b159cbfafe1f0",
-      "reason": "The AMI ID doesn't exist in this region"
-    }
-  ],
-  "new_resources": [
-    {
-      "type": "aws_security_group",
-      "name": "web_sg",
-      "properties": {"name": "web-sg"}
-    }
-  ]
+  "fixes": [{"resource_type":"...","resource_name":"...","field":"...","old_value":"...","new_value":"...","reason":"..."}],
+  "new_resources": [{"type":"...","name":"...","properties":{}}]
 }
+Rules: "fixes" change EXISTING resources, "new_resources" are ADDED. Be specific. JSON only.`, req.Tool, req.Provider)
 
-Rules:
-- "fixes" are changes to EXISTING resources on the canvas
-- "new_resources" are resources that need to be ADDED (e.g., missing security group)
-- If the output shows success with no errors, set message to a success summary and leave fixes/new_resources empty
-- Be specific — name exact fields and values
-- Only respond with valid JSON`, req.Tool, req.Provider, req.Tool, req.Command, output, canvasCtx)
+	userPrompt := fmt.Sprintf("The user ran \"%s %s\" and got this output:\n\n---\n%s\n---%s",
+		req.Tool, req.Command, output, canvasCtx)
 
-	reqBody := ollamaRequest{
-		Model:  c.model,
-		Prompt: prompt,
-		Stream: false,
-		Format: "json",
-	}
-
-	body, _ := json.Marshal(reqBody)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/api/generate", bytes.NewReader(body))
+	raw, err := c.callLLM(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("ollama unavailable: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var ollamaResp ollamaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return nil, err
-	}
-
-	return parsePlanFixResponse(ollamaResp.Response)
+	return parsePlanFixResponse(raw)
 }
 
 func parsePlanFixResponse(raw string) (*PlanFix, error) {
@@ -306,11 +374,7 @@ type TopologyRequest struct {
 func (c *OllamaClient) GenerateTopology(ctx context.Context, req TopologyRequest) (string, []parser.Resource, error) {
 	providerGuide := buildProviderGuide(req.Tool, req.Provider)
 
-	prompt := fmt.Sprintf(`You are an expert Infrastructure as Code architect for %s.
-
-The user wants to build this infrastructure:
-"%s"
-
+	systemPrompt := fmt.Sprintf(`You are an expert Infrastructure as Code architect for %s.
 Generate a COMPLETE set of resources following IaC best practices.
 
 RULES:
@@ -334,34 +398,15 @@ Respond with a JSON object:
 
 Be thorough — include VPCs/networks, subnets, security groups, IAM roles,
 and any other resources the architecture needs to actually work.
-Only respond with valid JSON.`, req.Tool, req.Description, providerGuide)
+Only respond with valid JSON.`, req.Tool, providerGuide)
 
-	reqBody := ollamaRequest{
-		Model:  c.model,
-		Prompt: prompt,
-		Stream: false,
-		Format: "json",
-	}
+	userPrompt := fmt.Sprintf("Build this infrastructure: %s", req.Description)
 
-	body, _ := json.Marshal(reqBody)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/api/generate", bytes.NewReader(body))
+	raw, err := c.callLLM(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return "", nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return "", nil, fmt.Errorf("ollama unavailable: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var ollamaResp ollamaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return "", nil, err
-	}
-
-	return parseAIResponse(ollamaResp.Response)
+	return parseAIResponse(raw)
 }
 
 // GenerateIaCSimple is the legacy single-message interface (used by pattern matching fallback).
