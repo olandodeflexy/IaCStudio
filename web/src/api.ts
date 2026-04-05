@@ -128,6 +128,28 @@ export const api = {
     return (await check(res)).json();
   },
 
+  // Load project state (canvas, edges, tool)
+  async loadState(projectName: string): Promise<any> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/state`);
+    return (await check(res)).json();
+  },
+
+  // Save project state
+  async saveState(projectName: string, state: any): Promise<any> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/state`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(state),
+    });
+    return (await check(res)).json();
+  },
+
+  // List all projects with their state
+  async listProjectStates(): Promise<any[]> {
+    const res = await fetch(`${BASE}/api/projects/states`);
+    return (await check(res)).json();
+  },
+
   // Health check
   async health(): Promise<{ status: string; version: string }> {
     const res = await fetch(`${BASE}/api/health`);

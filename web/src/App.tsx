@@ -52,6 +52,7 @@ export default function App() {
   const [topologyProvider, setTopologyProvider] = useState('aws');
   const [showSettings, setShowSettings] = useState(false);
   const [aiSettings, setAiSettings] = useState({ type: 'ollama', endpoint: '', model: '', api_key: '' });
+  const [savedProjects, setSavedProjects] = useState<any[]>([]);
   const { state: nodes, set: setNodes, undo: undoNodes, redo: redoNodes, canUndo, canRedo, reset: resetNodes } = useHistory<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -82,10 +83,73 @@ export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
 
-  // Detect tools on mount
+  // Detect tools and load saved projects on mount
   useEffect(() => {
     api.detectTools().then(setDetectedTools).catch(() => {});
+    api.listProjectStates().then(setSavedProjects).catch(() => {});
   }, []);
+
+  // Auto-save project state whenever canvas changes (debounced)
+  const saveTimer = useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => {
+    if (!tool || !projectId || !hasCreatedProject.current) return;
+    clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      api.saveState(projectId, {
+        tool,
+        resources: nodes.map(n => ({
+          id: n.id, type: n.type, name: n.name, label: n.label, icon: n.icon,
+          properties: n.properties, x: n.x, y: n.y,
+          connections: edges.filter(e => e.from === n.id).map(e => ({
+            target_id: e.to, field: e.field, label: e.label,
+          })),
+        })),
+      }).catch(() => {});
+    }, 2000);
+  }, [nodes, edges, tool, projectId]);
+
+  // Open a saved project
+  const openProject = useCallback(async (proj: any) => {
+    setProjectName(proj.name);
+    setProjectId(proj.name);
+    setTool(proj.tool || 'terraform');
+    hasCreatedProject.current = true;
+    try {
+      const state = await api.loadState(proj.name);
+      if (state?.resources?.length > 0) {
+        const restored = state.resources.map((n: any) => ({
+          id: n.id || `res_${Math.random().toString(36).slice(2)}`,
+          type: n.type, name: n.name,
+          label: n.label || n.type,
+          icon: n.icon || '📦',
+          properties: n.properties || {},
+          x: n.x ?? 80 + Math.random() * 300,
+          y: n.y ?? 80 + Math.random() * 200,
+        }));
+        resetNodes(restored);
+        // Restore edges from node connections
+        const restoredEdges: Edge[] = [];
+        for (const n of state.resources) {
+          if (n.connections) {
+            for (const c of n.connections) {
+              restoredEdges.push({
+                id: `${n.id}->${c.target_id}:${c.field}`,
+                from: n.id, to: c.target_id,
+                fromType: n.type,
+                toType: state.resources.find((r: any) => r.id === c.target_id)?.type || '',
+                field: c.field, label: c.label || c.field,
+              });
+            }
+          }
+        }
+        setEdges(restoredEdges);
+        setNotification(`Opened project: ${proj.name}`);
+        setTimeout(() => setNotification(null), 3000);
+      }
+    } catch {
+      // No saved state — start fresh
+    }
+  }, [resetNodes, catalogResources]);
 
   // WebSocket for live sync
   const handleWSMessage = useCallback((msg: WSMessage) => {
@@ -426,7 +490,33 @@ export default function App() {
         <div style={S.selectBg} />
         <div style={S.selectContent}>
           <div style={S.logo}><span style={{ fontSize: 28, color: '#7B42F6' }}>◆</span> <span style={S.logoText}>IaC Studio</span></div>
-          <h1 style={S.title}>Choose your IaC tool</h1>
+          {/* Saved projects */}
+          {savedProjects.length > 0 && (
+            <div style={{ marginBottom: 32, width: '100%', maxWidth: 600 }}>
+              <div style={{ fontSize: 12, color: '#555', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12, fontFamily: 'JetBrains Mono' }}>Recent Projects</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {savedProjects.filter(p => p.tool).slice(0, 5).map(p => {
+                  const t = TOOLS[p.tool] || TOOLS.terraform;
+                  const count = p.resources?.length || 0;
+                  return (
+                    <button key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: '#0d0d18', border: '1px solid #1e1e30', borderRadius: 10, cursor: 'pointer', textAlign: 'left', transition: 'border-color 0.2s' }}
+                      onClick={() => openProject(p)}
+                      onMouseEnter={e => { (e.currentTarget as any).style.borderColor = t.color; }}
+                      onMouseLeave={e => { (e.currentTarget as any).style.borderColor = '#1e1e30'; }}>
+                      <span style={{ fontSize: 20 }}>{t.icon}</span>
+                      <div style={{ flex: 1 }}>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: '#ccc', fontFamily: 'JetBrains Mono' }}>{p.name}</div>
+                        <div style={{ fontSize: 11, color: '#555' }}>{t.name} · {count} resource{count !== 1 ? 's' : ''}{p.updated_at ? ' · ' + new Date(p.updated_at).toLocaleDateString() : ''}</div>
+                      </div>
+                      <span style={{ fontSize: 12, color: t.color, fontWeight: 600 }}>Open →</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          <h1 style={S.title}>{savedProjects.length > 0 ? 'New Project' : 'Choose your IaC tool'}</h1>
           <p style={S.subtitle}>Visual infrastructure builder with AI-powered assistance</p>
           <div style={S.cardGrid}>
             {Object.entries(TOOLS).map(([key, t]) => {
@@ -691,7 +781,24 @@ export default function App() {
       {/* Header */}
       <header style={{ ...S.header, borderBottomColor: ct.color + '44' }}>
         <div style={S.hLeft}>
-          <button style={S.backBtn} onClick={() => { setTool(null); resetNodes([]); setEdges([]); setChatMessages([]); setTerminalOutput([]); }}>←</button>
+          <button style={S.backBtn} onClick={async () => {
+            // Save state before navigating away
+            if (projectId && hasCreatedProject.current) {
+              await api.saveState(projectId, {
+                tool,
+                resources: nodes.map(n => ({
+                  id: n.id, type: n.type, name: n.name, label: n.label, icon: n.icon,
+                  properties: n.properties, x: n.x, y: n.y,
+                  connections: edges.filter(e => e.from === n.id).map(e => ({
+                    target_id: e.to, field: e.field, label: e.label,
+                  })),
+                })),
+              }).catch(() => {});
+            }
+            // Refresh saved projects list
+            api.listProjectStates().then(setSavedProjects).catch(() => {});
+            setTool(null); resetNodes([]); setEdges([]); setChatMessages([]); setTerminalOutput([]);
+          }}>←</button>
           <span style={{ ...S.badge, background: ct.color + '22', color: ct.color }}>{ct.icon} {ct.name}</span>
           <input style={S.projInput} value={projectName} onChange={e => setProjectName(e.target.value)} />
           <span style={{ fontSize: 10, color: wsConnected ? '#4ade80' : '#ef4444' }}>{wsConnected ? '● live' : '● offline'}</span>

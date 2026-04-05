@@ -19,6 +19,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/generator"
 	"github.com/iac-studio/iac-studio/internal/importer"
 	"github.com/iac-studio/iac-studio/internal/parser"
+	"github.com/iac-studio/iac-studio/internal/project"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/security"
 	"github.com/iac-studio/iac-studio/internal/watcher"
@@ -416,6 +417,53 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}
 
 		json.NewEncoder(w).Encode(fix)
+	})
+
+	// ─── Project State Persistence ───
+
+	pm := project.NewManager(projectsDir)
+
+	// List all projects with their saved state
+	mux.HandleFunc("GET /api/projects/states", func(w http.ResponseWriter, _ *http.Request) {
+		states, err := pm.ListAll()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(states)
+	})
+
+	// Load project state (canvas positions, edges, tool)
+	mux.HandleFunc("GET /api/projects/{name}/state", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		state, err := pm.Load(name)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if state == nil {
+			json.NewEncoder(w).Encode(nil)
+			return
+		}
+		json.NewEncoder(w).Encode(state)
+	})
+
+	// Save project state
+	mux.HandleFunc("PUT /api/projects/{name}/state", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		limitBody(w, r)
+		var state project.State
+		if err := json.NewDecoder(r.Body).Decode(&state); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		state.Name = name
+		state.Path = filepath.Join(projectsDir, name)
+		if err := pm.Save(name, &state); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 	})
 
 	// ─── AI Settings ───
