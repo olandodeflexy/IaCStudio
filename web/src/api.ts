@@ -36,6 +36,25 @@ export interface Suggestion {
   priority: number;
 }
 
+export interface FileEntry {
+  name: string;
+  path: string;
+  is_dir: boolean;
+  size: number;
+  ext?: string;
+  children?: number;
+}
+
+export interface ImportResult {
+  tool: string;
+  provider: string;
+  files: { path: string; name: string; type: string; size: number }[];
+  resources: Resource[];
+  edges: { from_id: string; to_id: string; field: string }[];
+  summary: string;
+  warnings?: string[];
+}
+
 export interface CatalogResource {
   type: string;
   label: string;
@@ -64,6 +83,33 @@ export const api = {
     const params = new URLSearchParams({ tool });
     if (provider) params.set('provider', provider);
     const res = await fetch(`${BASE}/api/catalog?${params}`);
+    return (await check(res)).json();
+  },
+
+  // Browse local filesystem
+  async browse(path?: string): Promise<{ path: string; parent: string; entries: FileEntry[] }> {
+    const params = path ? `?path=${encodeURIComponent(path)}` : '';
+    const res = await fetch(`${BASE}/api/browse${params}`);
+    return (await check(res)).json();
+  },
+
+  // Import an existing project
+  async importProject(path: string): Promise<ImportResult> {
+    const res = await fetch(`${BASE}/api/import`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path }),
+    });
+    return (await check(res)).json();
+  },
+
+  // AI topology builder
+  async generateTopology(description: string, tool: string, provider: string): Promise<{ message: string; resources: Resource[] }> {
+    const res = await fetch(`${BASE}/api/ai/topology`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ description, tool, provider }),
+    });
     return (await check(res)).json();
   },
 

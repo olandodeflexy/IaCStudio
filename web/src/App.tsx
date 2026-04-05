@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { api, Resource, ToolInfo, CatalogResource, Suggestion } from './api';
+import { api, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, ImportResult } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -40,7 +40,16 @@ export default function App() {
   const [detectedTools, setDetectedTools] = useState<ToolInfo[]>([]);
   const [projectName, setProjectName] = useState('my-infra-project');
   const [catalogResources, setCatalogResources] = useState<CatalogResource[]>([]);
-  const [projectId, setProjectId] = useState(''); // immutable after creation — used for API calls
+  const [projectId, setProjectId] = useState('');
+  const [showImportWizard, setShowImportWizard] = useState(false);
+  const [importTab, setImportTab] = useState<'browse' | 'topology'>('browse');
+  const [browsePath, setBrowsePath] = useState('');
+  const [browseEntries, setBrowseEntries] = useState<FileEntry[]>([]);
+  const [browseParent, setBrowseParent] = useState('');
+  const [importPreview, setImportPreview] = useState<ImportResult | null>(null);
+  const [importLoading, setImportLoading] = useState(false);
+  const [topologyDesc, setTopologyDesc] = useState('');
+  const [topologyProvider, setTopologyProvider] = useState('aws');
   const { state: nodes, set: setNodes, undo: undoNodes, redo: redoNodes, canUndo, canRedo, reset: resetNodes } = useHistory<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -437,40 +446,214 @@ export default function App() {
               Creates ~/iac-projects/{projectName}/
             </div>
 
-            {/* Import existing project */}
+            {/* Import / Topology buttons */}
             <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>
               <button style={{ background: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: 8, padding: '8px 16px', color: '#888', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans' }}
-                onClick={async () => {
-                  const name = prompt('Enter existing project directory name (under ~/iac-projects/):');
-                  if (!name) return;
-                  setProjectName(name);
-                  // Try to load and parse the existing project
-                  const firstTool = detectedTools.find(t => t.available);
-                  const toolKey = firstTool?.name === 'OpenTofu' ? 'opentofu' : firstTool?.name === 'Ansible' ? 'ansible' : 'terraform';
-                  setProjectId(name);
-                  setTool(toolKey);
-                  hasCreatedProject.current = true;
-                  try {
-                    const resources = await api.getResources(name, toolKey);
-                    if (resources && resources.length > 0) {
-                      setNodes(resources.map((r, i) => ({
-                        ...r,
-                        x: 80 + (i % 4) * 200,
-                        y: 80 + Math.floor(i / 4) * 120,
-                        icon: catalogResources.find(c => c.type === r.type)?.icon ?? '📦',
-                        label: catalogResources.find(c => c.type === r.type)?.label ?? r.type,
-                      })));
-                      setNotification(`Imported ${resources.length} resources from ${name}`);
-                      setTimeout(() => setNotification(null), 4000);
-                    }
-                  } catch {
-                    // Project might not exist yet, that's ok
-                  }
-                }}>
+                onClick={() => { setImportTab('browse'); setShowImportWizard(true); api.browse().then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {}); }}>
                 📂 Import Existing Project
+              </button>
+              <button style={{ background: '#1a1a2e', border: '1px solid #7B42F644', borderRadius: 8, padding: '8px 16px', color: '#7B42F6', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans' }}
+                onClick={() => { setImportTab('topology'); setShowImportWizard(true); }}>
+                ✦ Build from Description
               </button>
             </div>
           </div>
+
+          {/* ─── Import Wizard Modal ─── */}
+          {showImportWizard && (
+            <div style={{ position: 'absolute', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)' }} onClick={() => { setShowImportWizard(false); setImportPreview(null); }} />
+              <div style={{ position: 'relative', width: 700, maxHeight: '80vh', background: '#12121e', border: '1px solid #2a2a4e', borderRadius: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+                {/* Wizard header */}
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid #1e1e30' }}>
+                  <div style={{ display: 'flex', gap: 12 }}>
+                    {(['browse', 'topology'] as const).map(t => (
+                      <button key={t} style={{ background: importTab === t ? '#7B42F622' : 'transparent', border: importTab === t ? '1px solid #7B42F644' : '1px solid transparent', borderRadius: 8, padding: '6px 14px', color: importTab === t ? '#7B42F6' : '#666', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans', fontWeight: 600 }}
+                        onClick={() => { setImportTab(t); setImportPreview(null); }}>
+                        {t === 'browse' ? '📂 Browse Files' : '✦ Describe Architecture'}
+                      </button>
+                    ))}
+                  </div>
+                  <button style={{ background: 'none', border: 'none', color: '#555', fontSize: 20, cursor: 'pointer' }} onClick={() => { setShowImportWizard(false); setImportPreview(null); }}>×</button>
+                </div>
+
+                {/* Browse tab */}
+                {importTab === 'browse' && !importPreview && (
+                  <div style={{ flex: 1, overflow: 'auto', minHeight: 300 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', borderBottom: '1px solid #1e1e30', background: '#0d0d18' }}>
+                      <button style={{ background: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: 6, padding: '4px 10px', color: '#888', fontSize: 12, cursor: 'pointer' }}
+                        onClick={() => { api.browse(browseParent).then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {}); }}>
+                        ↑
+                      </button>
+                      <span style={{ fontSize: 11, color: '#666', fontFamily: 'JetBrains Mono', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{browsePath}</span>
+                      <button style={{ background: '#7B42F622', border: '1px solid #7B42F644', borderRadius: 6, padding: '4px 12px', color: '#7B42F6', fontSize: 11, cursor: 'pointer', fontWeight: 600, fontFamily: 'JetBrains Mono' }}
+                        disabled={importLoading}
+                        onClick={async () => {
+                          setImportLoading(true);
+                          try {
+                            const result = await api.importProject(browsePath);
+                            setImportPreview(result);
+                          } catch (e: any) {
+                            setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: e.message || 'Import failed', warnings: [e.message] });
+                          }
+                          setImportLoading(false);
+                        }}>
+                        {importLoading ? 'Scanning...' : 'Import this folder'}
+                      </button>
+                    </div>
+                    <div style={{ padding: '4px 0' }}>
+                      {browseEntries.map(entry => (
+                        <div key={entry.path} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 20px', cursor: entry.is_dir ? 'pointer' : 'default', fontSize: 13, color: entry.is_dir ? '#ccc' : '#777', fontFamily: 'JetBrains Mono' }}
+                          onClick={() => {
+                            if (entry.is_dir) {
+                              api.browse(entry.path).then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {});
+                            }
+                          }}
+                          onMouseEnter={e => { if (entry.is_dir) (e.currentTarget as any).style.background = '#1a1a2e'; }}
+                          onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
+                          <span style={{ fontSize: 14 }}>{entry.is_dir ? '📁' : entry.ext === '.tf' ? '📄' : entry.ext === '.yml' || entry.ext === '.yaml' ? '📋' : '📄'}</span>
+                          <span style={{ flex: 1 }}>{entry.name}</span>
+                          {entry.is_dir && entry.children !== undefined && <span style={{ color: '#444', fontSize: 10 }}>{entry.children} items</span>}
+                          {!entry.is_dir && <span style={{ color: '#444', fontSize: 10 }}>{entry.size > 1024 ? Math.round(entry.size / 1024) + 'KB' : entry.size + 'B'}</span>}
+                        </div>
+                      ))}
+                      {browseEntries.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#444' }}>Empty directory</div>}
+                    </div>
+                  </div>
+                )}
+
+                {/* Topology tab */}
+                {importTab === 'topology' && !importPreview && (
+                  <div style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
+                    <div style={{ fontSize: 14, color: '#bbb', fontWeight: 600 }}>Describe your infrastructure</div>
+                    <div style={{ fontSize: 12, color: '#666' }}>
+                      Tell us what you want to build in plain language. The AI will generate a complete infrastructure topology with all necessary resources and connections.
+                    </div>
+                    <textarea style={{ flex: 1, minHeight: 120, background: '#0a0a14', border: '1px solid #2a2a3e', borderRadius: 8, padding: 14, color: '#ccc', fontSize: 13, fontFamily: 'DM Sans', resize: 'none', outline: 'none' }}
+                      value={topologyDesc} onChange={e => setTopologyDesc(e.target.value)}
+                      placeholder={"Examples:\n• A three-tier web app with VPC, ALB, auto-scaling EC2, RDS PostgreSQL, and S3 for static assets\n• A GKE cluster with Cloud SQL, Redis cache, and Cloud Storage for a microservices platform\n• An Azure AKS cluster with PostgreSQL, Key Vault, and Application Gateway"} />
+                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                      <span style={{ fontSize: 11, color: '#555' }}>Provider:</span>
+                      {['aws', 'google', 'azurerm'].map(p => (
+                        <button key={p} style={{ padding: '4px 12px', borderRadius: 6, border: topologyProvider === p ? '1px solid #7B42F6' : '1px solid #2a2a3e', background: topologyProvider === p ? '#7B42F622' : 'transparent', color: topologyProvider === p ? '#7B42F6' : '#666', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono' }}
+                          onClick={() => setTopologyProvider(p)}>
+                          {p === 'aws' ? 'AWS' : p === 'google' ? 'GCP' : 'Azure'}
+                        </button>
+                      ))}
+                    </div>
+                    <button style={{ background: '#7B42F6', border: 'none', borderRadius: 8, padding: '10px 20px', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'DM Sans' }}
+                      disabled={!topologyDesc.trim() || importLoading}
+                      onClick={async () => {
+                        setImportLoading(true);
+                        try {
+                          const toolKey = detectedTools.find(t => t.available && t.name !== 'Ansible')?.name === 'OpenTofu' ? 'opentofu' : 'terraform';
+                          const result = await api.generateTopology(topologyDesc, toolKey, topologyProvider);
+                          setImportPreview({
+                            tool: toolKey,
+                            provider: topologyProvider,
+                            files: [],
+                            resources: result.resources || [],
+                            edges: [],
+                            summary: result.message,
+                          });
+                        } catch (e: any) {
+                          setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: e.message || 'Generation failed', warnings: [e.message] });
+                        }
+                        setImportLoading(false);
+                      }}>
+                      {importLoading ? '✦ Generating...' : '✦ Generate Infrastructure'}
+                    </button>
+                  </div>
+                )}
+
+                {/* Preview panel — shown after scan or generation */}
+                {importPreview && (
+                  <div style={{ flex: 1, overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    <div style={{ fontSize: 14, fontWeight: 600, color: '#bbb' }}>
+                      {importPreview.tool === 'unknown' ? 'Import Failed' : 'Preview'}
+                    </div>
+                    <div style={{ fontSize: 12, color: '#888', lineHeight: 1.5 }}>{importPreview.summary}</div>
+
+                    {importPreview.warnings && importPreview.warnings.length > 0 && (
+                      <div style={{ background: '#ef444411', border: '1px solid #ef444433', borderRadius: 8, padding: 10 }}>
+                        {importPreview.warnings.map((w, i) => (
+                          <div key={i} style={{ fontSize: 11, color: '#ef4444', fontFamily: 'JetBrains Mono' }}>{w}</div>
+                        ))}
+                      </div>
+                    )}
+
+                    {importPreview.resources.length > 0 && (
+                      <>
+                        <div style={{ fontSize: 11, color: '#555', fontFamily: 'JetBrains Mono', textTransform: 'uppercase', letterSpacing: 1 }}>
+                          {importPreview.resources.length} Resources
+                        </div>
+                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
+                          {importPreview.resources.map((r, i) => {
+                            const meta = catalogResources.find(c => c.type === r.type);
+                            return (
+                              <span key={i} style={{ background: '#1a1a2e', borderRadius: 6, padding: '4px 10px', fontSize: 11, color: '#aaa', fontFamily: 'JetBrains Mono' }}>
+                                {meta?.icon ?? '📦'} {r.type}.{r.name}
+                              </span>
+                            );
+                          })}
+                        </div>
+                        {importPreview.edges.length > 0 && (
+                          <div style={{ fontSize: 11, color: '#555', fontFamily: 'JetBrains Mono' }}>
+                            {importPreview.edges.length} connections detected
+                          </div>
+                        )}
+                      </>
+                    )}
+
+                    <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
+                      <button style={{ background: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: 8, padding: '8px 16px', color: '#888', fontSize: 12, cursor: 'pointer' }}
+                        onClick={() => setImportPreview(null)}>
+                        ← Back
+                      </button>
+                      {importPreview.resources.length > 0 && (
+                        <button style={{ background: '#7B42F6', border: 'none', borderRadius: 8, padding: '8px 20px', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                          onClick={() => {
+                            const t = importPreview!.tool === 'opentofu' ? 'opentofu' : importPreview!.tool === 'ansible' ? 'ansible' : 'terraform';
+                            setTool(t);
+                            setProjectId(projectName);
+                            hasCreatedProject.current = true;
+                            // Place resources on canvas in a grid layout
+                            const imported = importPreview!.resources.map((r, i) => ({
+                              ...r,
+                              id: r.id || `imp_${i}_${Date.now()}`,
+                              x: 80 + (i % 5) * 200,
+                              y: 80 + Math.floor(i / 5) * 130,
+                              icon: catalogResources.find(c => c.type === r.type)?.icon ?? '📦',
+                              label: catalogResources.find(c => c.type === r.type)?.label ?? r.type,
+                            }));
+                            resetNodes(imported);
+                            // Create edges from detected connections
+                            if (importPreview!.edges.length > 0) {
+                              const newEdges = importPreview!.edges.map(e => ({
+                                id: `${e.from_id}->${e.to_id}:${e.field}`,
+                                from: e.from_id,
+                                to: e.to_id,
+                                fromType: importPreview!.resources.find(r => r.id === e.from_id)?.type || '',
+                                toType: importPreview!.resources.find(r => r.id === e.to_id)?.type || '',
+                                field: e.field,
+                                label: e.field.replace(/_/g, ' '),
+                              }));
+                              setEdges(newEdges);
+                            }
+                            setShowImportWizard(false);
+                            setImportPreview(null);
+                            setNotification(`Imported ${importPreview!.resources.length} resources`);
+                            setTimeout(() => setNotification(null), 4000);
+                          }}>
+                          Import to Canvas →
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
         </div>
       </div>
     );

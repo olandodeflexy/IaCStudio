@@ -15,6 +15,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/ai"
 	"github.com/iac-studio/iac-studio/internal/catalog"
 	"github.com/iac-studio/iac-studio/internal/generator"
+	"github.com/iac-studio/iac-studio/internal/importer"
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/watcher"
@@ -412,6 +413,77 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}
 
 		json.NewEncoder(w).Encode(fix)
+	})
+
+	// ─── Import & Filesystem Browser ───
+
+	// Browse local filesystem directories
+	mux.HandleFunc("GET /api/browse", func(w http.ResponseWriter, r *http.Request) {
+		dir := r.URL.Query().Get("path")
+		if dir == "" {
+			home, _ := os.UserHomeDir()
+			dir = home
+		}
+		entries, err := importer.BrowseDir(dir)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		// Include parent path for navigation
+		parent := filepath.Dir(dir)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"path":    dir,
+			"parent":  parent,
+			"entries": entries,
+		})
+	})
+
+	// Scan and import an existing project directory
+	mux.HandleFunc("POST /api/import", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var req struct {
+			Path string `json:"path"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		if req.Path == "" {
+			http.Error(w, "path is required", 400)
+			return
+		}
+
+		project, err := importer.ScanProject(req.Path)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		// Start watching the imported project directory
+		fw.Watch(req.Path)
+
+		json.NewEncoder(w).Encode(project)
+	})
+
+	// AI topology builder — generate full infrastructure from description
+	mux.HandleFunc("POST /api/ai/topology", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var req ai.TopologyRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+
+		msg, resources, err := aiClient.GenerateTopology(r.Context(), req)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("AI topology generation failed: %v", err), 500)
+			return
+		}
+
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"message":   msg,
+			"resources": resources,
+		})
 	})
 
 	// WebSocket for live sync

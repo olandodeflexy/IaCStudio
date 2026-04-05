@@ -293,6 +293,77 @@ func AnalyzePlanFallback(output string, exitCode int) *PlanFix {
 	return fix
 }
 
+// TopologyRequest describes an architecture to generate.
+type TopologyRequest struct {
+	Description string `json:"description"` // free-text architecture description
+	Tool        string `json:"tool"`
+	Provider    string `json:"provider"`
+}
+
+// GenerateTopology takes a free-text architecture description and generates
+// a full set of resources with connections. This is the "describe your
+// infrastructure and we'll build it" feature.
+func (c *OllamaClient) GenerateTopology(ctx context.Context, req TopologyRequest) (string, []parser.Resource, error) {
+	providerGuide := buildProviderGuide(req.Tool, req.Provider)
+
+	prompt := fmt.Sprintf(`You are an expert Infrastructure as Code architect for %s.
+
+The user wants to build this infrastructure:
+"%s"
+
+Generate a COMPLETE set of resources following IaC best practices.
+
+RULES:
+1. %s
+2. Include ALL necessary supporting resources (networking, security, IAM)
+3. Use descriptive snake_case names that reflect purpose
+4. Include sensible production defaults (not just minimal config)
+5. Follow the dependency order: networking → security → compute → data → monitoring
+
+Respond with a JSON object:
+{
+  "message": "Overview of the architecture you designed and key decisions",
+  "resources": [
+    {
+      "type": "resource_type",
+      "name": "descriptive_name",
+      "properties": {"key": "value", ...}
+    }
+  ]
+}
+
+Be thorough — include VPCs/networks, subnets, security groups, IAM roles,
+and any other resources the architecture needs to actually work.
+Only respond with valid JSON.`, req.Tool, req.Description, providerGuide)
+
+	reqBody := ollamaRequest{
+		Model:  c.model,
+		Prompt: prompt,
+		Stream: false,
+		Format: "json",
+	}
+
+	body, _ := json.Marshal(reqBody)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/api/generate", bytes.NewReader(body))
+	if err != nil {
+		return "", nil, err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := c.client.Do(httpReq)
+	if err != nil {
+		return "", nil, fmt.Errorf("ollama unavailable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var ollamaResp ollamaResponse
+	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
+		return "", nil, err
+	}
+
+	return parseAIResponse(ollamaResp.Response)
+}
+
 // GenerateIaCSimple is the legacy single-message interface (used by pattern matching fallback).
 func (c *OllamaClient) GenerateIaCSimple(ctx context.Context, message, tool string) (string, []parser.Resource, error) {
 	return c.GenerateIaC(ctx, ChatRequest{
