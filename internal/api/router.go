@@ -7,7 +7,9 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -464,6 +466,35 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
+	})
+
+	// Open project directory in OS file manager
+	mux.HandleFunc("POST /api/projects/{name}/reveal", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if _, err := os.Stat(projectPath); os.IsNotExist(err) {
+			http.Error(w, "project directory not found", 404)
+			return
+		}
+		// Detect OS and open file manager
+		var cmd *exec.Cmd
+		switch runtime.GOOS {
+		case "darwin":
+			cmd = exec.Command("open", projectPath)
+		case "windows":
+			cmd = exec.Command("explorer", projectPath)
+		default: // linux
+			cmd = exec.Command("xdg-open", projectPath)
+		}
+		if err := cmd.Start(); err != nil {
+			http.Error(w, fmt.Sprintf("failed to open: %v", err), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "opened", "path": projectPath})
 	})
 
 	// ─── AI Settings ───

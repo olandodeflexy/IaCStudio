@@ -128,6 +128,12 @@ export const api = {
     return (await check(res)).json();
   },
 
+  // Open project directory in OS file manager
+  async revealProject(projectName: string): Promise<any> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/reveal`, { method: 'POST' });
+    return (await check(res)).json();
+  },
+
   // Load project state (canvas, edges, tool)
   async loadState(projectName: string): Promise<any> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/state`);

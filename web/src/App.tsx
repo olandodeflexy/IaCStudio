@@ -503,6 +503,9 @@ export default function App() {
                         <div style={{ fontSize: 14, fontWeight: 600, color: '#ccc', fontFamily: 'JetBrains Mono' }}>{p.name}</div>
                         <div style={{ fontSize: 11, color: '#555' }}>{t.name} · {count} resource{count !== 1 ? 's' : ''}{p.updated_at ? ' · ' + new Date(p.updated_at).toLocaleDateString() : ''}</div>
                       </div>
+                      <span style={{ fontSize: 12, color: '#555', cursor: 'pointer', marginRight: 8 }}
+                        title="Open in file manager"
+                        onClick={(e) => { e.stopPropagation(); api.revealProject(p.name).catch(() => {}); }}>📂</span>
                       <span style={{ fontSize: 12, color: t.color, fontWeight: 600 }}>Open →</span>
                     </button>
                   );
@@ -796,6 +799,9 @@ export default function App() {
           }}>←</button>
           <span style={{ ...S.badge, background: ct.color + '22', color: ct.color }}>{ct.icon} {ct.name}</span>
           <input style={S.projInput} value={projectName} onChange={e => setProjectName(e.target.value)} />
+          <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, padding: '2px 6px', color: '#555' }}
+            title="Open in file manager"
+            onClick={() => api.revealProject(projectId).catch(() => {})}>📂</button>
           <span style={{ fontSize: 10, color: wsConnected ? '#4ade80' : '#ef4444' }}>{wsConnected ? '● live' : '● offline'}</span>
         </div>
         <div style={S.hRight}>
