@@ -567,14 +567,14 @@ export default function App() {
           </div>
 
           {/* Project name & directory */}
-          <div style={{ marginTop: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              <label style={{ fontSize: 12, color: '#555', fontFamily: 'JetBrains Mono' }}>Project:</label>
-              <input style={{ background: '#111120', border: '1px solid #2a2a3e', borderRadius: 8, padding: '8px 14px', color: '#ccc', fontSize: 13, fontFamily: 'JetBrains Mono', outline: 'none', width: 200 }}
+          <div style={{ marginTop: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, background: '#0d0d18', border: '1px solid #1e1e30', borderRadius: 12, padding: '16px 24px', width: '100%', maxWidth: 480 }}>
+            <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
+              <label style={{ fontSize: 12, color: '#666', fontFamily: 'JetBrains Mono', whiteSpace: 'nowrap' }}>Project name:</label>
+              <input style={{ background: '#111120', border: '1px solid #2a2a3e', borderRadius: 8, padding: '8px 14px', color: '#ccc', fontSize: 13, fontFamily: 'JetBrains Mono', outline: 'none', flex: 1, minWidth: 0 }}
                 value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="my-infra-project" />
             </div>
-            <div style={{ fontSize: 11, color: '#444', fontFamily: 'JetBrains Mono' }}>
-              Creates ~/iac-projects/{projectName}/
+            <div style={{ fontSize: 11, color: '#555', fontFamily: 'JetBrains Mono', background: '#0a0a14', borderRadius: 6, padding: '6px 12px', width: '100%', textAlign: 'left' }}>
+              📁 ~/iac-projects/<span style={{ color: '#7B42F6' }}>{projectName}</span>/
             </div>
 
             {/* Import / Topology buttons */}
@@ -1539,9 +1539,9 @@ function generateLocalCode(tool: string, nodes: any[], edges: Edge[]): string {
 
 // ─── Styles ───
 const S: Record<string, React.CSSProperties> = {
-  selectScreen: { width: '100vw', height: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#08080e', position: 'relative', overflow: 'hidden' },
-  selectBg: { position: 'absolute', inset: 0, background: 'radial-gradient(ellipse at 50% 30%, #151530 0%, #08080e 70%)' },
-  selectContent: { position: 'relative', zIndex: 1, textAlign: 'center', padding: 40 },
+  selectScreen: { width: '100vw', height: '100vh', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', background: '#08080e', position: 'relative', overflowY: 'auto' as const },
+  selectBg: { position: 'fixed', inset: 0, background: 'radial-gradient(ellipse at 50% 30%, #151530 0%, #08080e 70%)', pointerEvents: 'none' as const },
+  selectContent: { position: 'relative', zIndex: 1, textAlign: 'center', padding: '40px 40px 60px', marginTop: 40 },
   logo: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 32 },
   logoText: { fontSize: 22, fontWeight: 700, color: '#e0e0f0', fontFamily: 'JetBrains Mono', letterSpacing: 1 },
   title: { fontSize: 36, fontWeight: 700, color: '#e8e8f0', margin: '0 0 12px', letterSpacing: -0.5 },
