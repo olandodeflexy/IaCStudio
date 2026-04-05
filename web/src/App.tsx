@@ -184,27 +184,16 @@ export default function App() {
       }
     }
     if (msg.type === 'file_changed') {
-      // Skip if we caused this change (our own sync wrote the file)
+      // Skip ALL file_changed events from our own operations:
+      // - Our sync writes (isSyncing flag)
+      // - Scaffold creation (hasCreatedProject is true but we just started)
+      // - Any change while the canvas has content (user is actively editing)
       if (isSyncing.current) return;
-      setNotification(`File changed externally: ${msg.file?.split('/').pop()}`);
-      setTimeout(() => setNotification(null), 4000);
-      // Re-parse project to update UI — only for genuinely external changes
-      if (msg.project && msg.tool) {
-        api.getResources(msg.project, msg.tool).then(resources => {
-          setNodes(prev => {
-            return resources.map(r => {
-              const existing = prev.find(n => n.id === r.id);
-              return {
-                ...r,
-                x: existing?.x ?? 80 + Math.random() * 300,
-                y: existing?.y ?? 80 + Math.random() * 200,
-                icon: existing?.icon ?? '📦',
-                label: existing?.label ?? r.type,
-              };
-            });
-          });
-        }).catch(() => {});
-      }
+      // Only show notification, don't re-parse. The canvas is the source of
+      // truth — if the user wants to import external changes, they can
+      // re-open the project or use the import feature.
+      setNotification(`File updated: ${msg.file?.split('/').pop()}`);
+      setTimeout(() => setNotification(null), 3000);
     }
   }, []);
 
