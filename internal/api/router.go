@@ -250,9 +250,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 
-		ext := gen.FileExtension()
-		mainFile := filepath.Join(projectPath, "main"+ext)
-
 		// Pause watcher to avoid echo
 		fw.Pause(projectPath)
 		defer fw.Resume(projectPath)
@@ -262,14 +259,86 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		delete(planGate.plans, projectPath)
 		planGate.mu.Unlock()
 
-		if err := os.WriteFile(mainFile, []byte(code), 0644); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
+		// Group resources by source file so we write back to original files.
+		// Resources without a source file go to main.tf/main.yml.
+		ext := gen.FileExtension()
+		fileGroups := make(map[string][]parser.Resource)
+		for _, r := range resources {
+			target := r.File
+			if target == "" {
+				target = filepath.Join(projectPath, "main"+ext)
+			}
+			fileGroups[target] = append(fileGroups[target], r)
+		}
+
+		// If all resources have no file origin, write to main file
+		if len(fileGroups) == 0 {
+			fileGroups[filepath.Join(projectPath, "main"+ext)] = resources
+		}
+
+		// Read preserved blocks from existing files (variables, outputs, etc.)
+		p := parser.ForTool(tool)
+		if hclParser, ok := p.(*parser.HCLParser); ok && tool != "ansible" {
+			existingFiles, _ := filepath.Glob(filepath.Join(projectPath, "*.tf"))
+			for _, f := range existingFiles {
+				result, err := hclParser.ParseFileFull(f)
+				if err != nil || result == nil {
+					continue
+				}
+				// If this file has preserved blocks but no resources being written to it,
+				// don't touch it — leave it as-is
+				if _, hasResources := fileGroups[f]; !hasResources && len(result.PreservedBlocks) > 0 {
+					continue
+				}
+			}
+		}
+
+		// Write each file atomically (temp file + rename)
+		var mainCode string
+		for file, fileResources := range fileGroups {
+			fileCode, err := gen.Generate(fileResources)
+			if err != nil {
+				continue
+			}
+
+			// Prepend preserved blocks for this file
+			if hclParser, ok := p.(*parser.HCLParser); ok && tool != "ansible" {
+				result, err := hclParser.ParseFileFull(file)
+				if err == nil && result != nil && len(result.PreservedBlocks) > 0 {
+					var preserved strings.Builder
+					for _, b := range result.PreservedBlocks {
+						preserved.WriteString(b.Content)
+						preserved.WriteString("\n\n")
+					}
+					fileCode = preserved.String() + fileCode
+				}
+			}
+
+			// Atomic write: write to temp file, then rename
+			tmpFile := file + ".tmp"
+			if err := os.WriteFile(tmpFile, []byte(fileCode), 0644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			if err := os.Rename(tmpFile, file); err != nil {
+				os.Remove(tmpFile) // cleanup on failure
+				http.Error(w, err.Error(), 500)
+				return
+			}
+
+			if strings.HasSuffix(file, "main"+ext) {
+				mainCode = fileCode
+			}
+		}
+
+		// If mainCode is empty, use the full generated code
+		if mainCode == "" {
+			mainCode = code
 		}
 
 		json.NewEncoder(w).Encode(map[string]interface{}{
-			"file": mainFile,
-			"code": code,
+			"file": filepath.Join(projectPath, "main"+ext),
+			"code": mainCode,
 		})
 	})
 

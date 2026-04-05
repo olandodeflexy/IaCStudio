@@ -14,12 +14,29 @@ import (
 
 // Resource represents a single IaC resource extracted from files.
 type Resource struct {
-	ID         string            `json:"id"`
-	Type       string            `json:"type"`
-	Name       string            `json:"name"`
+	ID         string                 `json:"id"`
+	Type       string                 `json:"type"`
+	Name       string                 `json:"name"`
 	Properties map[string]interface{} `json:"properties"`
-	File       string            `json:"file"`
-	Line       int               `json:"line"`
+	File       string                 `json:"file"`
+	Line       int                    `json:"line"`
+	BlockType  string                 `json:"block_type,omitempty"` // "resource", "variable", "output", "data", "module", "locals"
+}
+
+// PreservedBlock holds non-resource content from a .tf file that the
+// generator must write back unchanged. This prevents data destruction
+// when the UI syncs resources back to disk.
+type PreservedBlock struct {
+	File    string `json:"file"`
+	Content string `json:"content"` // raw HCL text of the block
+	Type    string `json:"type"`    // "variable", "output", "module", "data", "locals", "provider", "terraform"
+	Line    int    `json:"line"`
+}
+
+// ParseResult contains both parsed resources and preserved blocks.
+type ParseResult struct {
+	Resources       []Resource       `json:"resources"`
+	PreservedBlocks []PreservedBlock `json:"preserved_blocks"`
 }
 
 // Parser reads IaC files and returns structured resources.
@@ -61,6 +78,15 @@ func (p *HCLParser) ParseDir(dir string) ([]Resource, error) {
 }
 
 func (p *HCLParser) ParseFile(path string) ([]Resource, error) {
+	result, err := p.ParseFileFull(path)
+	if err != nil {
+		return nil, err
+	}
+	return result.Resources, nil
+}
+
+// ParseFileFull parses a .tf file and returns both resources and preserved blocks.
+func (p *HCLParser) ParseFileFull(path string) (*ParseResult, error) {
 	src, err := os.ReadFile(path)
 	if err != nil {
 		return nil, err
@@ -71,34 +97,100 @@ func (p *HCLParser) ParseFile(path string) ([]Resource, error) {
 		return nil, fmt.Errorf("HCL parse error: %s", diags.Error())
 	}
 
-	var resources []Resource
+	result := &ParseResult{}
+	srcLines := strings.Split(string(src), "\n")
 	body := file.Body.(*hclsyntax.Body)
 
 	for _, block := range body.Blocks {
-		if block.Type == "resource" && len(block.Labels) >= 2 {
-			res := Resource{
-				ID:         fmt.Sprintf("%s.%s", block.Labels[0], block.Labels[1]),
-				Type:       block.Labels[0],
-				Name:       block.Labels[1],
-				Properties: make(map[string]interface{}),
-				File:       path,
-				Line:       block.DefRange().Start.Line,
-			}
+		startLine := block.DefRange().Start.Line
+		endLine := block.CloseBraceRange.Start.Line
 
-			// Extract attributes from the block body
-			attrs, _ := block.Body.JustAttributes()
-			for name, attr := range attrs {
-				val, diags := attr.Expr.Value(nil)
-				if !diags.HasErrors() {
-					res.Properties[name] = ctyToInterface(val)
+		switch block.Type {
+		case "resource":
+			if len(block.Labels) >= 2 {
+				res := Resource{
+					ID:         fmt.Sprintf("%s.%s", block.Labels[0], block.Labels[1]),
+					Type:       block.Labels[0],
+					Name:       block.Labels[1],
+					Properties: make(map[string]interface{}),
+					File:       path,
+					Line:       startLine,
+					BlockType:  "resource",
 				}
+
+				attrs, _ := block.Body.JustAttributes()
+				for name, attr := range attrs {
+					// Try to evaluate the expression
+					val, valDiags := attr.Expr.Value(nil)
+					if !valDiags.HasErrors() {
+						res.Properties[name] = ctyToInterface(val)
+					} else {
+						// Expression uses variables/functions — preserve as raw string
+						rawExpr := extractRawExpression(srcLines, attr.Expr.Range())
+						res.Properties[name] = rawExpr
+					}
+				}
+
+				result.Resources = append(result.Resources, res)
 			}
 
-			resources = append(resources, res)
+		case "data":
+			if len(block.Labels) >= 2 {
+				res := Resource{
+					ID:        fmt.Sprintf("data.%s.%s", block.Labels[0], block.Labels[1]),
+					Type:      block.Labels[0],
+					Name:      block.Labels[1],
+					Properties: make(map[string]interface{}),
+					File:      path,
+					Line:      startLine,
+					BlockType: "data",
+				}
+				attrs, _ := block.Body.JustAttributes()
+				for name, attr := range attrs {
+					val, valDiags := attr.Expr.Value(nil)
+					if !valDiags.HasErrors() {
+						res.Properties[name] = ctyToInterface(val)
+					} else {
+						res.Properties[name] = extractRawExpression(srcLines, attr.Expr.Range())
+					}
+				}
+				result.Resources = append(result.Resources, res)
+			}
+
+		default:
+			// Preserve variable, output, module, locals, provider, terraform blocks
+			// as raw text so the generator can write them back unchanged.
+			if endLine > 0 && endLine <= len(srcLines) && startLine > 0 {
+				rawBlock := strings.Join(srcLines[startLine-1:endLine], "\n")
+				result.PreservedBlocks = append(result.PreservedBlocks, PreservedBlock{
+					File:    path,
+					Content: rawBlock,
+					Type:    block.Type,
+					Line:    startLine,
+				})
+			}
 		}
 	}
 
-	return resources, nil
+	return result, nil
+}
+
+// extractRawExpression pulls the original source text for an expression
+// that couldn't be statically evaluated (uses variables, functions, etc).
+func extractRawExpression(srcLines []string, rng hcl.Range) string {
+	if rng.Start.Line == rng.End.Line && rng.Start.Line > 0 && rng.Start.Line <= len(srcLines) {
+		line := srcLines[rng.Start.Line-1]
+		start := rng.Start.Column - 1
+		end := rng.End.Column - 1
+		if start >= 0 && end <= len(line) && start < end {
+			return strings.TrimSpace(line[start:end])
+		}
+	}
+	// Multi-line expression — return first line
+	if rng.Start.Line > 0 && rng.Start.Line <= len(srcLines) {
+		return strings.TrimSpace(srcLines[rng.Start.Line-1])
+	}
+	return ""
 }
 
 // ctyToInterface converts a cty.Value into a native Go type so that

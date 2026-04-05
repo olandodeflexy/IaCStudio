@@ -81,11 +81,20 @@ func NewSafeRunner(config SafetyConfig) *SafeRunner {
 
 // Execute runs a command with timeout, cancellation, and output limiting.
 func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command string) (*ExecutionResult, error) {
+	// Project-level lock — prevent concurrent executions on the same project
+	// which would cause terraform state lock contention and corruption.
+	sr.mu.Lock()
+	if existing, running := sr.active[projectDir]; running {
+		sr.mu.Unlock()
+		return nil, fmt.Errorf("project already has a running command: %s %s (started %s). Kill it first or wait for it to finish",
+			existing.Tool, existing.Command, existing.StartedAt.Format("15:04:05"))
+	}
+	sr.mu.Unlock()
+
 	timeout := sr.timeoutFor(command)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Track the execution for kill switch
 	execID := fmt.Sprintf("%s-%s-%d", tool, command, time.Now().UnixNano())
 	execution := &Execution{
 		ID:        execID,

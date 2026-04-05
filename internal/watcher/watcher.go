@@ -91,6 +91,15 @@ func (fw *FileWatcher) handleEvent(event fsnotify.Event) {
 		return
 	}
 
+	// Ignore changes inside .terraform, .git, node_modules, and temp files
+	eventPath := event.Name
+	if strings.Contains(eventPath, "/.terraform/") || strings.Contains(eventPath, "\\.terraform\\") ||
+		strings.Contains(eventPath, "/.git/") || strings.Contains(eventPath, "\\.git\\") ||
+		strings.Contains(eventPath, "/node_modules/") ||
+		strings.HasSuffix(eventPath, ".tmp") || strings.HasSuffix(eventPath, ".swp") {
+		return
+	}
+
 	ext := filepath.Ext(event.Name)
 	if ext != ".tf" && ext != ".yml" && ext != ".yaml" {
 		return
