@@ -36,11 +36,19 @@ const uid = () => `node_${++_id}_${Date.now()}`;
 const edgeId = (from: string, to: string, field: string) => `${from}->${to}:${field}`;
 
 export default function App() {
-  const [tool, setTool] = useState<string | null>(null);
+  // Restore active project from localStorage on mount
+  const saved = useRef((() => {
+    try {
+      const raw = localStorage.getItem('iac-studio-session');
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  })());
+
+  const [tool, setTool] = useState<string | null>(saved.current?.tool || null);
   const [detectedTools, setDetectedTools] = useState<ToolInfo[]>([]);
-  const [projectName, setProjectName] = useState('my-infra-project');
+  const [projectName, setProjectName] = useState(saved.current?.projectName || 'my-infra-project');
   const [catalogResources, setCatalogResources] = useState<CatalogResource[]>([]);
-  const [projectId, setProjectId] = useState('');
+  const [projectId, setProjectId] = useState(saved.current?.projectId || '');
   const [showImportWizard, setShowImportWizard] = useState(false);
   const [importTab, setImportTab] = useState<'browse' | 'topology'>('browse');
   const [browsePath, setBrowsePath] = useState('');
@@ -88,7 +96,48 @@ export default function App() {
   useEffect(() => {
     api.detectTools().then(setDetectedTools).catch(() => {});
     api.listProjectStates().then(setSavedProjects).catch(() => {});
+    // Restore active project if we had one before reload
+    if (saved.current?.projectId && saved.current?.tool) {
+      hasCreatedProject.current = true;
+      initialLoadDone.current = false;
+      api.loadState(saved.current.projectId).then(state => {
+        if (state?.resources?.length > 0) {
+          resetNodes(state.resources.map((n: any) => ({
+            id: n.id || `res_${Math.random().toString(36).slice(2)}`,
+            type: n.type, name: n.name,
+            label: n.label || n.type, icon: n.icon || '📦',
+            properties: n.properties || {},
+            x: n.x ?? 80 + Math.random() * 300,
+            y: n.y ?? 80 + Math.random() * 200,
+          })));
+          const restoredEdges: Edge[] = [];
+          for (const n of state.resources) {
+            if (n.connections) {
+              for (const c of n.connections) {
+                restoredEdges.push({
+                  id: `${n.id}->${c.target_id}:${c.field}`,
+                  from: n.id, to: c.target_id,
+                  fromType: n.type,
+                  toType: state.resources.find((r: any) => r.id === c.target_id)?.type || '',
+                  field: c.field, label: c.label || c.field,
+                });
+              }
+            }
+          }
+          setEdges(restoredEdges);
+        }
+      }).catch(() => {});
+    }
   }, []);
+
+  // Persist active session to localStorage so page reload restores it
+  useEffect(() => {
+    if (tool && projectId) {
+      localStorage.setItem('iac-studio-session', JSON.stringify({ tool, projectId, projectName }));
+    } else {
+      localStorage.removeItem('iac-studio-session');
+    }
+  }, [tool, projectId, projectName]);
 
   // Auto-save project state whenever canvas changes (debounced)
   const saveTimer = useRef<ReturnType<typeof setTimeout>>();
