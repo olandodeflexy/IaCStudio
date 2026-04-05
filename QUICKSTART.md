@@ -1,71 +1,109 @@
-# QUICKSTART.md — First Commands for Claude Code
+# Quick Start
 
-## When starting a Claude Code session on this project:
+Get IaC Studio running in under 5 minutes.
 
-```bash
-# 1. Verify Go is available
-go version
-
-# 2. Install Go dependencies
-go mod tidy
-
-# 3. Check it compiles
-go build ./cmd/server
-
-# 4. Run tests
-go test ./... -v -count=1
-
-# 5. Install frontend deps
-cd web && npm install && cd ..
-
-# 6. Build frontend
-cd web && npm run build && cd ..
-
-# 7. Run the server (if you want to test it)
-go run ./cmd/server --port 3000
-```
-
-## Key files to read first:
-
-1. **CLAUDE.md** — Full project context (architecture, conventions, what's done)
-2. **TASKS.md** — Ordered task list (start with Phase 1)
-3. **API.md** — Complete API specification with examples
-4. **DESIGN.md** — Design decisions and known issues/gotchas
-
-## Common development commands:
+## One-command Setup
 
 ```bash
-# Run just the backend
-go run ./cmd/server --port 3001
-
-# Run just the frontend (hot reload, proxies to :3001)
-cd web && npm run dev
-
-# Run both (what `make dev` does)
-# Terminal 1: go run ./cmd/server --port 3001
-# Terminal 2: cd web && npm run dev
-
-# Run a specific test file
-go test ./internal/parser/ -v -run TestHCLParser
-
-# Add a new Go dependency
-go get github.com/some/package
-go mod tidy
-
-# Check for issues
-go vet ./...
+./scripts/setup.sh
 ```
 
-## If something doesn't compile:
+This interactive script will:
+1. Detect your OS, RAM, CPU, and GPU
+2. Check for Go and Node.js — offer to install if missing
+3. Ask how you want to run AI (local Ollama or external API)
+4. Recommend the best AI model for your hardware
+5. Download the model and build the app
+6. Start IaC Studio
 
-The most likely issue is the `go:embed` directive in `cmd/server/main.go`. It references `web/dist/*` which needs to exist. For development, either:
-1. Build the frontend first: `cd web && npm run build && cd ..`
-2. Or comment out the embed and serve frontend from Vite dev server instead
+## Manual Setup
 
-## Project conventions:
+### Prerequisites
 
-- Go code: standard library style, `internal/` packages, interfaces for testability
-- Frontend: React functional components, TypeScript, inline styles
-- Tests: `*_test.go` next to implementation, table-driven tests preferred
-- Errors: always wrap with context `fmt.Errorf("doing X: %w", err)`
-- No external Go web frameworks — just `net/http`
+- **Go 1.22+** — [go.dev/dl](https://go.dev/dl/)
+- **Node.js 20+** — [nodejs.org](https://nodejs.org/)
+
+### Install & Run
+
+```bash
+# Clone the repo
+git clone https://github.com/your-org/iac-studio.git
+cd iac-studio
+
+# Install dependencies
+make deps
+
+# Build
+make build
+
+# Run
+./bin/iac-studio
+```
+
+Open **http://localhost:3000** in your browser.
+
+### AI Setup (Optional)
+
+**Option A: Local model (free, private)**
+
+```bash
+# Install Ollama
+curl -fsSL https://ollama.com/install.sh | sh
+
+# Pull a model (choose based on your RAM)
+ollama pull gemma4           # 9.6 GB — best quality (16GB+ RAM)
+ollama pull qwen2.5-coder:7b # 4.7 GB — code-optimized (8GB+ RAM)
+ollama pull gemma4:e4b       # 3 GB   — fast and capable (6GB+ RAM)
+
+# Run with your model
+./bin/iac-studio --ai-model gemma4
+```
+
+**Option B: External API (OpenAI, Groq, etc.)**
+
+```bash
+./bin/iac-studio
+```
+
+Then click **⚙** in the header → select your provider → enter your API key.
+
+Supported: OpenAI, Anthropic, Groq, Together, Azure OpenAI, or any OpenAI-compatible API.
+
+## What You Can Do
+
+| Action | How |
+|--------|-----|
+| **Add resources** | Click + in the resource palette (left sidebar) |
+| **Search resources** | Type in the search box — filters across 250+ resources |
+| **Connect resources** | Drag from the circle port on a node to another node |
+| **AI generate** | Type in the chat: "Add a VPC with 3 subnets" |
+| **Build from description** | Click "Build from Description" on the start screen |
+| **Import existing project** | Click "Import Existing Project" → browse to your .tf files |
+| **Run terraform** | Click Init → Plan → Apply in the header |
+| **Undo/Redo** | Ctrl+Z / Ctrl+Shift+Z or the ↩↪ buttons |
+| **Delete** | Select a node or connection, press Delete |
+| **Fix errors** | When Plan fails, click "Fix with AI" in the terminal |
+| **Open in Finder** | Click 📂 next to the project name |
+| **Resize panels** | Drag the borders between sidebar, canvas, and bottom panel |
+| **AI settings** | Click ⚙ in the header |
+
+## Development Mode
+
+```bash
+make dev
+```
+
+Runs Go backend on `:3001` and Vite dev server on `:5173` with hot reload.
+
+## CLI Flags
+
+```
+./bin/iac-studio [flags]
+
+  --host          Bind address (default: 127.0.0.1)
+  --port          Port number (default: 3000)
+  --projects-dir  Project directory (default: ~/iac-projects)
+  --ai-endpoint   Ollama/API endpoint (default: http://localhost:11434)
+  --ai-model      AI model name (default: deepseek-coder:6.7b)
+  --version       Print version and exit
+```
