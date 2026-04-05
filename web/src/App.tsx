@@ -292,16 +292,22 @@ export default function App() {
   // deleting the last resource clears the generated file on disk.
   const syncTimer = useRef<ReturnType<typeof setTimeout>>();
   const hasCreatedProject = useRef(false);
+  const initialLoadDone = useRef(false);
   useEffect(() => {
-    if (!tool || !hasCreatedProject.current) return;
+    if (!tool || !hasCreatedProject.current || !projectId) return;
+    // Skip the first sync after opening a project — the restored state
+    // doesn't need to be written back immediately (it came from disk).
+    if (!initialLoadDone.current) {
+      initialLoadDone.current = true;
+      return;
+    }
     clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(() => {
       isSyncing.current = true;
       api.syncToDisk(projectId, tool, nodes, edges).catch(() => {}).finally(() => {
-        // Keep the flag up for 1s to absorb the watcher's debounced response
         setTimeout(() => { isSyncing.current = false; }, 1500);
       });
-    }, 1000);
+    }, 2000);
   }, [nodes, edges, tool, projectId]);
 
   // ─── Handlers ───
@@ -471,6 +477,7 @@ export default function App() {
     // can't silently redirect API calls to a different directory.
     setProjectId(projectName);
     hasCreatedProject.current = true;
+    initialLoadDone.current = true; // new projects sync immediately
     try {
       await api.createProject(projectName, selectedTool);
     } catch {
@@ -796,6 +803,7 @@ export default function App() {
             // Refresh saved projects list
             api.listProjectStates().then(setSavedProjects).catch(() => {});
             setTool(null); resetNodes([]); setEdges([]); setChatMessages([]); setTerminalOutput([]);
+            initialLoadDone.current = false; hasCreatedProject.current = false;
           }}>←</button>
           <span style={{ ...S.badge, background: ct.color + '22', color: ct.color }}>{ct.icon} {ct.name}</span>
           <input style={S.projInput} value={projectName} onChange={e => setProjectName(e.target.value)} />
