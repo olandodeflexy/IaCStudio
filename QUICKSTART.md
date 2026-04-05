@@ -27,7 +27,7 @@ This interactive script will:
 
 ```bash
 # Clone the repo
-git clone https://github.com/your-org/iac-studio.git
+git clone https://github.com/iac-studio/iac-studio.git
 cd iac-studio
 
 # Install dependencies

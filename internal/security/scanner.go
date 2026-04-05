@@ -143,7 +143,7 @@ func checkExposure(resources []parser.Resource, byType map[string][]parser.Resou
 	}
 
 	// Public RDS instances
-	for _, r := range byType["aws_db_instance"] {
+	for _, r := range append(byType["aws_db_instance"], byType["aws_rds_instance"]...) {
 		if b, ok := r.Properties["publicly_accessible"]; ok && (b == true || b == "true") {
 			findings = append(findings, Finding{
 				ID: "EXP-002", Severity: "critical", Category: "exposure", Framework: "CIS",
@@ -195,7 +195,7 @@ func checkEncryption(resources []parser.Resource, byType map[string][]parser.Res
 	var findings []Finding
 
 	// Unencrypted RDS
-	for _, r := range byType["aws_db_instance"] {
+	for _, r := range append(byType["aws_db_instance"], byType["aws_rds_instance"]...) {
 		if !boolProp(r, "storage_encrypted") {
 			findings = append(findings, Finding{
 				ID: "ENC-001", Severity: "high", Category: "encryption", Framework: "SOC2",
@@ -420,7 +420,7 @@ func checkCompliance(resources []parser.Resource, byType map[string][]parser.Res
 	var findings []Finding
 
 	// HIPAA: RDS without backup retention
-	for _, r := range byType["aws_db_instance"] {
+	for _, r := range append(byType["aws_db_instance"], byType["aws_rds_instance"]...) {
 		if v, ok := r.Properties["backup_retention_period"]; ok && (v == 0 || v == "0") {
 			findings = append(findings, Finding{
 				ID: "HIPAA-001", Severity: "high", Category: "compliance", Framework: "HIPAA",
@@ -435,7 +435,7 @@ func checkCompliance(resources []parser.Resource, byType map[string][]parser.Res
 	}
 
 	// SOC2: Resources without tags
-	taggedTypes := []string{"aws_instance", "aws_vpc", "aws_subnet", "aws_s3_bucket", "aws_db_instance", "aws_lb", "aws_security_group"}
+	taggedTypes := []string{"aws_instance", "aws_vpc", "aws_subnet", "aws_s3_bucket", "aws_db_instance", "aws_rds_instance", "aws_lb", "aws_security_group"}
 	for _, t := range taggedTypes {
 		for _, r := range byType[t] {
 			if _, ok := r.Properties["tags"]; !ok {
@@ -451,7 +451,7 @@ func checkCompliance(resources []parser.Resource, byType map[string][]parser.Res
 	}
 
 	// RDS without multi-AZ (production readiness)
-	for _, r := range byType["aws_db_instance"] {
+	for _, r := range append(byType["aws_db_instance"], byType["aws_rds_instance"]...) {
 		if !boolProp(r, "multi_az") {
 			findings = append(findings, Finding{
 				ID: "PROD-001", Severity: "medium", Category: "compliance", Framework: "CIS",

@@ -6,7 +6,7 @@ set -euo pipefail
 # configures the AI model based on your system, and gets you running.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/your-org/iac-studio/main/scripts/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/iac-studio/iac-studio/main/scripts/setup.sh | bash
 #   or:  ./scripts/setup.sh
 
 # ─── Colors & Helpers ───

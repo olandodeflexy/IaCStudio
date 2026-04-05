@@ -130,7 +130,7 @@ IaC Studio runs locally and is designed to be secure by default:
 ## Development
 
 ```bash
-git clone https://github.com/your-org/iac-studio.git
+git clone https://github.com/iac-studio/iac-studio.git
 cd iac-studio
 
 ./scripts/setup.sh    # Interactive setup (recommended)

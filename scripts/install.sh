@@ -2,9 +2,9 @@
 set -euo pipefail
 
 # IaC Studio Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/your-org/iac-studio/main/scripts/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/iac-studio/iac-studio/main/scripts/install.sh | bash
 
-REPO="your-org/iac-studio"
+REPO="iac-studio/iac-studio"
 INSTALL_DIR="${IAC_STUDIO_INSTALL_DIR:-/usr/local/bin}"
 BINARY="iac-studio"
 

@@ -226,7 +226,7 @@ func (e *Engine) loadDefaultRules() {
 			Severity:    "error",
 			Category:    "encryption",
 			Enabled:     true,
-			AppliesToTypes: []string{"aws_db_instance"},
+			AppliesToTypes: []string{"aws_db_instance", "aws_rds_instance"},
 			check: func(r parser.Resource) []Violation {
 				if v, ok := r.Properties["storage_encrypted"]; ok {
 					if v == true || v == "true" {
@@ -444,7 +444,7 @@ func (e *Engine) loadDefaultRules() {
 			Severity:    "warning",
 			Category:    "durability",
 			Enabled:     true,
-			AppliesToTypes: []string{"aws_db_instance"},
+			AppliesToTypes: []string{"aws_db_instance", "aws_rds_instance"},
 			check: func(r parser.Resource) []Violation {
 				if v, ok := r.Properties["backup_retention_period"]; ok {
 					if v == 0 || v == "0" {
@@ -469,7 +469,7 @@ func (e *Engine) loadDefaultRules() {
 			Severity:    "info",
 			Category:    "durability",
 			Enabled:     true,
-			AppliesToTypes: []string{"aws_db_instance"},
+			AppliesToTypes: []string{"aws_db_instance", "aws_rds_instance"},
 			check: func(r parser.Resource) []Violation {
 				if v, ok := r.Properties["multi_az"]; ok && (v == true || v == "true") {
 					return nil
