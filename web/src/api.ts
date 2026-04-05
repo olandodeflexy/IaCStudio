@@ -101,12 +101,12 @@ export const api = {
     return (await check(res)).json();
   },
 
-  // Sync resources from UI to disk
-  async syncToDisk(projectName: string, tool: string, resources: Resource[]): Promise<{ file: string; code: string }> {
+  // Sync resources and connections from UI to disk
+  async syncToDisk(projectName: string, tool: string, resources: Resource[], edges?: { from: string; to: string; field: string }[]): Promise<{ file: string; code: string }> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/sync?tool=${tool}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(resources),
+      body: JSON.stringify({ resources, edges: edges || [] }),
     });
     return (await check(res)).json();
   },

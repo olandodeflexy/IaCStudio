@@ -211,7 +211,7 @@ export default function App() {
     if (!tool || !hasCreatedProject.current) return;
     clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(() => {
-      api.syncToDisk(projectId, tool, nodes).catch(() => {});
+      api.syncToDisk(projectId, tool, nodes, edges).catch(() => {});
     }, 1000);
   }, [nodes, tool, projectId]);
 

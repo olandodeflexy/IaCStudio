@@ -201,10 +201,39 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}
 
 		limitBody(w, r)
-		var resources []parser.Resource
-		if err := json.NewDecoder(r.Body).Decode(&resources); err != nil {
-			http.Error(w, "invalid resources", 400)
+		var body struct {
+			Resources []parser.Resource `json:"resources"`
+			Edges     []struct {
+				From  string `json:"from"`       // source node ID
+				To    string `json:"to"`         // target node ID
+				Field string `json:"field"`      // connection field (e.g., "vpc_id")
+			} `json:"edges"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			http.Error(w, "invalid request body", 400)
 			return
+		}
+		resources := body.Resources
+
+		// Materialize edges into resource properties so the generator knows
+		// exactly which target instance to reference (not just "first of type").
+		if len(body.Edges) > 0 {
+			// Build node ID -> resource index
+			idIndex := make(map[string]int)
+			for i, r := range resources {
+				idIndex[r.ID] = i
+			}
+			for _, edge := range body.Edges {
+				fromIdx, fromOK := idIndex[edge.From]
+				toIdx, toOK := idIndex[edge.To]
+				if fromOK && toOK {
+					if resources[fromIdx].Properties == nil {
+						resources[fromIdx].Properties = make(map[string]interface{})
+					}
+					// Store the exact target name so the generator references the right resource
+					resources[fromIdx].Properties["__edge_"+edge.Field] = resources[toIdx].Name
+				}
+			}
 		}
 
 		gen := generator.ForTool(tool)
@@ -220,6 +249,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		// Pause watcher to avoid echo
 		fw.Pause(projectPath)
 		defer fw.Resume(projectPath)
+
+		// Invalidate plan gate — code changed, previous plan is stale
+		planGate.mu.Lock()
+		delete(planGate.plans, projectPath)
+		planGate.mu.Unlock()
 
 		if err := os.WriteFile(mainFile, []byte(code), 0644); err != nil {
 			http.Error(w, err.Error(), 500)
@@ -252,11 +286,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 
-		// Record plan runs so we can enforce plan-before-apply server-side
-		if req.Command == "plan" || req.Command == "check" {
-			recordPlan(projectPath)
-		}
-
 		// Block apply/destroy unless:
 		// 1. A plan was run for this project within the last hour (server-verified)
 		// 2. The client explicitly confirms (approved:true)
@@ -287,6 +316,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
 			result, err := run.Execute(context.Background(), projectPath, req.Tool, req.Command)
+			// Only record a successful plan — failed/cancelled plans don't count
+			if err == nil && (req.Command == "plan" || req.Command == "check") {
+				recordPlan(projectPath)
+			}
 			msg := map[string]interface{}{
 				"type":    "terminal",
 				"project": name,
