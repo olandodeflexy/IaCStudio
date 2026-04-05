@@ -1,6 +1,8 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { api, Resource, ToolInfo, CatalogResource, Suggestion } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
+import { useHistory } from './useHistory';
+import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 
 // ─── Tool Definitions (UI metadata only — resources loaded from backend catalog) ───
 const TOOLS: Record<string, { name: string; icon: string; color: string; ext: string }> = {
@@ -39,7 +41,7 @@ export default function App() {
   const [projectName, setProjectName] = useState('my-infra-project');
   const [catalogResources, setCatalogResources] = useState<CatalogResource[]>([]);
   const [projectId, setProjectId] = useState(''); // immutable after creation — used for API calls
-  const [nodes, setNodes] = useState<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
+  const { state: nodes, set: setNodes, undo: undoNodes, redo: redoNodes, canUndo, canRedo, reset: resetNodes } = useHistory<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
   const [selectedEdge, setSelectedEdge] = useState<string | null>(null);
@@ -143,6 +145,34 @@ export default function App() {
       document.body.style.userSelect = '';
     };
   }, [resizing]);
+
+  // Keyboard shortcuts: undo, redo, delete, escape
+  useKeyboardShortcuts({
+    'ctrl+z': undoNodes,
+    'ctrl+shift+z': redoNodes,
+    'ctrl+y': redoNodes,
+    'delete': () => {
+      if (selectedEdge) {
+        setEdges(prev => prev.filter(e => e.id !== selectedEdge));
+        setSelectedEdge(null);
+      } else if (selectedNode) {
+        removeNode(selectedNode);
+      }
+    },
+    'backspace': () => {
+      if (selectedEdge) {
+        setEdges(prev => prev.filter(e => e.id !== selectedEdge));
+        setSelectedEdge(null);
+      } else if (selectedNode) {
+        removeNode(selectedNode);
+      }
+    },
+    'escape': () => {
+      setSelectedNode(null);
+      setSelectedEdge(null);
+      setConnecting(null);
+    },
+  });
 
   // Filter resources by search query
   const filteredResources = searchQuery
@@ -461,13 +491,15 @@ export default function App() {
       {/* Header */}
       <header style={{ ...S.header, borderBottomColor: ct.color + '44' }}>
         <div style={S.hLeft}>
-          <button style={S.backBtn} onClick={() => { setTool(null); setNodes([]); setChatMessages([]); setTerminalOutput([]); }}>←</button>
+          <button style={S.backBtn} onClick={() => { setTool(null); resetNodes([]); setEdges([]); setChatMessages([]); setTerminalOutput([]); }}>←</button>
           <span style={{ ...S.badge, background: ct.color + '22', color: ct.color }}>{ct.icon} {ct.name}</span>
           <input style={S.projInput} value={projectName} onChange={e => setProjectName(e.target.value)} />
           <span style={{ fontSize: 10, color: wsConnected ? '#4ade80' : '#ef4444' }}>{wsConnected ? '● live' : '● offline'}</span>
         </div>
         <div style={S.hRight}>
           <span style={S.count}>{nodes.length} resource{nodes.length !== 1 ? 's' : ''}</span>
+          <button style={{ ...S.cmd, background: '#1a1a2e', color: canUndo ? '#aaa' : '#333' }} onClick={undoNodes} disabled={!canUndo} title="Undo (Ctrl+Z)">↩</button>
+          <button style={{ ...S.cmd, background: '#1a1a2e', color: canRedo ? '#aaa' : '#333' }} onClick={redoNodes} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)">↪</button>
           <button style={{ ...S.cmd, background: ct.color + '22', color: ct.color }}
             onClick={() => runCmd(tool === 'ansible' ? 'check' : 'init')}>
             {tool === 'ansible' ? '▶ Check' : '▶ Init'}
