@@ -82,6 +82,7 @@ export default function App() {
 
   const canvasRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
+  const isSyncing = useRef(false); // suppress file_changed echo from our own sync
 
   // Detect tools and load saved projects on mount
   useEffect(() => {
@@ -183,12 +184,13 @@ export default function App() {
       }
     }
     if (msg.type === 'file_changed') {
+      // Skip if we caused this change (our own sync wrote the file)
+      if (isSyncing.current) return;
       setNotification(`File changed externally: ${msg.file?.split('/').pop()}`);
       setTimeout(() => setNotification(null), 4000);
-      // Re-parse project to update UI
+      // Re-parse project to update UI — only for genuinely external changes
       if (msg.project && msg.tool) {
         api.getResources(msg.project, msg.tool).then(resources => {
-          // Merge positions from existing nodes
           setNodes(prev => {
             return resources.map(r => {
               const existing = prev.find(n => n.id === r.id);
@@ -305,9 +307,13 @@ export default function App() {
     if (!tool || !hasCreatedProject.current) return;
     clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(() => {
-      api.syncToDisk(projectId, tool, nodes, edges).catch(() => {});
+      isSyncing.current = true;
+      api.syncToDisk(projectId, tool, nodes, edges).catch(() => {}).finally(() => {
+        // Keep the flag up for 1s to absorb the watcher's debounced response
+        setTimeout(() => { isSyncing.current = false; }, 1500);
+      });
     }, 1000);
-  }, [nodes, tool, projectId]);
+  }, [nodes, edges, tool, projectId]);
 
   // ─── Handlers ───
 

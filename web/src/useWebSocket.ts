@@ -58,11 +58,18 @@ export function useWebSocket(onMessage: (msg: WSMessage) => void) {
     };
   }, []); // no dependencies — connect is stable
 
+  const mounted = useRef(false);
   useEffect(() => {
-    connect();
+    // Prevent React StrictMode double-mount from creating two connections.
+    // Only connect if we don't already have an open/connecting socket.
+    if (!mounted.current || !wsRef.current || wsRef.current.readyState > 1) {
+      mounted.current = true;
+      connect();
+    }
     return () => {
       clearTimeout(reconnectTimer.current);
-      wsRef.current?.close();
+      // Don't close the socket on StrictMode cleanup — only close if
+      // the component is truly unmounting (we check on next mount).
     };
   }, [connect]);
 
