@@ -1,0 +1,322 @@
+package exporter
+
+import (
+	"encoding/json"
+	"fmt"
+	"strings"
+
+	"github.com/iac-studio/iac-studio/internal/parser"
+)
+
+// Exporter generates infrastructure code in multiple formats from the same
+// resource graph. This is the killer feature — design once, export to any format.
+type Exporter struct{}
+
+func New() *Exporter {
+	return &Exporter{}
+}
+
+// ExportResult holds the generated code in a specific format.
+type ExportResult struct {
+	Format      string `json:"format"`       // terraform | pulumi-ts | cdk-python | cloudformation | arm
+	Language    string `json:"language"`      // hcl | typescript | python | json | yaml
+	Code        string `json:"code"`
+	Filename    string `json:"filename"`
+	Description string `json:"description"`
+}
+
+// Export generates code in the specified format.
+func (e *Exporter) Export(format string, resources []parser.Resource) (*ExportResult, error) {
+	switch format {
+	case "terraform":
+		return e.exportTerraform(resources)
+	case "pulumi-ts":
+		return e.exportPulumiTS(resources)
+	case "cdk-python":
+		return e.exportCDKPython(resources)
+	case "cloudformation":
+		return e.exportCloudFormation(resources)
+	default:
+		return nil, fmt.Errorf("unsupported format: %s (supported: terraform, pulumi-ts, cdk-python, cloudformation)", format)
+	}
+}
+
+// SupportedFormats returns all available export formats.
+func (e *Exporter) SupportedFormats() []map[string]string {
+	return []map[string]string{
+		{"format": "terraform", "language": "HCL", "description": "Terraform / OpenTofu HCL"},
+		{"format": "pulumi-ts", "language": "TypeScript", "description": "Pulumi TypeScript"},
+		{"format": "cdk-python", "language": "Python", "description": "AWS CDK Python"},
+		{"format": "cloudformation", "language": "JSON", "description": "AWS CloudFormation"},
+	}
+}
+
+func (e *Exporter) exportTerraform(resources []parser.Resource) (*ExportResult, error) {
+	// This delegates to the existing generator — just return the format metadata
+	return &ExportResult{
+		Format:      "terraform",
+		Language:    "hcl",
+		Filename:    "main.tf",
+		Description: "Terraform HCL (native format)",
+		Code:        "# Use the built-in sync — this is the native format",
+	}, nil
+}
+
+func (e *Exporter) exportPulumiTS(resources []parser.Resource) (*ExportResult, error) {
+	var b strings.Builder
+
+	b.WriteString("import * as pulumi from \"@pulumi/pulumi\";\n")
+
+	// Detect providers
+	hasAWS, hasGCP, hasAzure := detectProviders(resources)
+	if hasAWS {
+		b.WriteString("import * as aws from \"@pulumi/aws\";\n")
+	}
+	if hasGCP {
+		b.WriteString("import * as gcp from \"@pulumi/gcp\";\n")
+	}
+	if hasAzure {
+		b.WriteString("import * as azure from \"@pulumi/azure-native\";\n")
+	}
+	b.WriteString("\n")
+
+	for _, r := range resources {
+		varName := toCamelCase(r.Name)
+		pulumiType := terraformToPulumi(r.Type)
+		b.WriteString(fmt.Sprintf("const %s = new %s(\"%s\", {\n", varName, pulumiType, r.Name))
+		for k, v := range r.Properties {
+			if strings.HasPrefix(k, "__") {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("    %s: %s,\n", toCamelCase(k), tsPropValue(v)))
+		}
+		b.WriteString("});\n\n")
+	}
+
+	// Export IDs
+	b.WriteString("// Exports\n")
+	for _, r := range resources {
+		varName := toCamelCase(r.Name)
+		b.WriteString(fmt.Sprintf("export const %sId = %s.id;\n", varName, varName))
+	}
+
+	return &ExportResult{
+		Format:   "pulumi-ts",
+		Language: "typescript",
+		Filename: "index.ts",
+		Code:     b.String(),
+		Description: "Pulumi TypeScript — full programming language support",
+	}, nil
+}
+
+func (e *Exporter) exportCDKPython(resources []parser.Resource) (*ExportResult, error) {
+	var b strings.Builder
+
+	b.WriteString("from aws_cdk import (\n    Stack,\n    aws_ec2 as ec2,\n    aws_s3 as s3,\n    aws_rds as rds,\n    aws_iam as iam,\n    aws_lambda as _lambda,\n    aws_elasticloadbalancingv2 as elbv2,\n)\nfrom constructs import Construct\n\n")
+	b.WriteString("class InfraStack(Stack):\n")
+	b.WriteString("    def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:\n")
+	b.WriteString("        super().__init__(scope, construct_id, **kwargs)\n\n")
+
+	for _, r := range resources {
+		if !strings.HasPrefix(r.Type, "aws_") {
+			continue
+		}
+		varName := toSnakeCase(r.Name)
+		cdkConstruct := terraformToCDK(r.Type)
+		b.WriteString(fmt.Sprintf("        self.%s = %s(self, \"%s\",\n", varName, cdkConstruct, r.Name))
+		for k, v := range r.Properties {
+			if strings.HasPrefix(k, "__") {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("            %s=%s,\n", toSnakeCase(k), pyPropValue(v)))
+		}
+		b.WriteString("        )\n\n")
+	}
+
+	return &ExportResult{
+		Format:   "cdk-python",
+		Language: "python",
+		Filename: "infra_stack.py",
+		Code:     b.String(),
+		Description: "AWS CDK Python — L2 constructs with Well-Architected defaults",
+	}, nil
+}
+
+func (e *Exporter) exportCloudFormation(resources []parser.Resource) (*ExportResult, error) {
+	template := map[string]interface{}{
+		"AWSTemplateFormatVersion": "2010-09-09",
+		"Description":             "Generated by IaC Studio",
+		"Resources":               map[string]interface{}{},
+	}
+
+	cfResources := template["Resources"].(map[string]interface{})
+
+	for _, r := range resources {
+		if !strings.HasPrefix(r.Type, "aws_") {
+			continue
+		}
+		logicalID := toPascalCase(r.Name)
+		cfType := terraformToCFN(r.Type)
+		if cfType == "" {
+			continue
+		}
+
+		props := make(map[string]interface{})
+		for k, v := range r.Properties {
+			if strings.HasPrefix(k, "__") {
+				continue
+			}
+			props[toPascalCase(k)] = v
+		}
+
+		cfResources[logicalID] = map[string]interface{}{
+			"Type":       cfType,
+			"Properties": props,
+		}
+	}
+
+	code, _ := json.MarshalIndent(template, "", "  ")
+
+	return &ExportResult{
+		Format:   "cloudformation",
+		Language: "json",
+		Filename: "template.json",
+		Code:     string(code),
+		Description: "AWS CloudFormation — native AWS deployment format",
+	}, nil
+}
+
+// ─── Helpers ───
+
+func detectProviders(resources []parser.Resource) (bool, bool, bool) {
+	var aws, gcp, azure bool
+	for _, r := range resources {
+		switch {
+		case strings.HasPrefix(r.Type, "aws_"):
+			aws = true
+		case strings.HasPrefix(r.Type, "google_"):
+			gcp = true
+		case strings.HasPrefix(r.Type, "azurerm_"):
+			azure = true
+		}
+	}
+	return aws, gcp, azure
+}
+
+func terraformToPulumi(tfType string) string {
+	switch {
+	case strings.HasPrefix(tfType, "aws_"):
+		parts := strings.SplitN(tfType, "_", 2)
+		if len(parts) == 2 {
+			return "aws." + toModuleName(parts[1]) + "." + toPascalCase(parts[1])
+		}
+	case strings.HasPrefix(tfType, "google_"):
+		return "gcp." + toPascalCase(strings.TrimPrefix(tfType, "google_"))
+	case strings.HasPrefix(tfType, "azurerm_"):
+		return "azure." + toPascalCase(strings.TrimPrefix(tfType, "azurerm_"))
+	}
+	return tfType
+}
+
+func terraformToCDK(tfType string) string {
+	mapping := map[string]string{
+		"aws_vpc":             "ec2.Vpc",
+		"aws_subnet":          "ec2.Subnet",
+		"aws_instance":        "ec2.Instance",
+		"aws_security_group":  "ec2.SecurityGroup",
+		"aws_s3_bucket":       "s3.Bucket",
+		"aws_db_instance":     "rds.DatabaseInstance",
+		"aws_iam_role":        "iam.Role",
+		"aws_lambda_function": "_lambda.Function",
+		"aws_lb":              "elbv2.ApplicationLoadBalancer",
+	}
+	if cdk, ok := mapping[tfType]; ok {
+		return cdk
+	}
+	return "# " + tfType + " (manual mapping needed)"
+}
+
+func terraformToCFN(tfType string) string {
+	mapping := map[string]string{
+		"aws_vpc":             "AWS::EC2::VPC",
+		"aws_subnet":          "AWS::EC2::Subnet",
+		"aws_instance":        "AWS::EC2::Instance",
+		"aws_security_group":  "AWS::EC2::SecurityGroup",
+		"aws_s3_bucket":       "AWS::S3::Bucket",
+		"aws_db_instance":     "AWS::RDS::DBInstance",
+		"aws_iam_role":        "AWS::IAM::Role",
+		"aws_lambda_function": "AWS::Lambda::Function",
+		"aws_lb":              "AWS::ElasticLoadBalancingV2::LoadBalancer",
+		"aws_dynamodb_table":  "AWS::DynamoDB::Table",
+		"aws_sqs_queue":       "AWS::SQS::Queue",
+		"aws_sns_topic":       "AWS::SNS::Topic",
+	}
+	return mapping[tfType]
+}
+
+func toCamelCase(s string) string {
+	parts := strings.Split(s, "_")
+	for i := 1; i < len(parts); i++ {
+		if len(parts[i]) > 0 {
+			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+func toPascalCase(s string) string {
+	parts := strings.Split(s, "_")
+	for i := range parts {
+		if len(parts[i]) > 0 {
+			parts[i] = strings.ToUpper(parts[i][:1]) + parts[i][1:]
+		}
+	}
+	return strings.Join(parts, "")
+}
+
+func toSnakeCase(s string) string {
+	return strings.ReplaceAll(s, "-", "_")
+}
+
+func toModuleName(s string) string {
+	parts := strings.SplitN(s, "_", 2)
+	return parts[0]
+}
+
+func tsPropValue(v interface{}) string {
+	switch val := v.(type) {
+	case bool:
+		if val {
+			return "true"
+		}
+		return "false"
+	case float64:
+		if val == float64(int64(val)) {
+			return fmt.Sprintf("%d", int64(val))
+		}
+		return fmt.Sprintf("%g", val)
+	case string:
+		return fmt.Sprintf("\"%s\"", val)
+	default:
+		return fmt.Sprintf("\"%v\"", val)
+	}
+}
+
+func pyPropValue(v interface{}) string {
+	switch val := v.(type) {
+	case bool:
+		if val {
+			return "True"
+		}
+		return "False"
+	case float64:
+		if val == float64(int64(val)) {
+			return fmt.Sprintf("%d", int64(val))
+		}
+		return fmt.Sprintf("%g", val)
+	case string:
+		return fmt.Sprintf("\"%s\"", val)
+	default:
+		return fmt.Sprintf("\"%v\"", val)
+	}
+}

@@ -14,10 +14,13 @@ import (
 
 	"github.com/iac-studio/iac-studio/internal/ai"
 	"github.com/iac-studio/iac-studio/internal/catalog"
+	"github.com/iac-studio/iac-studio/internal/drift"
+	"github.com/iac-studio/iac-studio/internal/exporter"
 	"github.com/iac-studio/iac-studio/internal/generator"
 	"github.com/iac-studio/iac-studio/internal/importer"
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/runner"
+	"github.com/iac-studio/iac-studio/internal/security"
 	"github.com/iac-studio/iac-studio/internal/watcher"
 )
 
@@ -526,6 +529,97 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			data, _ := json.Marshal(result)
 			hub.Broadcast(data)
 		}()
+	})
+
+	// ─── Security Scanner ───
+
+	secScanner := security.New()
+
+	mux.HandleFunc("POST /api/projects/{name}/security", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		tool := r.URL.Query().Get("tool")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		p := parser.ForTool(tool)
+		resources, err := p.ParseDir(projectPath)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		report := secScanner.Scan(resources)
+		json.NewEncoder(w).Encode(report)
+	})
+
+	// Security scan from canvas resources (no project dir needed)
+	mux.HandleFunc("POST /api/security/scan", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var resources []parser.Resource
+		if err := json.NewDecoder(r.Body).Decode(&resources); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		report := secScanner.Scan(resources)
+		json.NewEncoder(w).Encode(report)
+	})
+
+	// ─── Drift Detection ───
+
+	driftDetector := drift.New()
+
+	mux.HandleFunc("POST /api/projects/{name}/drift", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		tool := r.URL.Query().Get("tool")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		p := parser.ForTool(tool)
+		resources, err := p.ParseDir(projectPath)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		// Build code resource index
+		codeResources := make(map[string]map[string]interface{})
+		for _, res := range resources {
+			codeResources[res.Type+"."+res.Name] = res.Properties
+		}
+		report, err := driftDetector.Detect(projectPath, codeResources)
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(report)
+	})
+
+	// ─── Multi-Format Export ───
+
+	exp := exporter.New()
+
+	mux.HandleFunc("GET /api/export/formats", func(w http.ResponseWriter, _ *http.Request) {
+		json.NewEncoder(w).Encode(exp.SupportedFormats())
+	})
+
+	mux.HandleFunc("POST /api/export", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var req struct {
+			Format    string            `json:"format"`
+			Resources []parser.Resource `json:"resources"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		result, err := exp.Export(req.Format, req.Resources)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		json.NewEncoder(w).Encode(result)
 	})
 
 	// WebSocket for live sync
