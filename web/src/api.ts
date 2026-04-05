@@ -128,6 +128,12 @@ export const api = {
     return (await check(res)).json();
   },
 
+  // Delete a project
+  async deleteProject(projectName: string): Promise<any> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}`, { method: 'DELETE' });
+    return (await check(res)).json();
+  },
+
   // Open project directory in OS file manager
   async revealProject(projectName: string): Promise<any> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/reveal`, { method: 'POST' });

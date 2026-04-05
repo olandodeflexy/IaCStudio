@@ -497,6 +497,24 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		json.NewEncoder(w).Encode(map[string]string{"status": "opened", "path": projectPath})
 	})
 
+	// Delete a project (removes directory and state)
+	mux.HandleFunc("DELETE /api/projects/{name}", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		// Remove state from manager
+		pm.Delete(name)
+		// Remove the project directory
+		if err := os.RemoveAll(projectPath); err != nil {
+			http.Error(w, fmt.Sprintf("failed to delete: %v", err), 500)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "name": name})
+	})
+
 	// ─── AI Settings ───
 
 	// Get current AI provider config

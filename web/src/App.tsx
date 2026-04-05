@@ -510,9 +510,24 @@ export default function App() {
                         <div style={{ fontSize: 14, fontWeight: 600, color: '#ccc', fontFamily: 'JetBrains Mono' }}>{p.name}</div>
                         <div style={{ fontSize: 11, color: '#555' }}>{t.name} · {count} resource{count !== 1 ? 's' : ''}{p.updated_at ? ' · ' + new Date(p.updated_at).toLocaleDateString() : ''}</div>
                       </div>
-                      <span style={{ fontSize: 12, color: '#555', cursor: 'pointer', marginRight: 8 }}
+                      <span style={{ fontSize: 12, color: '#555', cursor: 'pointer' }}
                         title="Open in file manager"
                         onClick={(e) => { e.stopPropagation(); api.revealProject(p.name).catch(() => {}); }}>📂</span>
+                      <span style={{ fontSize: 12, color: '#555', cursor: 'pointer', padding: '0 8px' }}
+                        title="Delete project"
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!confirm(`Delete project "${p.name}"?\n\nThis will permanently remove the project directory and all its files.\n\nThis cannot be undone.`)) return;
+                          try {
+                            await api.deleteProject(p.name);
+                            setSavedProjects(prev => prev.filter(sp => sp.name !== p.name));
+                            setNotification(`Deleted project: ${p.name}`);
+                            setTimeout(() => setNotification(null), 3000);
+                          } catch (err: any) {
+                            setNotification(`Failed to delete: ${err.message}`);
+                            setTimeout(() => setNotification(null), 4000);
+                          }
+                        }}>✕</span>
                       <span style={{ fontSize: 12, color: t.color, fontWeight: 600 }}>Open →</span>
                     </button>
                   );
