@@ -3,12 +3,13 @@ import { api, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, Import
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
+import { UIButton, UIInput, UIKicker, UILabel, UIModal, UIPanel, UITextArea } from './ui';
 
 // ─── Tool Definitions (UI metadata only — resources loaded from backend catalog) ───
 const TOOLS: Record<string, { name: string; icon: string; color: string; ext: string }> = {
-  terraform: { name: 'Terraform', icon: '⬡', color: '#7B42F6', ext: '.tf' },
-  opentofu: { name: 'OpenTofu', icon: '🟢', color: '#FFDA18', ext: '.tf' },
-  ansible: { name: 'Ansible', icon: '🅰️', color: '#EE0000', ext: '.yml' },
+  terraform: { name: 'Terraform', icon: 'TF', color: '#2FB5A8', ext: '.tf' },
+  opentofu: { name: 'OpenTofu', icon: 'TO', color: '#F2B447', ext: '.tf' },
+  ansible: { name: 'Ansible', icon: 'AN', color: '#D95757', ext: '.yml' },
 };
 
 // Fallback resources when backend is unreachable (small subset)
@@ -34,6 +35,13 @@ interface Edge {
 let _id = 0;
 const uid = () => `node_${++_id}_${Date.now()}`;
 const edgeId = (from: string, to: string, field: string) => `${from}->${to}:${field}`;
+
+function fileGlyph(entry: FileEntry): string {
+  if (entry.is_dir) return 'DIR';
+  if (entry.ext === '.tf') return 'TF';
+  if (entry.ext === '.yml' || entry.ext === '.yaml') return 'YML';
+  return 'FILE';
+}
 
 export default function App() {
   // Restore active project from localStorage on mount
@@ -537,31 +545,33 @@ export default function App() {
   // ─── Tool Selection ───
   if (!tool) {
     return (
-      <div style={S.selectScreen}>
+      <div style={S.selectScreen} className="select-screen">
+        <div className="ambient-orb ambient-orb-a" />
+        <div className="ambient-orb ambient-orb-b" />
         <div style={S.selectBg} />
         <div style={S.selectContent}>
-          <div style={S.logo}><span style={{ fontSize: 28, color: '#7B42F6' }}>◆</span> <span style={S.logoText}>IaC Studio</span></div>
+          <div style={S.logo}><span style={{ fontSize: 28, color: 'var(--accent-action)' }}>◆</span> <span style={S.logoText}>IaC Studio</span></div>
           {/* Saved projects */}
           {savedProjects.length > 0 && (
             <div style={{ marginBottom: 32, width: '100%', maxWidth: 600 }}>
-              <div style={{ fontSize: 12, color: '#555', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 12, fontFamily: 'JetBrains Mono' }}>Recent Projects</div>
+              <UIKicker style={{ marginBottom: 12 }}>Recent Projects</UIKicker>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {savedProjects.filter(p => p.tool).slice(0, 5).map(p => {
                   const t = TOOLS[p.tool] || TOOLS.terraform;
                   const count = p.resources?.length || 0;
                   return (
-                    <button key={p.name} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: '#0d0d18', border: '1px solid #1e1e30', borderRadius: 10, cursor: 'pointer', textAlign: 'left', transition: 'border-color 0.2s' }}
+                    <button key={p.name} className="tool-card" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--bg-elev-1)', border: '1px solid var(--border-main)', borderRadius: 10, cursor: 'pointer', textAlign: 'left', transition: 'border-color 0.2s' }}
                       onClick={() => openProject(p)}
                       onMouseEnter={e => { (e.currentTarget as any).style.borderColor = t.color; }}
-                      onMouseLeave={e => { (e.currentTarget as any).style.borderColor = '#1e1e30'; }}>
+                      onMouseLeave={e => { (e.currentTarget as any).style.borderColor = 'var(--border-main)'; }}>
                       <span style={{ fontSize: 20 }}>{t.icon}</span>
                       <div style={{ flex: 1 }}>
                         <div style={{ fontSize: 14, fontWeight: 600, color: '#ccc', fontFamily: 'JetBrains Mono' }}>{p.name}</div>
                         <div style={{ fontSize: 11, color: '#555' }}>{t.name} · {count} resource{count !== 1 ? 's' : ''}{p.updated_at ? ' · ' + new Date(p.updated_at).toLocaleDateString() : ''}</div>
                       </div>
-                      <span style={{ fontSize: 12, color: '#555', cursor: 'pointer' }}
+                      <span style={{ fontSize: 11, color: '#555', cursor: 'pointer', fontFamily: 'JetBrains Mono' }}
                         title="Open in file manager"
-                        onClick={(e) => { e.stopPropagation(); api.revealProject(p.name).catch(() => {}); }}>📂</span>
+                        onClick={(e) => { e.stopPropagation(); api.revealProject(p.name).catch(() => {}); }}>OPEN</span>
                       <span style={{ fontSize: 12, color: '#555', cursor: 'pointer', padding: '0 8px' }}
                         title="Delete project"
                         onClick={async (e) => {
@@ -577,7 +587,7 @@ export default function App() {
                             setTimeout(() => setNotification(null), 4000);
                           }
                         }}>✕</span>
-                      <span style={{ fontSize: 12, color: t.color, fontWeight: 600 }}>Open →</span>
+                      <span style={{ fontSize: 11, color: t.color, fontWeight: 700, fontFamily: 'JetBrains Mono' }}>OPEN</span>
                     </button>
                   );
                 })}
@@ -591,11 +601,11 @@ export default function App() {
             {Object.entries(TOOLS).map(([key, t]) => {
               const detected = detectedTools.find(d => d.name === t.name);
               return (
-                <button key={key} style={{ ...S.card, borderColor: t.color + '33' }}
+                <button key={key} className="tool-card panel-reveal" style={{ ...S.card, borderColor: t.color + '33' }}
                   onClick={() => handleCreateProject(key)}
                   onMouseEnter={e => { (e.currentTarget as any).style.borderColor = t.color; (e.currentTarget as any).style.transform = 'translateY(-4px)'; }}
                   onMouseLeave={e => { (e.currentTarget as any).style.borderColor = t.color + '33'; (e.currentTarget as any).style.transform = 'translateY(0)'; }}>
-                  <span style={{ fontSize: 40 }}>{t.icon}</span>
+                  <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: 0.8, fontFamily: 'JetBrains Mono', color: t.color }}>{t.icon}</span>
                   <span style={{ fontSize: 18, fontWeight: 600, color: t.color }}>{t.name}</span>
                   <span style={{ fontSize: 12, color: '#555', fontFamily: 'JetBrains Mono' }}>{t.ext} files</span>
                   {detected && (
@@ -610,63 +620,61 @@ export default function App() {
           <div style={S.features}>
             {['Visual drag-and-drop builder', 'AI chat to generate resources', 'Real-time code generation', 'Files editable on disk'].map(f => (
               <div key={f} style={{ fontSize: 13, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 8, color: '#7B42F6' }}>●</span> {f}
+                <span style={{ fontSize: 8, color: 'var(--accent-action)' }}>●</span> {f}
               </div>
             ))}
           </div>
 
           {/* Project name & directory */}
-          <div style={{ marginTop: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, background: '#0d0d18', border: '1px solid #1e1e30', borderRadius: 12, padding: '16px 24px', width: '100%', maxWidth: 480 }}>
+          <UIPanel style={{ marginTop: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '16px 24px', width: '100%', maxWidth: 480 }}>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
-              <label style={{ fontSize: 12, color: '#666', fontFamily: 'JetBrains Mono', whiteSpace: 'nowrap' }}>Project name:</label>
-              <input style={{ background: '#111120', border: '1px solid #2a2a3e', borderRadius: 8, padding: '8px 14px', color: '#ccc', fontSize: 13, fontFamily: 'JetBrains Mono', outline: 'none', flex: 1, minWidth: 0 }}
+              <UILabel style={{ whiteSpace: 'nowrap' }}>Project name:</UILabel>
+              <UIInput style={{ flex: 1, minWidth: 0 }}
                 value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="my-infra-project" />
             </div>
-            <div style={{ fontSize: 11, color: '#555', fontFamily: 'JetBrains Mono', background: '#0a0a14', borderRadius: 6, padding: '6px 12px', width: '100%', textAlign: 'left' }}>
-              📁 ~/iac-projects/<span style={{ color: '#7B42F6' }}>{projectName}</span>/
+            <div className="ui-path">
+              ROOT ~/iac-projects/<span style={{ color: 'var(--accent-action)' }}>{projectName}</span>/
             </div>
 
             {/* Import / Topology buttons */}
             <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>
-              <button style={{ background: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: 8, padding: '8px 16px', color: '#888', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans' }}
+              <UIButton
                 onClick={() => { setImportTab('browse'); setShowImportWizard(true); api.browse().then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {}); }}>
-                📂 Import Existing Project
-              </button>
-              <button style={{ background: '#1a1a2e', border: '1px solid #7B42F644', borderRadius: 8, padding: '8px 16px', color: '#7B42F6', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans' }}
+                Import Existing Project
+              </UIButton>
+              <UIButton variant="primary"
                 onClick={() => { setImportTab('topology'); setShowImportWizard(true); }}>
-                ✦ Build from Description
-              </button>
+                Build from Description
+              </UIButton>
             </div>
-          </div>
+          </UIPanel>
 
           {/* ─── Import Wizard Modal ─── */}
           {showImportWizard && (
-            <div style={{ position: 'absolute', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)' }} onClick={() => { setShowImportWizard(false); setImportPreview(null); }} />
-              <div style={{ position: 'relative', width: 700, maxHeight: '80vh', background: '#12121e', border: '1px solid #2a2a4e', borderRadius: 16, overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
-                {/* Wizard header */}
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px 20px', borderBottom: '1px solid #1e1e30' }}>
-                  <div style={{ display: 'flex', gap: 12 }}>
+            <UIModal onClose={() => { setShowImportWizard(false); setImportPreview(null); }}>
+              {/* Wizard header */}
+              <div className="ui-modal-header">
+                <div style={{ display: 'flex', gap: 12 }}>
                     {(['browse', 'topology'] as const).map(t => (
-                      <button key={t} style={{ background: importTab === t ? '#7B42F622' : 'transparent', border: importTab === t ? '1px solid #7B42F644' : '1px solid transparent', borderRadius: 8, padding: '6px 14px', color: importTab === t ? '#7B42F6' : '#666', fontSize: 12, cursor: 'pointer', fontFamily: 'DM Sans', fontWeight: 600 }}
+                      <UIButton key={t} variant="tab" active={importTab === t}
                         onClick={() => { setImportTab(t); setImportPreview(null); }}>
-                        {t === 'browse' ? '📂 Browse Files' : '✦ Describe Architecture'}
-                      </button>
+                        {t === 'browse' ? 'Browse Files' : 'Describe Architecture'}
+                      </UIButton>
                     ))}
-                  </div>
-                  <button style={{ background: 'none', border: 'none', color: '#555', fontSize: 20, cursor: 'pointer' }} onClick={() => { setShowImportWizard(false); setImportPreview(null); }}>×</button>
                 </div>
+                <button className="ui-close" onClick={() => { setShowImportWizard(false); setImportPreview(null); }}>×</button>
+              </div>
 
                 {/* Browse tab */}
                 {importTab === 'browse' && !importPreview && (
                   <div style={{ flex: 1, overflow: 'auto', minHeight: 300 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', borderBottom: '1px solid #1e1e30', background: '#0d0d18' }}>
-                      <button style={{ background: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: 6, padding: '4px 10px', color: '#888', fontSize: 12, cursor: 'pointer' }}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', borderBottom: '1px solid var(--border-soft)', background: 'var(--bg-elev-1)' }}>
+                      <UIButton
                         onClick={() => { api.browse(browseParent).then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {}); }}>
                         ↑
-                      </button>
-                      <span style={{ fontSize: 11, color: '#666', fontFamily: 'JetBrains Mono', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{browsePath}</span>
-                      <button style={{ background: '#7B42F622', border: '1px solid #7B42F644', borderRadius: 6, padding: '4px 12px', color: '#7B42F6', fontSize: 11, cursor: 'pointer', fontWeight: 600, fontFamily: 'JetBrains Mono' }}
+                      </UIButton>
+                      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{browsePath}</span>
+                      <UIButton variant="primary"
                         disabled={importLoading}
                         onClick={async () => {
                           setImportLoading(true);
@@ -679,7 +687,7 @@ export default function App() {
                           setImportLoading(false);
                         }}>
                         {importLoading ? 'Scanning...' : 'Import this folder'}
-                      </button>
+                      </UIButton>
                     </div>
                     <div style={{ padding: '4px 0' }}>
                       {browseEntries.map(entry => (
@@ -689,9 +697,9 @@ export default function App() {
                               api.browse(entry.path).then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {});
                             }
                           }}
-                          onMouseEnter={e => { if (entry.is_dir) (e.currentTarget as any).style.background = '#1a1a2e'; }}
+                          onMouseEnter={e => { if (entry.is_dir) (e.currentTarget as any).style.background = 'var(--bg-elev-2)'; }}
                           onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
-                          <span style={{ fontSize: 14 }}>{entry.is_dir ? '📁' : entry.ext === '.tf' ? '📄' : entry.ext === '.yml' || entry.ext === '.yaml' ? '📋' : '📄'}</span>
+                          <span style={{ fontSize: 10, fontFamily: 'JetBrains Mono', color: '#7b8d84', minWidth: 30 }}>{fileGlyph(entry)}</span>
                           <span style={{ flex: 1 }}>{entry.name}</span>
                           {entry.is_dir && entry.children !== undefined && <span style={{ color: '#444', fontSize: 10 }}>{entry.children} items</span>}
                           {!entry.is_dir && <span style={{ color: '#444', fontSize: 10 }}>{entry.size > 1024 ? Math.round(entry.size / 1024) + 'KB' : entry.size + 'B'}</span>}
@@ -705,23 +713,23 @@ export default function App() {
                 {/* Topology tab */}
                 {importTab === 'topology' && !importPreview && (
                   <div style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    <div style={{ fontSize: 14, color: '#bbb', fontWeight: 600 }}>Describe your infrastructure</div>
-                    <div style={{ fontSize: 12, color: '#666' }}>
+                    <div style={{ fontSize: 14, color: 'var(--text-main)', fontWeight: 600 }}>Describe your infrastructure</div>
+                    <div className="ui-note">
                       Tell us what you want to build in plain language. The AI will generate a complete infrastructure topology with all necessary resources and connections.
                     </div>
-                    <textarea style={{ flex: 1, minHeight: 120, background: '#0a0a14', border: '1px solid #2a2a3e', borderRadius: 8, padding: 14, color: '#ccc', fontSize: 13, fontFamily: 'DM Sans', resize: 'none', outline: 'none' }}
+                    <UITextArea style={{ flex: 1 }}
                       value={topologyDesc} onChange={e => setTopologyDesc(e.target.value)}
                       placeholder={"Examples:\n• A three-tier web app with VPC, ALB, auto-scaling EC2, RDS PostgreSQL, and S3 for static assets\n• A GKE cluster with Cloud SQL, Redis cache, and Cloud Storage for a microservices platform\n• An Azure AKS cluster with PostgreSQL, Key Vault, and Application Gateway"} />
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <span style={{ fontSize: 11, color: '#555' }}>Provider:</span>
+                      <UILabel>Provider:</UILabel>
                       {['aws', 'google', 'azurerm'].map(p => (
-                        <button key={p} style={{ padding: '4px 12px', borderRadius: 6, border: topologyProvider === p ? '1px solid #7B42F6' : '1px solid #2a2a3e', background: topologyProvider === p ? '#7B42F622' : 'transparent', color: topologyProvider === p ? '#7B42F6' : '#666', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono' }}
+                        <UIButton key={p} variant="tab" active={topologyProvider === p}
                           onClick={() => setTopologyProvider(p)}>
                           {p === 'aws' ? 'AWS' : p === 'google' ? 'GCP' : 'Azure'}
-                        </button>
+                        </UIButton>
                       ))}
                     </div>
-                    <button style={{ background: '#7B42F6', border: 'none', borderRadius: 8, padding: '10px 20px', color: '#fff', fontSize: 13, fontWeight: 600, cursor: 'pointer', fontFamily: 'DM Sans' }}
+                    <UIButton variant="primary"
                       disabled={!topologyDesc.trim() || importLoading}
                       onClick={async () => {
                         setImportLoading(true);
@@ -737,8 +745,8 @@ export default function App() {
                           setNotification(null);
                         }
                       }}>
-                      {importLoading ? '✦ AI is generating... (this may take a minute)' : '✦ Generate Infrastructure'}
-                    </button>
+                      {importLoading ? 'Generating... (this may take a minute)' : 'Generate Infrastructure'}
+                    </UIButton>
                   </div>
                 )}
 
@@ -748,7 +756,7 @@ export default function App() {
                     <div style={{ fontSize: 14, fontWeight: 600, color: '#bbb' }}>
                       {importPreview.tool === 'unknown' ? 'Import Failed' : 'Preview'}
                     </div>
-                    <div style={{ fontSize: 12, color: '#888', lineHeight: 1.5 }}>{importPreview.summary}</div>
+                    <div className="ui-note">{importPreview.summary}</div>
 
                     {importPreview.warnings && importPreview.warnings.length > 0 && (
                       <div style={{ background: '#ef444411', border: '1px solid #ef444433', borderRadius: 8, padding: 10 }}>
@@ -767,7 +775,7 @@ export default function App() {
                           {importPreview.resources.map((r, i) => {
                             const meta = catalogResources.find(c => c.type === r.type);
                             return (
-                              <span key={i} style={{ background: '#1a1a2e', borderRadius: 6, padding: '4px 10px', fontSize: 11, color: '#aaa', fontFamily: 'JetBrains Mono' }}>
+                              <span key={i} style={{ background: 'var(--bg-elev-2)', borderRadius: 6, padding: '4px 10px', fontSize: 11, color: 'var(--text-main)', fontFamily: 'JetBrains Mono' }}>
                                 {meta?.icon ?? '📦'} {r.type}.{r.name}
                               </span>
                             );
@@ -782,12 +790,11 @@ export default function App() {
                     )}
 
                     <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                      <button style={{ background: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: 8, padding: '8px 16px', color: '#888', fontSize: 12, cursor: 'pointer' }}
-                        onClick={() => setImportPreview(null)}>
+                      <UIButton onClick={() => setImportPreview(null)}>
                         ← Back
-                      </button>
+                      </UIButton>
                       {importPreview.resources.length > 0 && (
-                        <button style={{ background: '#7B42F6', border: 'none', borderRadius: 8, padding: '8px 20px', color: '#fff', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+                        <UIButton variant="primary"
                           onClick={() => {
                             const t = importPreview!.tool === 'opentofu' ? 'opentofu' : importPreview!.tool === 'ansible' ? 'ansible' : 'terraform';
                             setTool(t);
@@ -821,14 +828,13 @@ export default function App() {
                             setNotification(`Imported ${importPreview!.resources.length} resources`);
                             setTimeout(() => setNotification(null), 4000);
                           }}>
-                          Import to Canvas →
-                        </button>
+                          Import to Canvas
+                        </UIButton>
                       )}
                     </div>
                   </div>
                 )}
-              </div>
-            </div>
+            </UIModal>
           )}
         </div>
       </div>
@@ -841,14 +847,14 @@ export default function App() {
 
   // ─── Main UI ───
   return (
-    <div style={S.app}>
+    <div style={S.app} className="iac-app">
       {/* Notification */}
       {notification && (
         <div style={S.notification}>{notification}</div>
       )}
 
       {/* Header */}
-      <header style={{ ...S.header, borderBottomColor: ct.color + '44' }}>
+      <header style={{ ...S.header, borderBottomColor: ct.color + '44' }} className="iac-header">
         <div style={S.hLeft}>
           <button style={S.backBtn} onClick={async () => {
             // Save state before navigating away
@@ -871,15 +877,15 @@ export default function App() {
           }}>←</button>
           <span style={{ ...S.badge, background: ct.color + '22', color: ct.color }}>{ct.icon} {ct.name}</span>
           <input style={S.projInput} value={projectName} onChange={e => setProjectName(e.target.value)} />
-          <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 14, padding: '2px 6px', color: '#555' }}
+          <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, fontFamily: 'JetBrains Mono', padding: '2px 6px', color: '#789187' }}
             title="Open in file manager"
-            onClick={() => api.revealProject(projectId).catch(() => {})}>📂</button>
+            onClick={() => api.revealProject(projectId).catch(() => {})}>OPEN</button>
           <span style={{ fontSize: 10, color: wsConnected ? '#4ade80' : '#ef4444' }}>{wsConnected ? '● live' : '● offline'}</span>
         </div>
         <div style={S.hRight}>
           <span style={S.count}>{nodes.length} resource{nodes.length !== 1 ? 's' : ''}</span>
-          <button style={{ ...S.cmd, background: '#1a1a2e', color: canUndo ? '#aaa' : '#333' }} onClick={undoNodes} disabled={!canUndo} title="Undo (Ctrl+Z)">↩</button>
-          <button style={{ ...S.cmd, background: '#1a1a2e', color: canRedo ? '#aaa' : '#333' }} onClick={redoNodes} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)">↪</button>
+          <button style={{ ...S.cmd, background: 'var(--bg-elev-2)', color: canUndo ? 'var(--text-main)' : '#4b5551' }} onClick={undoNodes} disabled={!canUndo} title="Undo (Ctrl+Z)">↩</button>
+          <button style={{ ...S.cmd, background: 'var(--bg-elev-2)', color: canRedo ? 'var(--text-main)' : '#4b5551' }} onClick={redoNodes} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)">↪</button>
           <button style={{ ...S.cmd, background: ct.color + '22', color: ct.color }}
             onClick={() => runCmd(tool === 'ansible' ? 'check' : 'init')}>
             {tool === 'ansible' ? '▶ Check' : '▶ Init'}
@@ -888,74 +894,72 @@ export default function App() {
             onClick={() => runCmd(tool === 'ansible' ? 'syntax' : 'plan')}>
             {tool === 'ansible' ? '▶ Syntax' : '▶ Plan'}
           </button>
-          <button style={{ ...S.cmd, background: ct.color, color: '#0a0a0f' }}
+          <UIButton variant="primary" style={{ background: ct.color, borderColor: ct.color, color: '#0a0a0f' }}
             onClick={() => runCmd(tool === 'ansible' ? 'playbook' : 'apply')}>
             ▶ Apply
-          </button>
-          <button style={{ ...S.cmd, background: '#1a1a2e', color: '#888' }}
+          </UIButton>
+          <UIButton
             onClick={() => { api.getAISettings().then(setAiSettings).catch(() => {}); setShowSettings(true); }}
             title="AI Settings">
-            ⚙
-          </button>
+            SETTINGS
+          </UIButton>
         </div>
       </header>
 
       {/* AI Settings Modal */}
       {showSettings && (
-        <div style={{ position: 'fixed', inset: 0, zIndex: 200, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.7)' }} onClick={() => setShowSettings(false)} />
-          <div style={{ position: 'relative', width: 480, background: '#12121e', border: '1px solid #2a2a4e', borderRadius: 16, padding: 24 }}>
+        <UIModal onClose={() => setShowSettings(false)} width={480} className="ui-panel--raised">
+          <div style={{ padding: 24 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <span style={{ fontSize: 16, fontWeight: 700, color: '#ddd' }}>AI Settings</span>
-              <button style={{ background: 'none', border: 'none', color: '#555', fontSize: 20, cursor: 'pointer' }} onClick={() => setShowSettings(false)}>×</button>
+              <span className="ui-modal-title">AI Settings</span>
+              <button className="ui-close" onClick={() => setShowSettings(false)}>×</button>
             </div>
 
             <div style={{ marginBottom: 16 }}>
-              <label style={S.flabel}>Provider Type</label>
-              <div style={{ display: 'flex', gap: 8 }}>
+              <UILabel>Provider Type</UILabel>
+              <div className="ui-choice-grid" style={{ marginTop: 8 }}>
                 {[
                   { key: 'ollama', label: 'Ollama (Local)', desc: 'Free, private, runs on your machine' },
                   { key: 'openai', label: 'OpenAI API', desc: 'GPT-4o, GPT-4-turbo' },
                   { key: 'custom', label: 'Custom API', desc: 'Any OpenAI-compatible endpoint' },
                 ].map(p => (
-                  <button key={p.key} style={{ flex: 1, padding: '10px 8px', borderRadius: 8, border: aiSettings.type === p.key ? '1px solid #7B42F6' : '1px solid #2a2a3e', background: aiSettings.type === p.key ? '#7B42F622' : 'transparent', cursor: 'pointer', textAlign: 'left' }}
+                  <button key={p.key} className={aiSettings.type === p.key ? 'ui-choice-card is-active' : 'ui-choice-card'}
                     onClick={() => {
                       if (p.key === 'ollama') setAiSettings(s => ({ ...s, type: 'ollama', endpoint: 'http://localhost:11434', api_key: '' }));
                       else if (p.key === 'openai') setAiSettings(s => ({ ...s, type: 'openai', endpoint: 'https://api.openai.com/v1', model: 'gpt-4o' }));
                       else setAiSettings(s => ({ ...s, type: 'custom' }));
                     }}>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: aiSettings.type === p.key ? '#7B42F6' : '#aaa' }}>{p.label}</div>
-                    <div style={{ fontSize: 10, color: '#555', marginTop: 2 }}>{p.desc}</div>
+                    <div className="ui-choice-title">{p.label}</div>
+                    <div className="ui-choice-desc">{p.desc}</div>
                   </button>
                 ))}
               </div>
             </div>
 
             <div style={{ marginBottom: 12 }}>
-              <label style={S.flabel}>Endpoint</label>
-              <input style={S.finput} value={aiSettings.endpoint} onChange={e => setAiSettings(s => ({ ...s, endpoint: e.target.value }))}
+              <UILabel>Endpoint</UILabel>
+              <UIInput value={aiSettings.endpoint} onChange={e => setAiSettings(s => ({ ...s, endpoint: e.target.value }))}
                 placeholder={aiSettings.type === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'} />
             </div>
 
             <div style={{ marginBottom: 12 }}>
-              <label style={S.flabel}>Model</label>
-              <input style={S.finput} value={aiSettings.model} onChange={e => setAiSettings(s => ({ ...s, model: e.target.value }))}
+              <UILabel>Model</UILabel>
+              <UIInput value={aiSettings.model} onChange={e => setAiSettings(s => ({ ...s, model: e.target.value }))}
                 placeholder={aiSettings.type === 'ollama' ? 'gemma4' : 'gpt-4o'} />
             </div>
 
             {aiSettings.type !== 'ollama' && (
               <div style={{ marginBottom: 12 }}>
-                <label style={S.flabel}>API Key</label>
-                <input style={S.finput} type="password" value={aiSettings.api_key} onChange={e => setAiSettings(s => ({ ...s, api_key: e.target.value }))}
+                <UILabel>API Key</UILabel>
+                <UIInput type="password" value={aiSettings.api_key} onChange={e => setAiSettings(s => ({ ...s, api_key: e.target.value }))}
                   placeholder="sk-..." />
-                <div style={{ fontSize: 10, color: '#444', marginTop: 4 }}>Your key is sent to the backend only — never stored on disk or sent to third parties.</div>
+                <div className="ui-note ui-note--small" style={{ marginTop: 4 }}>Your key is sent to the backend only — never stored on disk or sent to third parties.</div>
               </div>
             )}
 
             <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-              <button style={{ flex: 1, padding: '10px 0', background: '#1a1a2e', border: '1px solid #2a2a3e', borderRadius: 8, color: '#888', cursor: 'pointer', fontSize: 12 }}
-                onClick={() => setShowSettings(false)}>Cancel</button>
-              <button style={{ flex: 1, padding: '10px 0', background: '#7B42F6', border: 'none', borderRadius: 8, color: '#fff', cursor: 'pointer', fontSize: 12, fontWeight: 600 }}
+              <UIButton block onClick={() => setShowSettings(false)}>Cancel</UIButton>
+              <UIButton block variant="primary"
                 onClick={async () => {
                   try {
                     await api.updateAISettings(aiSettings);
@@ -966,10 +970,10 @@ export default function App() {
                     setNotification(`Failed: ${e.message}`);
                     setTimeout(() => setNotification(null), 4000);
                   }
-                }}>Save</button>
+                }}>Save</UIButton>
             </div>
           </div>
-        </div>
+        </UIModal>
       )}
 
       <div style={S.main}>
@@ -993,9 +997,9 @@ export default function App() {
           {activePanel === 'palette' && (
             <>
               {/* Search */}
-              <div style={{ padding: '8px 10px', borderBottom: '1px solid #1a1a2e' }}>
+              <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-soft)' }}>
                 <input
-                  style={{ ...S.finput, fontSize: 12, padding: '6px 10px', background: '#0a0a14' }}
+                  style={{ ...S.finput, fontSize: 12, padding: '6px 10px', background: 'var(--bg-app)' }}
                   placeholder="Search resources..."
                   value={searchQuery}
                   onChange={e => setSearchQuery(e.target.value)}
@@ -1013,7 +1017,7 @@ export default function App() {
                     {filteredResources.filter((r: any) => r.category === cat).map((r: any) => (
                       <button key={r.type} style={S.palItem} onClick={() => addNode(r)}
                         onMouseEnter={e => {
-                          (e.currentTarget as any).style.background = '#1a1a2e';
+                          (e.currentTarget as any).style.background = 'var(--bg-elev-2)';
                           const rect = e.currentTarget.getBoundingClientRect();
                           setHoverPos({ x: rect.right + 8, y: rect.top });
                           setHoveredResource(r);
@@ -1039,9 +1043,9 @@ export default function App() {
           )}
           {activePanel === 'files' && (
             <div style={{ padding: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#bbb', marginBottom: 12, fontFamily: 'JetBrains Mono' }}>📁 {projectName}/</div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: '#bbb', marginBottom: 12, fontFamily: 'JetBrains Mono' }}>DIR {projectName}/</div>
               {['main' + ct.ext, 'variables' + ct.ext, 'outputs' + ct.ext, '.gitignore'].map(f => (
-                <div key={f} style={{ fontSize: 12, color: '#777', padding: '5px 0 5px 12px', fontFamily: 'JetBrains Mono', cursor: 'pointer' }}>📄 {f}</div>
+                <div key={f} style={{ fontSize: 12, color: '#777', padding: '5px 0 5px 12px', fontFamily: 'JetBrains Mono', cursor: 'pointer' }}>FILE {f}</div>
               ))}
               <div style={{ marginTop: 24, padding: 12, background: '#111122', borderRadius: 8, fontSize: 11, color: '#555', lineHeight: 1.6 }}>
                 Files sync to:<br /><code style={{ color: ct.color, fontFamily: 'JetBrains Mono' }}>~/{projectName}/</code>
@@ -1061,7 +1065,7 @@ export default function App() {
                   return (
                     <button key={s.type} style={{ ...S.palItem, flexDirection: 'column' as const, alignItems: 'flex-start', gap: 4, padding: '10px 16px' }}
                       onClick={() => meta && addNode(meta)}
-                      onMouseEnter={e => { (e.currentTarget as any).style.background = '#1a1a2e'; }}
+                      onMouseEnter={e => { (e.currentTarget as any).style.background = 'var(--bg-elev-2)'; }}
                       onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
                         <span>{meta?.icon ?? '📦'}</span>
@@ -1113,7 +1117,7 @@ export default function App() {
         {/* Sidebar resize handle */}
         <div style={{ width: 4, cursor: 'col-resize', background: resizing?.panel === 'sidebar' ? ct.color + '44' : 'transparent', flexShrink: 0, transition: 'background 0.15s' }}
           onMouseDown={e => setResizing({ panel: 'sidebar', startPos: e.clientX, startSize: sidebarWidth })}
-          onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = '#2a2a3e'; }}
+          onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = 'var(--border-main)'; }}
           onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
 
         {/* Canvas */}
@@ -1123,7 +1127,7 @@ export default function App() {
           if (connecting) setConnecting(null);
         }} onMouseLeave={() => { onMouseUp(null as any); setConnecting(null); }}
           onClick={() => { setSelectedNode(null); setSelectedEdge(null); }}>
-          <div style={S.grid} />
+          <div style={S.grid} className="iac-canvas-grid" />
 
           {/* SVG layer for connection lines */}
           <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 1 }}>
@@ -1180,7 +1184,7 @@ export default function App() {
 
           {nodes.length === 0 && (
             <div style={S.empty}>
-              <div style={{ fontSize: 48, opacity: 0.3, marginBottom: 16 }}>◇</div>
+              <div style={{ fontSize: 20, opacity: 0.5, marginBottom: 16, fontFamily: 'JetBrains Mono', letterSpacing: 1.5 }}>CANVAS</div>
               <div style={{ fontSize: 16, opacity: 0.4 }}>Drag resources from the palette</div>
               <div style={{ fontSize: 14, opacity: 0.3, marginTop: 4 }}>or use AI chat below</div>
             </div>
@@ -1189,9 +1193,9 @@ export default function App() {
             const nodeEdges = edges.filter(e => e.from === node.id || e.to === node.id);
             const hasConnections = nodeEdges.length > 0;
             return (
-            <div key={node.id}
+            <div key={node.id} className="node-shell"
               style={{ ...S.node, left: node.x, top: node.y, zIndex: 2,
-                borderColor: selectedNode === node.id ? ct.color : hasConnections ? `${ct.color}44` : '#2a2a3e',
+                borderColor: selectedNode === node.id ? ct.color : hasConnections ? `${ct.color}44` : 'var(--border-main)',
                 boxShadow: selectedNode === node.id ? `0 0 20px ${ct.color}33` : '0 4px 12px rgba(0,0,0,0.3)' }}
               onMouseDown={e => onMouseDown(e, node.id)}
               onClick={e => { e.stopPropagation(); setSelectedNode(node.id); setSelectedEdge(null); }}
@@ -1231,7 +1235,7 @@ export default function App() {
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 12px 8px' }}>
                 <span style={{ fontSize: 11, color: '#777', fontFamily: 'JetBrains Mono' }}>{node.name}</span>
                 {/* Connection port — drag from here to another node */}
-                <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${ct.color}55`, background: '#12121e',
+                <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${ct.color}55`, background: 'var(--bg-elev-2)',
                   cursor: 'crosshair', flexShrink: 0 }}
                   title="Drag to connect"
                   onMouseDown={e => {
@@ -1248,7 +1252,7 @@ export default function App() {
         {/* Right panel resize handle */}
         <div style={{ width: 4, cursor: 'col-resize', background: resizing?.panel === 'right' ? ct.color + '44' : 'transparent', flexShrink: 0, transition: 'background 0.15s' }}
           onMouseDown={e => setResizing({ panel: 'right', startPos: e.clientX, startSize: rightWidth })}
-          onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = '#2a2a3e'; }}
+          onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = 'var(--border-main)'; }}
           onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
         <aside style={{ ...S.right, width: rightWidth }}>
           {/* Selected edge info */}
@@ -1297,7 +1301,7 @@ export default function App() {
                 <div key={k} style={S.field}>
                   <label style={S.flabel}>{k}</label>
                   {typeof v === 'boolean' ? (
-                    <button style={{ ...S.ftoggle, background: v ? ct.color + '33' : '#1a1a2e', color: v ? ct.color : '#666' }}
+                      <button style={{ ...S.ftoggle, background: v ? ct.color + '33' : 'var(--bg-elev-2)', color: v ? ct.color : 'var(--text-muted)' }}
                       onClick={() => updateProp(selected.id, k, !v)}>
                       {v ? 'true' : 'false'}
                     </button>
@@ -1311,7 +1315,7 @@ export default function App() {
                 const nodeEdges = edges.filter(e => e.from === selected.id || e.to === selected.id);
                 if (nodeEdges.length === 0) return null;
                 return (
-                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid #1a1a2e' }}>
+                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border-soft)' }}>
                     <label style={S.flabel}>Connections ({nodeEdges.length})</label>
                     {nodeEdges.map(e => {
                       const other = nodes.find(n => n.id === (e.from === selected.id ? e.to : e.from));
@@ -1333,7 +1337,7 @@ export default function App() {
           )}
           <div style={S.codePanel}>
             <div style={S.codeHead}>
-              <span>📄 main{ct.ext}</span>
+              <span>FILE main{ct.ext}</span>
               <button style={{ ...S.copyBtn, color: ct.color }}
                 onClick={() => navigator.clipboard?.writeText(syncCode)}>Copy</button>
             </div>
@@ -1346,12 +1350,12 @@ export default function App() {
       {/* Bottom panel resize handle */}
       <div style={{ height: 4, cursor: 'row-resize', background: resizing?.panel === 'bottom' ? ct.color + '44' : 'transparent', flexShrink: 0, transition: 'background 0.15s' }}
         onMouseDown={e => setResizing({ panel: 'bottom', startPos: e.clientY, startSize: bottomHeight })}
-        onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = '#2a2a3e'; }}
+        onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = 'var(--border-main)'; }}
         onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
       <div style={{ ...S.bottom, height: bottomHeight }}>
         <div style={S.chat}>
           <div style={S.chatHead}>
-            <span style={{ fontSize: 14, color: '#7B42F6' }}>✦</span>
+            <span style={{ fontSize: 14, color: 'var(--accent-action)' }}>✦</span>
             <span>AI Assistant</span>
             <span style={S.chatBadge}>Ollama</span>
           </div>
@@ -1381,7 +1385,7 @@ export default function App() {
 
         <div style={S.term}>
           <div style={S.termHead}>
-            <span>⬛ Terminal</span>
+            <span>Terminal</span>
             <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
               {lastCmdError && (
                 <button style={{ background: '#ef444422', border: '1px solid #ef444444', borderRadius: 6, padding: '3px 10px', color: '#ef4444', fontSize: 10, cursor: 'pointer', fontFamily: 'JetBrains Mono', fontWeight: 600 }}
@@ -1461,7 +1465,7 @@ export default function App() {
       {hoveredResource && (
         <div style={{
           position: 'fixed', left: hoverPos.x, top: hoverPos.y,
-          background: '#16162a', border: '1px solid #2a2a4e', borderRadius: 10,
+          background: 'var(--bg-elev-2)', border: '1px solid var(--border-main)', borderRadius: 10,
           padding: '12px 16px', zIndex: 1000, maxWidth: 300, minWidth: 220,
           boxShadow: '0 8px 24px rgba(0,0,0,0.5)', pointerEvents: 'none',
           fontFamily: 'DM Sans',
@@ -1504,7 +1508,7 @@ export default function App() {
             </div>
           )}
           {hoveredResource.defaults && Object.keys(hoveredResource.defaults).length > 0 && (
-            <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid #1e1e30' }}>
+            <div style={{ marginTop: 6, paddingTop: 6, borderTop: '1px solid var(--border-soft)' }}>
               <div style={{ fontSize: 9, color: '#555', textTransform: 'uppercase', letterSpacing: 1, marginBottom: 4, fontFamily: 'JetBrains Mono' }}>Defaults</div>
               {Object.entries(hoveredResource.defaults).slice(0, 4).map(([k, v]) => (
                 <div key={k} style={{ fontSize: 10, color: '#666', fontFamily: 'JetBrains Mono', lineHeight: 1.5 }}>
@@ -1588,65 +1592,70 @@ function generateLocalCode(tool: string, nodes: any[], edges: Edge[]): string {
 
 // ─── Styles ───
 const S: Record<string, React.CSSProperties> = {
-  selectScreen: { width: '100vw', height: '100vh', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', background: '#08080e', position: 'relative', overflowY: 'auto' as const },
-  selectBg: { position: 'fixed', inset: 0, background: 'radial-gradient(ellipse at 50% 30%, #151530 0%, #08080e 70%)', pointerEvents: 'none' as const },
+  selectScreen: { width: '100vw', height: '100vh', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', background: 'var(--bg-app)', position: 'relative', overflowY: 'auto' as const },
+  selectBg: {
+    position: 'fixed',
+    inset: 0,
+    background: 'var(--bg-app)',
+    pointerEvents: 'none' as const,
+  },
   selectContent: { position: 'relative', zIndex: 1, textAlign: 'center', padding: '40px 40px 60px', marginTop: 40 },
   logo: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 32 },
-  logoText: { fontSize: 22, fontWeight: 700, color: '#e0e0f0', fontFamily: 'JetBrains Mono', letterSpacing: 1 },
-  title: { fontSize: 36, fontWeight: 700, color: '#e8e8f0', margin: '0 0 12px', letterSpacing: -0.5 },
-  subtitle: { fontSize: 16, color: '#666680', margin: '0 0 40px' },
+  logoText: { fontSize: 22, fontWeight: 700, color: 'var(--text-main)', fontFamily: 'JetBrains Mono', letterSpacing: 1 },
+  title: { fontSize: 38, fontWeight: 700, color: 'var(--text-main)', margin: '0 0 12px', letterSpacing: -0.4, fontFamily: 'Space Grotesk' },
+  subtitle: { fontSize: 16, color: 'var(--text-muted)', margin: '0 0 40px' },
   cardGrid: { display: 'flex', gap: 20, justifyContent: 'center', marginBottom: 48 },
-  card: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 12, padding: '32px 40px', background: '#0d0d18', border: '1.5px solid', borderRadius: 16, cursor: 'pointer', transition: 'all 0.3s', fontFamily: 'DM Sans' },
+  card: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 12, padding: '32px 40px', background: 'var(--bg-elev-1)', border: '1.5px solid', borderRadius: 16, cursor: 'pointer', transition: 'all 0.3s', fontFamily: 'DM Sans' },
   features: { display: 'flex', gap: 24, justifyContent: 'center', flexWrap: 'wrap' as const },
 
-  app: { width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' as const, background: '#0a0a12', overflow: 'hidden', position: 'relative' as const },
-  notification: { position: 'absolute' as const, top: 60, left: '50%', transform: 'translateX(-50%)', zIndex: 100, background: '#1a1a2e', border: '1px solid #3a3a5e', borderRadius: 8, padding: '8px 20px', fontSize: 12, color: '#ddd', fontFamily: 'JetBrains Mono' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 16px', height: 52, borderBottom: '1px solid', flexShrink: 0, background: '#0d0d16' },
+  app: { width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' as const, background: 'var(--bg-app)', overflow: 'hidden', position: 'relative' as const },
+  notification: { position: 'absolute' as const, top: 60, left: '50%', transform: 'translateX(-50%)', zIndex: 100, background: 'var(--bg-elev-2)', border: '1px solid var(--border-main)', borderRadius: 8, padding: '8px 20px', fontSize: 12, color: 'var(--text-main)', fontFamily: 'JetBrains Mono' },
+  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 16px', height: 52, borderBottom: '1px solid', flexShrink: 0, background: 'rgba(21, 25, 24, 0.8)' },
   hLeft: { display: 'flex', alignItems: 'center', gap: 12 },
   hRight: { display: 'flex', alignItems: 'center', gap: 8 },
-  backBtn: { background: 'none', border: '1px solid #2a2a3e', color: '#888', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 16, fontFamily: 'DM Sans' },
+  backBtn: { background: 'none', border: '1px solid var(--border-main)', color: 'var(--text-muted)', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 16, fontFamily: 'DM Sans' },
   badge: { padding: '4px 12px', borderRadius: 20, fontSize: 13, fontWeight: 600, fontFamily: 'JetBrains Mono' },
-  projInput: { background: 'transparent', border: 'none', color: '#d0d0e0', fontSize: 14, fontFamily: 'JetBrains Mono', fontWeight: 500, outline: 'none', width: 180 },
-  count: { fontSize: 12, color: '#666', fontFamily: 'JetBrains Mono', marginRight: 8 },
+  projInput: { background: 'transparent', border: 'none', color: 'var(--text-main)', fontSize: 14, fontFamily: 'JetBrains Mono', fontWeight: 500, outline: 'none', width: 180 },
+  count: { fontSize: 12, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', marginRight: 8 },
   cmd: { border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'JetBrains Mono', transition: 'all 0.2s' },
 
   main: { display: 'flex', flex: 1, minHeight: 0 },
-  sidebar: { width: 240, borderRight: '1px solid #1a1a2e', display: 'flex', flexDirection: 'column' as const, background: '#0c0c16', flexShrink: 0 },
-  tabs: { display: 'flex', borderBottom: '1px solid #1a1a2e' },
-  tab: { flex: 1, padding: '10px 0', background: 'none', border: 'none', borderBottom: '2px solid transparent', color: '#666', cursor: 'pointer', fontSize: 12, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' as const, transition: 'all 0.2s', fontFamily: 'DM Sans' },
+  sidebar: { width: 240, borderRight: '1px solid var(--border-soft)', display: 'flex', flexDirection: 'column' as const, background: 'var(--bg-elev-1)', flexShrink: 0 },
+  tabs: { display: 'flex', borderBottom: '1px solid var(--border-soft)' },
+  tab: { flex: 1, padding: '10px 0', background: 'none', border: 'none', borderBottom: '2px solid transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' as const, transition: 'all 0.2s', fontFamily: 'DM Sans' },
   palScroll: { flex: 1, overflowY: 'auto' as const, padding: '8px 0' },
   catTitle: { fontSize: 10, fontWeight: 700, color: '#444', textTransform: 'uppercase' as const, letterSpacing: 1.2, padding: '8px 16px 4px', fontFamily: 'JetBrains Mono' },
   palItem: { display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '8px 16px', background: 'transparent', border: 'none', color: '#bbb', cursor: 'pointer', fontSize: 13, fontFamily: 'DM Sans', textAlign: 'left' as const, transition: 'background 0.15s' },
 
   canvas: { flex: 1, position: 'relative' as const, overflow: 'hidden', cursor: 'default' },
-  grid: { position: 'absolute' as const, inset: 0, backgroundImage: 'radial-gradient(circle, #1a1a2e 1px, transparent 1px)', backgroundSize: '24px 24px', opacity: 0.5 },
+  grid: { position: 'absolute' as const, inset: 0, backgroundImage: 'radial-gradient(circle, rgba(217, 226, 220, 0.03) 1px, transparent 1px)', backgroundSize: '24px 24px', opacity: 0.5 },
   empty: { position: 'absolute' as const, top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center' as const, color: '#555' },
-  node: { position: 'absolute' as const, width: 180, background: '#12121e', border: '1.5px solid', borderRadius: 12, cursor: 'grab', userSelect: 'none' as const, transition: 'border-color 0.2s, box-shadow 0.2s' },
+  node: { position: 'absolute' as const, width: 180, background: 'var(--bg-elev-2)', border: '1.5px solid', borderRadius: 12, cursor: 'grab', userSelect: 'none' as const, transition: 'border-color 0.2s, box-shadow 0.2s' },
   nodeHead: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 4px' },
   nodeDel: { background: 'none', border: 'none', color: '#555', fontSize: 18, cursor: 'pointer', padding: 0, lineHeight: 1 },
 
-  right: { width: 300, borderLeft: '1px solid #1a1a2e', display: 'flex', flexDirection: 'column' as const, background: '#0c0c16', flexShrink: 0 },
-  props: { borderBottom: '1px solid #1a1a2e', padding: 16, maxHeight: '40%', overflowY: 'auto' as const },
+  right: { width: 300, borderLeft: '1px solid var(--border-soft)', display: 'flex', flexDirection: 'column' as const, background: 'var(--bg-elev-1)', flexShrink: 0 },
+  props: { borderBottom: '1px solid var(--border-soft)', padding: 16, maxHeight: '40%', overflowY: 'auto' as const },
   field: { marginBottom: 10 },
-  flabel: { fontSize: 10, color: '#555', display: 'block', marginBottom: 4, fontFamily: 'JetBrains Mono', textTransform: 'uppercase' as const, letterSpacing: 0.5 },
-  finput: { width: '100%', padding: '6px 10px', background: '#111120', border: '1px solid #1e1e30', borderRadius: 6, color: '#ccc', fontSize: 12, fontFamily: 'JetBrains Mono', outline: 'none', boxSizing: 'border-box' as const },
-  ftoggle: { padding: '5px 12px', borderRadius: 6, border: '1px solid #1e1e30', cursor: 'pointer', fontSize: 12, fontFamily: 'JetBrains Mono', fontWeight: 500, width: '100%' },
+  flabel: { fontSize: 10, color: 'var(--text-muted)', display: 'block', marginBottom: 4, fontFamily: 'JetBrains Mono', textTransform: 'uppercase' as const, letterSpacing: 0.5 },
+  finput: { width: '100%', padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--border-main)', borderRadius: 6, color: 'var(--text-main)', fontSize: 12, fontFamily: 'JetBrains Mono', outline: 'none', boxSizing: 'border-box' as const },
+  ftoggle: { padding: '5px 12px', borderRadius: 6, border: '1px solid var(--border-main)', cursor: 'pointer', fontSize: 12, fontFamily: 'JetBrains Mono', fontWeight: 500, width: '100%' },
   codePanel: { flex: 1, display: 'flex', flexDirection: 'column' as const, minHeight: 0 },
-  codeHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', fontSize: 12, fontWeight: 600, color: '#777', borderBottom: '1px solid #1a1a2e', fontFamily: 'JetBrains Mono' },
+  codeHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-soft)', fontFamily: 'JetBrains Mono' },
   copyBtn: { background: 'none', border: 'none', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono', fontWeight: 600 },
   codePre: { flex: 1, margin: 0, padding: 16, fontSize: 11, lineHeight: 1.7, color: '#8888aa', fontFamily: 'JetBrains Mono', overflowY: 'auto' as const },
 
-  bottom: { display: 'flex', height: 220, borderTop: '1px solid #1a1a2e', flexShrink: 0 },
-  chat: { flex: 1, display: 'flex', flexDirection: 'column' as const, borderRight: '1px solid #1a1a2e' },
-  chatHead: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', fontSize: 12, fontWeight: 600, color: '#aaa', borderBottom: '1px solid #1a1a2e', background: '#0c0c16' },
-  chatBadge: { fontSize: 9, background: '#1a1a2e', padding: '2px 8px', borderRadius: 10, color: '#666', marginLeft: 'auto', fontFamily: 'JetBrains Mono' },
+  bottom: { display: 'flex', height: 220, borderTop: '1px solid var(--border-soft)', flexShrink: 0 },
+  chat: { flex: 1, display: 'flex', flexDirection: 'column' as const, borderRight: '1px solid var(--border-soft)' },
+  chatHead: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text-main)', borderBottom: '1px solid var(--border-soft)', background: 'var(--bg-elev-1)' },
+  chatBadge: { fontSize: 9, background: 'var(--bg-elev-3)', padding: '2px 8px', borderRadius: 10, color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'JetBrains Mono' },
   chatMsgs: { flex: 1, overflowY: 'auto' as const, padding: '8px 16px' },
-  chatInputRow: { display: 'flex', gap: 8, padding: '8px 16px', borderTop: '1px solid #1a1a2e', background: '#0c0c16' },
-  chatInput: { flex: 1, padding: '8px 12px', background: '#111120', border: '1px solid #1e1e30', borderRadius: 8, color: '#ccc', fontSize: 13, fontFamily: 'DM Sans', outline: 'none' },
+  chatInputRow: { display: 'flex', gap: 8, padding: '8px 16px', borderTop: '1px solid var(--border-soft)', background: 'var(--bg-elev-1)' },
+  chatInput: { flex: 1, padding: '8px 12px', background: 'var(--bg-elev-2)', border: '1px solid var(--border-main)', borderRadius: 8, color: 'var(--text-main)', fontSize: 13, fontFamily: 'DM Sans', outline: 'none' },
   chatSend: { width: 36, height: 36, borderRadius: 8, border: 'none', color: '#000', fontSize: 16, fontWeight: 700, cursor: 'pointer' },
 
   term: { width: 380, display: 'flex', flexDirection: 'column' as const, background: '#09090f', flexShrink: 0 },
-  termHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 16px', fontSize: 12, fontWeight: 600, color: '#666', borderBottom: '1px solid #1a1a2e' },
+  termHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-soft)' },
   termClear: { background: 'none', border: 'none', color: '#444', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono' },
   termContent: { flex: 1, padding: '8px 16px', fontSize: 11, fontFamily: 'JetBrains Mono', lineHeight: 1.8, overflowY: 'auto' as const },
 };
