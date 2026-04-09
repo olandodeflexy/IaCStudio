@@ -29,6 +29,7 @@ cmd/server/frontend/dist/assets/
 .github/prompts/
 .github/agents/
 .github/skills/
+API.md
 AGENTS.md
 *.instructions.md
 *.prompt.md
