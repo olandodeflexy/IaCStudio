@@ -23,6 +23,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/project"
 	"github.com/iac-studio/iac-studio/internal/runner"
+	"github.com/iac-studio/iac-studio/internal/scaffold"
 	"github.com/iac-studio/iac-studio/internal/security"
 	"github.com/iac-studio/iac-studio/internal/watcher"
 )
@@ -175,6 +176,92 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			"name": req.Name,
 			"path": projectPath,
 			"tool": req.Tool,
+		})
+	})
+
+	// List registered blueprints (opinionated project layouts).
+	// See internal/scaffold for the Blueprint interface and bundled blueprints.
+	mux.HandleFunc("GET /api/blueprints", func(w http.ResponseWriter, r *http.Request) {
+		type bpView struct {
+			ID          string           `json:"id"`
+			Name        string           `json:"name"`
+			Description string           `json:"description"`
+			Tool        string           `json:"tool"`
+			Inputs      []scaffold.Input `json:"inputs"`
+		}
+		list := scaffold.Default.List()
+		out := make([]bpView, 0, len(list))
+		for _, bp := range list {
+			out = append(out, bpView{
+				ID:          bp.ID(),
+				Name:        bp.Name(),
+				Description: bp.Description(),
+				Tool:        bp.Tool(),
+				Inputs:      bp.Inputs(),
+			})
+		}
+		json.NewEncoder(w).Encode(out)
+	})
+
+	// Render a blueprint into a new project directory.
+	// Body: {"name": "...", "values": {...blueprint-specific inputs...}}
+	// The "name" doubles as the project directory name; "values.project_name"
+	// is auto-filled from "name" when not explicitly set.
+	mux.HandleFunc("POST /api/blueprints/{id}/render", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		id := r.PathValue("id")
+		bp, ok := scaffold.Default.Get(id)
+		if !ok {
+			http.Error(w, "unknown blueprint: "+id, 404)
+			return
+		}
+		var req struct {
+			Name   string         `json:"name"`
+			Values map[string]any `json:"values"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		if req.Values == nil {
+			req.Values = map[string]any{}
+		}
+		if _, has := req.Values["project_name"]; !has {
+			req.Values["project_name"] = req.Name
+		}
+
+		projectPath, err := safeProjectPath(projectsDir, req.Name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := os.MkdirAll(projectPath, 0755); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+
+		files, err := bp.Render(req.Values)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := scaffold.Write(projectPath, files); err != nil {
+			http.Error(w, err.Error(), 409)
+			return
+		}
+
+		fw.Watch(projectPath)
+
+		paths := make([]string, len(files))
+		for i, f := range files {
+			paths[i] = f.Path
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"name":      req.Name,
+			"path":      projectPath,
+			"blueprint": bp.ID(),
+			"tool":      bp.Tool(),
+			"files":     paths,
 		})
 	})
 

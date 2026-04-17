@@ -1,0 +1,152 @@
+// Package scaffold renders opinionated project layouts (blueprints) onto disk.
+//
+// A Blueprint declares a set of input fields and a Render function that turns
+// those inputs into a map of relative file paths → file contents. The scaffold
+// package writes that map atomically, respecting script-executable bits and
+// creating any missing directories along the way.
+//
+// Blueprints are registered in a Registry at package init time. The API layer
+// asks the Registry for the list of available blueprints, shows inputs to the
+// user, then calls Render with the resolved input values.
+package scaffold
+
+import (
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"strings"
+)
+
+// Input describes a single user-supplied value a Blueprint needs to render.
+type Input struct {
+	Key         string   `json:"key"`
+	Label       string   `json:"label"`
+	Description string   `json:"description,omitempty"`
+	Type        string   `json:"type"` // "string" | "bool" | "select" | "multiselect"
+	Default     any      `json:"default,omitempty"`
+	Options     []string `json:"options,omitempty"`
+	Required    bool     `json:"required,omitempty"`
+}
+
+// File is the rendered content of a single path. Executable is honored for
+// shell scripts and similar.
+type File struct {
+	Path       string
+	Content    []byte
+	Executable bool
+}
+
+// Blueprint is an opinionated project layout generator.
+type Blueprint interface {
+	ID() string
+	Name() string
+	Description() string
+	Tool() string    // "terraform" | "pulumi" | "ansible" | "multi"
+	Inputs() []Input // static declaration of expected inputs
+	Render(values map[string]any) ([]File, error)
+}
+
+// Registry holds registered blueprints, keyed by ID.
+type Registry struct {
+	blueprints map[string]Blueprint
+}
+
+// NewRegistry returns an empty registry.
+func NewRegistry() *Registry {
+	return &Registry{blueprints: make(map[string]Blueprint)}
+}
+
+// Register adds a blueprint. Later registrations with the same ID replace earlier ones.
+func (r *Registry) Register(bp Blueprint) {
+	r.blueprints[bp.ID()] = bp
+}
+
+// Get returns a blueprint by ID.
+func (r *Registry) Get(id string) (Blueprint, bool) {
+	bp, ok := r.blueprints[id]
+	return bp, ok
+}
+
+// List returns all registered blueprints, sorted by ID for stable output.
+func (r *Registry) List() []Blueprint {
+	out := make([]Blueprint, 0, len(r.blueprints))
+	for _, bp := range r.blueprints {
+		out = append(out, bp)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID() < out[j].ID() })
+	return out
+}
+
+// Default is the package-level registry populated by init() in blueprint files.
+var Default = NewRegistry()
+
+// Write materializes a rendered blueprint onto disk under root.
+//
+// Existing files are NOT overwritten; Write returns an error listing the
+// conflicting paths so callers can surface them to the user. This avoids
+// clobbering in-progress user work when scaffolding into a non-empty directory.
+func Write(root string, files []File) error {
+	var conflicts []string
+	for _, f := range files {
+		full := filepath.Join(root, f.Path)
+		if _, err := os.Stat(full); err == nil {
+			conflicts = append(conflicts, f.Path)
+		}
+	}
+	if len(conflicts) > 0 {
+		return fmt.Errorf("refusing to overwrite existing files: %s", strings.Join(conflicts, ", "))
+	}
+
+	for _, f := range files {
+		full := filepath.Join(root, f.Path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(full), err)
+		}
+		mode := os.FileMode(0o644)
+		if f.Executable {
+			mode = 0o755
+		}
+		if err := os.WriteFile(full, f.Content, mode); err != nil {
+			return fmt.Errorf("write %s: %w", f.Path, err)
+		}
+	}
+	return nil
+}
+
+// stringInput fetches a string input with a default fallback.
+func stringInput(values map[string]any, key, fallback string) string {
+	if v, ok := values[key]; ok {
+		if s, ok := v.(string); ok && s != "" {
+			return s
+		}
+	}
+	return fallback
+}
+
+// stringSliceInput fetches a []string, accepting []any (JSON decoded) or []string.
+func stringSliceInput(values map[string]any, key string, fallback []string) []string {
+	v, ok := values[key]
+	if !ok {
+		return fallback
+	}
+	switch t := v.(type) {
+	case []string:
+		if len(t) == 0 {
+			return fallback
+		}
+		return t
+	case []any:
+		out := make([]string, 0, len(t))
+		for _, e := range t {
+			if s, ok := e.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		if len(out) == 0 {
+			return fallback
+		}
+		return out
+	}
+	return fallback
+}
