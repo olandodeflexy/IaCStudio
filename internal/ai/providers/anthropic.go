@@ -19,10 +19,8 @@ import (
 //   - the system prompt is a top-level "system" field, not a message with role;
 //   - the anthropic-version header is required;
 //   - response content is an array of blocks (we only use the first text block today);
-//   - max_tokens is required, not optional.
-//
-// Prompt caching (cache_control on the system prompt) arrives in a later
-// commit — this one is just feature-parity with the other providers.
+//   - max_tokens is required, not optional;
+//   - prompt caching is supported via cache_control on the top-level system field.
 type anthropicProvider struct {
 	endpoint   string
 	model      string
