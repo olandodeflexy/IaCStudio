@@ -480,6 +480,8 @@ export default function App() {
     api.suggest(tool, provider, canvas).then(setSuggestions).catch(() => {});
   }, [nodes, tool, detectProvider]);
 
+  const aiIndexRef = useRef<number>(-1);
+
   const handleChat = async () => {
     if (!chatInput.trim() || !tool) return;
     const input = chatInput;
@@ -488,12 +490,13 @@ export default function App() {
     // by the streaming deltas below. Tracking the assistant turn's index lets
     // us patch just that one entry as tokens arrive without re-rendering the
     // whole message list each time.
-    let aiIndex = -1;
-    setChatMessages(prev => {
-      const next = [...prev, { role: 'user' as const, text: input }, { role: 'ai' as const, text: '' }];
-      aiIndex = next.length - 1;
-      return next;
-    });
+    const nextAiIndex = chatMessages.length + 1;
+    aiIndexRef.current = nextAiIndex;
+    setChatMessages(prev => [
+      ...prev,
+      { role: 'user' as const, text: input },
+      { role: 'ai' as const, text: '' },
+    ]);
     setChatLoading(true);
 
     try {
@@ -508,9 +511,10 @@ export default function App() {
           // the final JSON in the "complete" event, so we still get clean
           // message + resources at the end — this just shows progress.
           setChatMessages(prev => {
-            if (aiIndex < 0 || aiIndex >= prev.length) return prev;
+            const currentAiIndex = aiIndexRef.current;
+            if (currentAiIndex < 0 || currentAiIndex >= prev.length) return prev;
             const next = [...prev];
-            next[aiIndex] = { ...next[aiIndex], text: next[aiIndex].text + delta };
+            next[currentAiIndex] = { ...next[currentAiIndex], text: next[currentAiIndex].text + delta };
             return next;
           });
         },
@@ -518,9 +522,10 @@ export default function App() {
 
       // Replace the streamed raw text with the parsed clean message.
       setChatMessages(prev => {
-        if (aiIndex < 0 || aiIndex >= prev.length) return prev;
+        const currentAiIndex = aiIndexRef.current;
+        if (currentAiIndex < 0 || currentAiIndex >= prev.length) return prev;
         const next = [...prev];
-        next[aiIndex] = { ...next[aiIndex], text: result.message };
+        next[currentAiIndex] = { ...next[currentAiIndex], text: result.message };
         return next;
       });
       if (result.suggestions) setSuggestions(result.suggestions);
@@ -537,9 +542,10 @@ export default function App() {
       }
     } catch {
       setChatMessages(prev => {
-        if (aiIndex < 0 || aiIndex >= prev.length) return prev;
+        const currentAiIndex = aiIndexRef.current;
+        if (currentAiIndex < 0 || currentAiIndex >= prev.length) return prev;
         const next = [...prev];
-        next[aiIndex] = { ...next[aiIndex], text: 'AI is unavailable. Make sure your provider is reachable.' };
+        next[currentAiIndex] = { ...next[currentAiIndex], text: 'AI is unavailable. Make sure your provider is reachable.' };
         return next;
       });
     }
