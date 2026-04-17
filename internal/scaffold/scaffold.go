@@ -2,7 +2,7 @@
 //
 // A Blueprint declares a set of input fields and a Render function that turns
 // those inputs into a map of relative file paths → file contents. The scaffold
-// package writes that map atomically, respecting script-executable bits and
+// package writes those files to disk, respecting script-executable bits and
 // creating any missing directories along the way.
 //
 // Blueprints are registered in a Registry at package init time. The API layer
