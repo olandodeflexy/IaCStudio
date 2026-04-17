@@ -8,9 +8,10 @@ import (
 )
 
 // TestLayeredTerraformPassesTerraformFmt renders the blueprint to a temp dir
-// and shells out to `terraform fmt -check -recursive`. If terraform isn't on
-// PATH (e.g. CI without the binary) the test is skipped rather than failing,
-// so it stays opt-in for contributor machines that have terraform installed.
+// and shells out to `terraform fmt -recursive -diff <temp dir>`. If terraform
+// isn't on PATH (e.g. CI without the binary) the test is skipped rather than
+// failing, so it stays opt-in for contributor machines that have terraform
+// installed.
 func TestLayeredTerraformPassesTerraformFmt(t *testing.T) {
 	if _, err := exec.LookPath("terraform"); err != nil {
 		t.Skip("terraform not on PATH; skipping fmt check")
