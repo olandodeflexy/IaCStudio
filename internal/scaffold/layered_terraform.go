@@ -157,8 +157,9 @@ Thumbs.db
 	}
 	studioMetaBytes, err := json.MarshalIndent(metaObj, "", "  ")
 	if err != nil {
-		// This should never happen with plain string fields; surface it clearly.
-		panic(fmt.Sprintf("scaffold: failed to marshal .iac-studio.json: %v", err))
+		// Unreachable: all fields are plain strings/slices with no custom marshalers.
+		// If triggered, it indicates a programming error or data corruption — please file a bug.
+		panic(fmt.Sprintf("scaffold: failed to marshal .iac-studio.json (this is a bug, please report it): %v", err))
 	}
 	studioMeta := string(studioMetaBytes) + "\n"
 
