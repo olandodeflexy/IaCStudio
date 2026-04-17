@@ -31,6 +31,7 @@ type promptEntry struct {
 	ID          string
 	Description string
 	Template    *template.Template
+	SourcePath  string
 }
 
 // promptSet is loaded once at package init and read-only thereafter.
@@ -52,6 +53,10 @@ func loadPrompts() map[string]*promptEntry {
 		entry, err := parsePrompt(path, raw)
 		if err != nil {
 			return fmt.Errorf("%s: %w", path, err)
+		}
+		entry.SourcePath = path
+		if existing, ok := out[entry.ID]; ok {
+			return fmt.Errorf("duplicate prompt id %q in %s and %s", entry.ID, existing.SourcePath, path)
 		}
 		out[entry.ID] = entry
 		return nil
