@@ -1,180 +1,135 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
+	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/parser"
 )
 
-// OllamaClient communicates with a local Ollama instance or OpenAI-compatible API.
-type OllamaClient struct {
-	endpoint string
-	model    string
-	apiKey   string // if set, uses OpenAI-compatible API instead of Ollama
-	client   *http.Client
+// defaultTemperature and defaultMaxTokens are the sampling knobs used for all
+// IaC-generation calls. Low temperature keeps output structured and JSON-
+// friendly; max_tokens is high enough to cover multi-resource topologies.
+const (
+	defaultTemperature = 0.3
+	defaultMaxTokens   = 4096
+)
+
+// Client is the high-level AI bridge. It holds a configured Provider and
+// exposes IaC-specific operations (chat, fix, topology). All LLM wire-format
+// concerns live in the providers package.
+type Client struct {
+	cfg      providers.Config
+	provider providers.Provider
+	// providerErr is retained if New returned an error so callers hitting the
+	// bridge can fall back to deterministic heuristics (PatternMatch) instead
+	// of crashing; every method checks it before attempting a call.
+	providerErr error
 }
 
-// ProviderConfig holds configuration for an AI provider.
+// ProviderConfig is the JSON-friendly view of the currently-configured
+// provider returned by /api/ai/settings. The APIKey field is masked on read.
 type ProviderConfig struct {
 	Type     string `json:"type"`     // "ollama" | "openai" | "anthropic"
 	Endpoint string `json:"endpoint"` // API endpoint URL
 	Model    string `json:"model"`    // model name
-	APIKey   string `json:"api_key"`  // API key (for cloud providers)
+	APIKey   string `json:"api_key"`  // masked on read, full on write
 }
 
-func NewOllamaClient(endpoint, model string) *OllamaClient {
-	return &OllamaClient{
-		endpoint: endpoint,
-		model:    model,
-		client:   &http.Client{Timeout: 5 * time.Minute}, // Increased for large models
+// NewClient builds a Client wired to a local Ollama instance by default.
+// Use UpdateConfig at runtime to switch providers or supply an API key.
+func NewClient(endpoint, model string) *Client {
+	c := &Client{}
+	c.applyConfig(providers.Config{
+		Kind:     providers.KindOllama,
+		Endpoint: endpoint,
+		Model:    model,
+		Timeout:  5 * time.Minute,
+	})
+	return c
+}
+
+// UpdateConfig swaps the active provider. Kind is inferred from credentials
+// when not supplied — a non-empty APIKey implies OpenAI-compatible, empty
+// implies Ollama. The router validates kind strings before calling so the
+// user sees a meaningful error for unsupported backends.
+func (c *Client) UpdateConfig(endpoint, model, apiKey string) {
+	cfg := c.cfg
+	cfg.Endpoint = endpoint
+	cfg.Model = model
+	cfg.APIKey = apiKey
+	// Reset inferred kind so the factory re-detects based on apiKey.
+	cfg.Kind = ""
+	c.applyConfig(cfg)
+}
+
+// UpdateConfigKind is a typed variant of UpdateConfig for callers (the router)
+// that know the Kind explicitly — e.g. when the user picks "anthropic" in the
+// UI even though they have an OpenAI-compatible key string format.
+func (c *Client) UpdateConfigKind(kind providers.Kind, endpoint, model, apiKey string) {
+	c.applyConfig(providers.Config{
+		Kind:     kind,
+		Endpoint: endpoint,
+		Model:    model,
+		APIKey:   apiKey,
+		Timeout:  c.cfg.Timeout,
+	})
+}
+
+func (c *Client) applyConfig(cfg providers.Config) {
+	if cfg.Timeout == 0 {
+		cfg.Timeout = 5 * time.Minute
 	}
+	c.cfg = cfg
+	p, err := providers.New(cfg)
+	c.provider = p
+	c.providerErr = err
 }
 
-// UpdateConfig allows changing the model/endpoint/key at runtime.
-func (c *OllamaClient) UpdateConfig(endpoint, model, apiKey string) {
-	c.endpoint = endpoint
-	c.model = model
-	c.apiKey = apiKey
-}
-
-// GetConfig returns the current configuration (key is masked).
-func (c *OllamaClient) GetConfig() ProviderConfig {
-	provType := "ollama"
-	if c.apiKey != "" {
-		provType = "openai"
-	}
-	maskedKey := ""
-	if c.apiKey != "" {
-		maskedKey = c.apiKey[:4] + "..." + c.apiKey[len(c.apiKey)-4:]
+// GetConfig returns the current provider config with the API key masked.
+func (c *Client) GetConfig() ProviderConfig {
+	kind := c.cfg.Kind
+	if kind == "" {
+		kind = providers.KindOllama
 	}
 	return ProviderConfig{
-		Type:     provType,
-		Endpoint: c.endpoint,
-		Model:    c.model,
-		APIKey:   maskedKey,
+		Type:     string(kind),
+		Endpoint: c.cfg.Endpoint,
+		Model:    c.cfg.Model,
+		APIKey:   maskKey(c.cfg.APIKey),
 	}
 }
 
-type ollamaRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
-	Format string `json:"format"`
+// maskKey keeps the first and last four characters of an API key so users can
+// verify which credential is live without exposing the full token.
+func maskKey(k string) string {
+	if k == "" {
+		return ""
+	}
+	if len(k) < 8 {
+		return "***"
+	}
+	return k[:4] + "..." + k[len(k)-4:]
 }
 
-type ollamaResponse struct {
-	Response string `json:"response"`
-}
-
-// OpenAI-compatible request/response for external providers
-type openAIRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openAIMessage `json:"messages"`
-	Temperature float64         `json:"temperature,omitempty"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-}
-
-type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type openAIResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
-// callLLM sends a prompt to the configured LLM and returns the raw response text.
-// Supports both Ollama and OpenAI-compatible APIs.
-func (c *OllamaClient) callLLM(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	if c.apiKey != "" {
-		return c.callOpenAI(ctx, systemPrompt, userPrompt)
+// callLLM is the single internal chokepoint for every IaC-generation method
+// on Client. It attaches the shared sampling knobs, delegates to the active
+// Provider, and normalises error shapes.
+func (c *Client) callLLM(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	if c.providerErr != nil {
+		return "", c.providerErr
 	}
-	return c.callOllama(ctx, systemPrompt+"\n\n"+userPrompt)
-}
-
-func (c *OllamaClient) callOllama(ctx context.Context, prompt string) (string, error) {
-	reqBody := ollamaRequest{
-		Model:  c.model,
-		Prompt: prompt,
-		Stream: false,
-		Format: "json",
-	}
-	body, _ := json.Marshal(reqBody)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/api/generate", bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("ollama unavailable: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var ollamaResp ollamaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return "", err
-	}
-	return ollamaResp.Response, nil
-}
-
-func (c *OllamaClient) callOpenAI(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	reqBody := openAIRequest{
-		Model: c.model,
-		Messages: []openAIMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
-		},
-		Temperature: 0.3,
-		MaxTokens:   4096,
-	}
-	body, _ := json.Marshal(reqBody)
-
-	endpoint := c.endpoint
-	if !strings.HasSuffix(endpoint, "/chat/completions") {
-		endpoint = strings.TrimSuffix(endpoint, "/") + "/chat/completions"
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("API unavailable: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var openAIResp openAIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&openAIResp); err != nil {
-		return "", err
-	}
-
-	if openAIResp.Error != nil {
-		return "", fmt.Errorf("API error: %s", openAIResp.Error.Message)
-	}
-
-	if len(openAIResp.Choices) == 0 {
-		return "", fmt.Errorf("no response from API")
-	}
-	return openAIResp.Choices[0].Message.Content, nil
+	return c.provider.Complete(ctx, providers.Request{
+		System:      systemPrompt,
+		User:        userPrompt,
+		Temperature: defaultTemperature,
+		MaxTokens:   defaultMaxTokens,
+		JSONMode:    true,
+	})
 }
 
 // ChatMessage represents one message in a conversation.
@@ -200,7 +155,7 @@ type CanvasResource struct {
 
 // GenerateIaC sends a natural language request to the configured LLM with
 // full conversation context, provider awareness, and canvas state.
-func (c *OllamaClient) GenerateIaC(ctx context.Context, req ChatRequest) (string, []parser.Resource, error) {
+func (c *Client) GenerateIaC(ctx context.Context, req ChatRequest) (string, []parser.Resource, error) {
 	systemPrompt := buildSystemPrompt(req.Tool, req.Provider, req.Canvas)
 
 	// Build user prompt with conversation context
@@ -259,7 +214,7 @@ type ResourceFix struct {
 }
 
 // AnalyzePlanOutput sends terraform plan/apply output to the AI for diagnosis and fix suggestions.
-func (c *OllamaClient) AnalyzePlanOutput(ctx context.Context, req PlanFixRequest) (*PlanFix, error) {
+func (c *Client) AnalyzePlanOutput(ctx context.Context, req PlanFixRequest) (*PlanFix, error) {
 	output := req.Output
 	if len(output) > 4000 {
 		output = output[:2000] + "\n\n... (truncated) ...\n\n" + output[len(output)-2000:]
@@ -371,7 +326,7 @@ type TopologyRequest struct {
 // GenerateTopology takes a free-text architecture description and generates
 // a full set of resources with connections. This is the "describe your
 // infrastructure and we'll build it" feature.
-func (c *OllamaClient) GenerateTopology(ctx context.Context, req TopologyRequest) (string, []parser.Resource, error) {
+func (c *Client) GenerateTopology(ctx context.Context, req TopologyRequest) (string, []parser.Resource, error) {
 	providerGuide := buildProviderGuide(req.Tool, req.Provider)
 
 	systemPrompt := fmt.Sprintf(`You are an expert Infrastructure as Code architect for %s.
@@ -410,7 +365,7 @@ Only respond with valid JSON.`, req.Tool, providerGuide)
 }
 
 // GenerateIaCSimple is the legacy single-message interface (used by pattern matching fallback).
-func (c *OllamaClient) GenerateIaCSimple(ctx context.Context, message, tool string) (string, []parser.Resource, error) {
+func (c *Client) GenerateIaCSimple(ctx context.Context, message, tool string) (string, []parser.Resource, error) {
 	return c.GenerateIaC(ctx, ChatRequest{
 		Message: message,
 		Tool:    tool,

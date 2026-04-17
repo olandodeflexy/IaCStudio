@@ -65,7 +65,7 @@ func main() {
 	fw := watcher.New(hub)
 	defer fw.Close()
 
-	aiClient := ai.NewOllamaClient(*aiEndpoint, *aiModel)
+	aiClient := ai.NewClient(*aiEndpoint, *aiModel)
 	safeRun := runner.NewSafeRunner(runner.DefaultSafetyConfig())
 
 	// Build origin allowlist from actual bind address

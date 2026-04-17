@@ -92,7 +92,7 @@ func limitBody(w http.ResponseWriter, r *http.Request) {
 }
 
 // NewRouter creates the HTTP router with all endpoints.
-func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run *runner.SafeRunner, projectsDir string) *http.ServeMux {
+func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runner.SafeRunner, projectsDir string) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health
