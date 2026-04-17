@@ -185,7 +185,7 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (string, 
 		// matches the other providers' default.
 		maxTokens = 4096
 	}
-	body := anthropicRequest{
+	reqBody := anthropicRequest{
 		Model:  p.model,
 		System: buildSystemField(req.System, req.Cacheable),
 		Messages: []anthropicMessage{
@@ -194,7 +194,7 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (string, 
 		MaxTokens:   maxTokens,
 		Temperature: req.Temperature,
 	}
-	raw, _ := json.Marshal(body)
+	raw, _ := json.Marshal(reqBody)
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(raw))
 	if err != nil {
@@ -289,7 +289,7 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta Del
 	if maxTokens <= 0 {
 		maxTokens = 4096
 	}
-	body := anthropicRequest{
+	reqBody := anthropicRequest{
 		Model:  p.model,
 		System: buildSystemField(req.System, req.Cacheable),
 		Messages: []anthropicMessage{
@@ -299,7 +299,7 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta Del
 		Temperature: req.Temperature,
 		Stream:      true,
 	}
-	raw, _ := json.Marshal(body)
+	raw, _ := json.Marshal(reqBody)
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return "", err
