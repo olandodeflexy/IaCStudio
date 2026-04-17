@@ -25,8 +25,13 @@ type openAIProvider struct {
 // NewOpenAI constructs a Provider speaking the OpenAI /chat/completions wire
 // format. The APIKey is required.
 func NewOpenAI(cfg Config) Provider {
+	endpoint := strings.TrimSpace(cfg.Endpoint)
+	if endpoint == "" {
+		endpoint = "https://api.openai.com/v1"
+	}
+
 	return &openAIProvider{
-		endpoint: normaliseOpenAIEndpoint(cfg.Endpoint),
+		endpoint: normaliseOpenAIEndpoint(endpoint),
 		model:    cfg.Model,
 		apiKey:   cfg.APIKey,
 		client:   defaultHTTPClient(cfg.Timeout),
