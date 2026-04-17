@@ -623,12 +623,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			return
 		}
 		if err != nil {
-			// Emit the documented error event so clients can distinguish a
-			// real provider stream from the deterministic fallback below.
+			// Notify clients that the provider stream failed using a
+			// non-terminal event so they can continue waiting for the
+			// deterministic fallback completion below.
 			// A write failure here just means the client already disconnected,
 			// in which case the fallback below is wasted work but harmless.
 			log.Printf("AI stream failed, falling back to pattern match: %v", err)
-			_ = writeEvent("error", map[string]string{"error": err.Error()})
+			_ = writeEvent("provider_error", map[string]string{"error": err.Error()})
 
 			// Fall back to deterministic pattern matching so users aren't
 			// left hanging when the provider is unreachable, matching the
