@@ -312,19 +312,20 @@ export const api = {
         } else if (eventType === 'complete') {
           complete = payload;
         } else if (eventType === 'error') {
+          // The server may emit an informational error event and then still send
+          // a final complete event with a fallback result. Record the error, but
+          // keep reading so we do not discard a subsequent complete payload.
           streamError = new Error(payload.error || 'chat stream error');
-          break;
         }
       }
-      if (streamError) break;
+    }
+    if (complete) {
+      return complete;
     }
     if (streamError) {
       throw streamError;
     }
-    if (!complete) {
-      throw new Error('chat stream ended without a complete event');
-    }
-    return complete;
+    throw new Error('chat stream ended without a complete event');
   },
 
   // Analyze plan/apply output and get AI fix suggestions
