@@ -814,10 +814,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 		case providers.KindOpenAI:
-			if req.Endpoint == "" {
-				http.Error(w, "endpoint is required for openai", 400)
-				return
-			}
+			// endpoint optional — provider falls back to the public OpenAI default.
 		case providers.KindAnthropic:
 			// endpoint optional — provider falls back to a public default.
 		default:
