@@ -257,7 +257,15 @@ export const api = {
       body: JSON.stringify(req),
       signal,
     });
-    if (!res.ok || !res.body) {
+    if (!res.ok) {
+      const errorText = (await res.text()).trim();
+      throw new Error(
+        errorText
+          ? `chat stream failed: ${res.status} ${res.statusText} - ${errorText}`
+          : `chat stream failed: ${res.status} ${res.statusText}`,
+      );
+    }
+    if (!res.body) {
       throw new Error(`chat stream failed: ${res.status} ${res.statusText}`);
     }
 
