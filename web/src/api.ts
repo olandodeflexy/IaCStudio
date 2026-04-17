@@ -311,7 +311,7 @@ export const api = {
           onDelta(payload.text);
         } else if (eventType === 'complete') {
           complete = payload;
-        } else if (eventType === 'error') {
+        } else if (eventType === 'error' || eventType === 'provider_error') {
           // The server may emit an informational error event and then still send
           // a final complete event with a fallback result. Record the error, but
           // keep reading so we do not discard a subsequent complete payload.
