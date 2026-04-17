@@ -293,6 +293,21 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta Del
 		return "", fmt.Errorf("anthropic API unavailable: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		body, _ := io.ReadAll(resp.Body)
+		var apiErr struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if len(body) > 0 && json.Unmarshal(body, &apiErr) == nil && apiErr.Error.Message != "" {
+			return "", fmt.Errorf("anthropic API error (%d): %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		if msg := strings.TrimSpace(string(body)); msg != "" {
+			return "", fmt.Errorf("anthropic API error (%d): %s", resp.StatusCode, msg)
+		}
+		return "", fmt.Errorf("anthropic API error (%d): %s", resp.StatusCode, resp.Status)
+	}
 
 	var accum strings.Builder
 	// Accumulate usage across the stream: message_start carries input_tokens
