@@ -152,6 +152,28 @@ func (p *openAIProvider) Stream(ctx context.Context, req Request, onDelta DeltaF
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return "", fmt.Errorf("openai stream request failed with status %s: unable to read error body: %w", resp.Status, readErr)
+		}
+
+		var apiErr struct {
+			Error struct {
+				Message string `json:"message"`
+			} `json:"error"`
+		}
+		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error.Message != "" {
+			return "", fmt.Errorf("openai stream request failed with status %s: %s", resp.Status, apiErr.Error.Message)
+		}
+
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			msg = http.StatusText(resp.StatusCode)
+		}
+		return "", fmt.Errorf("openai stream request failed with status %s: %s", resp.Status, msg)
+	}
+
 	var accum strings.Builder
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
