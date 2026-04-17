@@ -13,7 +13,7 @@ func TestPatternMatch_Terraform(t *testing.T) {
 		{"add a vpc", "aws_vpc", true},
 		{"create an ec2 instance", "aws_instance", true},
 		{"I need an s3 bucket", "aws_s3_bucket", true},
-		{"add a database", "aws_rds_instance", true},
+		{"add a database", "aws_db_instance", true},
 		{"create a lambda function", "aws_lambda_function", true},
 		{"add a security group", "aws_security_group", true},
 		{"something random", "", true},

@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -23,6 +24,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/project"
 	"github.com/iac-studio/iac-studio/internal/runner"
+	"github.com/iac-studio/iac-studio/internal/scaffold"
 	"github.com/iac-studio/iac-studio/internal/security"
 	"github.com/iac-studio/iac-studio/internal/watcher"
 )
@@ -95,13 +97,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 
 	// Health
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "0.1.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "0.1.0"})
 	})
 
 	// List available IaC tools detected on this machine
 	mux.HandleFunc("GET /api/tools", func(w http.ResponseWriter, r *http.Request) {
 		tools := run.DetectTools()
-		json.NewEncoder(w).Encode(tools)
+		_ = json.NewEncoder(w).Encode(tools)
 	})
 
 	// Resource catalog — returns all resources for a tool, optionally filtered by provider
@@ -117,7 +119,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		} else {
 			cat = catalog.GetCatalog(tool)
 		}
-		json.NewEncoder(w).Encode(cat)
+		_ = json.NewEncoder(w).Encode(cat)
 	})
 
 	// List projects
@@ -136,7 +138,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 				})
 			}
 		}
-		json.NewEncoder(w).Encode(projects)
+		_ = json.NewEncoder(w).Encode(projects)
 	})
 
 	// Create project
@@ -169,12 +171,119 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}
 
 		// Start watching the project directory
-		fw.Watch(projectPath)
+		_ = fw.Watch(projectPath)
 
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"name": req.Name,
 			"path": projectPath,
 			"tool": req.Tool,
+		})
+	})
+
+	// List registered blueprints (opinionated project layouts).
+	// See internal/scaffold for the Blueprint interface and bundled blueprints.
+	mux.HandleFunc("GET /api/blueprints", func(w http.ResponseWriter, r *http.Request) {
+		type bpView struct {
+			ID          string           `json:"id"`
+			Name        string           `json:"name"`
+			Description string           `json:"description"`
+			Tool        string           `json:"tool"`
+			Inputs      []scaffold.Input `json:"inputs"`
+		}
+		list := scaffold.Default.List()
+		out := make([]bpView, 0, len(list))
+		for _, bp := range list {
+			out = append(out, bpView{
+				ID:          bp.ID(),
+				Name:        bp.Name(),
+				Description: bp.Description(),
+				Tool:        bp.Tool(),
+				Inputs:      bp.Inputs(),
+			})
+		}
+		_ = json.NewEncoder(w).Encode(out)
+	})
+
+	// Render a blueprint into a new project directory.
+	// Body: {"name": "...", "values": {...blueprint-specific inputs...}}
+	// The "name" doubles as the project directory name; "values.project_name"
+	// is auto-filled from "name" when not explicitly set.
+	mux.HandleFunc("POST /api/blueprints/{id}/render", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		id := r.PathValue("id")
+		bp, ok := scaffold.Default.Get(id)
+		if !ok {
+			http.Error(w, "unknown blueprint: "+id, 404)
+			return
+		}
+		var req struct {
+			Name   string         `json:"name"`
+			Values map[string]any `json:"values"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		if req.Values == nil {
+			req.Values = map[string]any{}
+		}
+		if _, has := req.Values["project_name"]; !has {
+			// safeProjectPath accepts underscores and mixed case for directory
+			// names, but blueprints apply stricter rules (lowercase + hyphens)
+			// on project_name since it lands inside HCL and cloud resource
+			// identifiers. Normalise here so a valid-on-disk name doesn't
+			// unexpectedly fail blueprint validation.
+			req.Values["project_name"] = strings.ReplaceAll(strings.ToLower(req.Name), "_", "-")
+		}
+
+		projectPath, err := safeProjectPath(projectsDir, req.Name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+
+		// Render first so an input-validation error (400) never leaves an
+		// empty project directory behind. Only create the directory once we
+		// know we have files to write.
+		files, err := bp.Render(req.Values)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := os.MkdirAll(projectPath, 0755); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if err := scaffold.Write(projectPath, files); err != nil {
+			// Map scaffold error kinds to meaningful HTTP status codes.
+			//  - Existing file / symlinked root: 409 Conflict (precondition).
+			//  - Blueprint bug (duplicate or invalid emitted path): 500.
+			//  - Anything else (I/O, permissions): 500.
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, scaffold.ErrConflict),
+				errors.Is(err, scaffold.ErrSymlinkInRoot):
+				status = http.StatusConflict
+			case errors.Is(err, scaffold.ErrInvalidPath),
+				errors.Is(err, scaffold.ErrDuplicatePath):
+				status = http.StatusInternalServerError
+			}
+			http.Error(w, err.Error(), status)
+			return
+		}
+
+		_ = fw.Watch(projectPath)
+
+		paths := make([]string, len(files))
+		for i, f := range files {
+			paths[i] = f.Path
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name":      req.Name,
+			"path":      projectPath,
+			"blueprint": bp.ID(),
+			"tool":      bp.Tool(),
+			"files":     paths,
 		})
 	})
 
@@ -194,7 +303,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(resources)
+		_ = json.NewEncoder(w).Encode(resources)
 	})
 
 	// Sync resources from UI to disk
@@ -336,7 +445,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			mainCode = code
 		}
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"file": filepath.Join(projectPath, "main"+ext),
 			"code": mainCode,
 		})
@@ -369,7 +478,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			if !hasPlan(projectPath) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(map[string]string{
+				_ = json.NewEncoder(w).Encode(map[string]string{
 					"error":  "plan_required",
 					"detail": "run plan first — no plan has been run for this project recently",
 				})
@@ -378,7 +487,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			if !req.Approved {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(map[string]string{
+				_ = json.NewEncoder(w).Encode(map[string]string{
 					"error":  "approval_required",
 					"detail": "plan exists — re-submit with approved:true to proceed",
 				})
@@ -413,7 +522,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}()
 
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "running"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "running"})
 	})
 
 	// Kill a running command
@@ -428,7 +537,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 404)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
 	})
 
 	// AI chat
@@ -449,7 +558,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		// Also return suggestions for what to add next
 		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"message":     response,
 			"resources":   resources,
 			"suggestions": suggestions,
@@ -469,7 +578,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
-		json.NewEncoder(w).Encode(suggestions)
+		_ = json.NewEncoder(w).Encode(suggestions)
 	})
 
 	// Analyze plan/apply output and suggest fixes
@@ -487,7 +596,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			fix = ai.AnalyzePlanFallback(req.Output, req.ExitCode)
 		}
 
-		json.NewEncoder(w).Encode(fix)
+		_ = json.NewEncoder(w).Encode(fix)
 	})
 
 	// ─── Project State Persistence ───
@@ -501,7 +610,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(states)
+		_ = json.NewEncoder(w).Encode(states)
 	})
 
 	// Load project state (canvas positions, edges, tool)
@@ -513,10 +622,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		if state == nil {
-			json.NewEncoder(w).Encode(nil)
+			_ = json.NewEncoder(w).Encode(nil)
 			return
 		}
-		json.NewEncoder(w).Encode(state)
+		_ = json.NewEncoder(w).Encode(state)
 	})
 
 	// Save project state
@@ -534,7 +643,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 	})
 
 	// Open project directory in OS file manager
@@ -563,7 +672,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, fmt.Sprintf("failed to open: %v", err), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "opened", "path": projectPath})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "opened", "path": projectPath})
 	})
 
 	// Delete a project (removes directory and state)
@@ -574,21 +683,21 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		// Remove state from manager
-		pm.Delete(name)
+		// Remove state from manager — best-effort, directory removal is the source of truth.
+		_ = pm.Delete(name)
 		// Remove the project directory
 		if err := os.RemoveAll(projectPath); err != nil {
 			http.Error(w, fmt.Sprintf("failed to delete: %v", err), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "name": name})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "name": name})
 	})
 
 	// ─── AI Settings ───
 
 	// Get current AI provider config
 	mux.HandleFunc("GET /api/ai/settings", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(aiClient.GetConfig())
+		_ = json.NewEncoder(w).Encode(aiClient.GetConfig())
 	})
 
 	// Update AI provider config (supports Ollama and OpenAI-compatible APIs)
@@ -604,7 +713,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		aiClient.UpdateConfig(req.Endpoint, req.Model, req.APIKey)
-		json.NewEncoder(w).Encode(aiClient.GetConfig())
+		_ = json.NewEncoder(w).Encode(aiClient.GetConfig())
 	})
 
 	// ─── Import & Filesystem Browser ───
@@ -623,7 +732,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}
 		// Include parent path for navigation
 		parent := filepath.Dir(dir)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"path":    dir,
 			"parent":  parent,
 			"entries": entries,
@@ -652,9 +761,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}
 
 		// Start watching the imported project directory
-		fw.Watch(req.Path)
+		_ = fw.Watch(req.Path)
 
-		json.NewEncoder(w).Encode(project)
+		_ = json.NewEncoder(w).Encode(project)
 	})
 
 	// AI topology builder — runs async, sends progress via WebSocket, returns result via HTTP
@@ -668,7 +777,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 
 		// Send immediate acknowledgment
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "generating"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "generating"})
 
 		// Run AI generation in background, broadcast result via WebSocket
 		go func() {
@@ -716,7 +825,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		report := secScanner.Scan(resources)
-		json.NewEncoder(w).Encode(report)
+		_ = json.NewEncoder(w).Encode(report)
 	})
 
 	// Security scan from canvas resources (no project dir needed)
@@ -728,7 +837,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		report := secScanner.Scan(resources)
-		json.NewEncoder(w).Encode(report)
+		_ = json.NewEncoder(w).Encode(report)
 	})
 
 	// ─── Drift Detection ───
@@ -759,7 +868,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(report)
+		_ = json.NewEncoder(w).Encode(report)
 	})
 
 	// ─── Multi-Format Export ───
@@ -767,7 +876,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 	exp := exporter.New()
 
 	mux.HandleFunc("GET /api/export/formats", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(exp.SupportedFormats())
+		_ = json.NewEncoder(w).Encode(exp.SupportedFormats())
 	})
 
 	mux.HandleFunc("POST /api/export", func(w http.ResponseWriter, r *http.Request) {
@@ -785,7 +894,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		json.NewEncoder(w).Encode(result)
+		_ = json.NewEncoder(w).Encode(result)
 	})
 
 	// WebSocket for live sync

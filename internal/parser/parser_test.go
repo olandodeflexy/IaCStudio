@@ -108,7 +108,9 @@ resource "aws_instance" "api" {
 func TestHCLParser_EmptyFile(t *testing.T) {
 	dir := t.TempDir()
 	tf := filepath.Join(dir, "empty.tf")
-	os.WriteFile(tf, []byte(""), 0644)
+	if err := os.WriteFile(tf, []byte(""), 0644); err != nil {
+		t.Fatalf("seed empty.tf: %v", err)
+	}
 
 	p := &HCLParser{}
 	resources, err := p.ParseFile(tf)
@@ -123,7 +125,9 @@ func TestHCLParser_EmptyFile(t *testing.T) {
 func TestHCLParser_ProviderOnly(t *testing.T) {
 	dir := t.TempDir()
 	tf := filepath.Join(dir, "providers.tf")
-	os.WriteFile(tf, []byte(`provider "aws" { region = "us-east-1" }`), 0644)
+	if err := os.WriteFile(tf, []byte(`provider "aws" { region = "us-east-1" }`), 0644); err != nil {
+		t.Fatalf("seed providers.tf: %v", err)
+	}
 
 	p := &HCLParser{}
 	resources, err := p.ParseFile(tf)
@@ -208,7 +212,9 @@ func TestYAMLParser_ParseDir(t *testing.T) {
 	}
 
 	for name, content := range files {
-		os.WriteFile(filepath.Join(dir, name), []byte(content), 0644)
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0644); err != nil {
+			t.Fatalf("seed %s: %v", name, err)
+		}
 	}
 
 	p := &YAMLParser{}
@@ -225,14 +231,14 @@ func TestYAMLParser_ParseDir(t *testing.T) {
 func TestYAMLParser_InvalidYAML(t *testing.T) {
 	dir := t.TempDir()
 	ymlFile := filepath.Join(dir, "bad.yml")
-	os.WriteFile(ymlFile, []byte(`not: [valid: yaml: {`), 0644)
+	if err := os.WriteFile(ymlFile, []byte(`not: [valid: yaml: {`), 0644); err != nil {
+		t.Fatalf("seed bad.yml: %v", err)
+	}
 
 	p := &YAMLParser{}
-	_, err := p.ParseFile(ymlFile)
-	if err == nil {
-		// Parser should either return error or empty result gracefully
-		// Both are acceptable
-	}
+	// Parser is allowed to either return an error or degrade to an empty
+	// result — we only check it does not panic. No assertion on err.
+	_, _ = p.ParseFile(ymlFile)
 }
 
 func TestForTool_Parser(t *testing.T) {
