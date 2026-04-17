@@ -60,8 +60,8 @@ func (r *Repo) Init() error {
 	if err := r.run("init"); err != nil {
 		return fmt.Errorf("git init: %w", err)
 	}
-	// Set default branch to main
-	r.run("checkout", "-b", "main")
+	// Set default branch to main — best-effort; ignore error if already on main.
+	_ = r.run("checkout", "-b", "main")
 	return nil
 }
 

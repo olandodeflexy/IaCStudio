@@ -2,7 +2,6 @@ package cost
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/plan"
@@ -411,12 +410,3 @@ func FormatDelta(delta float64) string {
 	return fmt.Sprintf("%s$%.0f/mo", sign, delta)
 }
 
-// containsType checks if a string contains a resource type prefix.
-func containsType(s string, prefixes ...string) bool {
-	for _, p := range prefixes {
-		if strings.HasPrefix(s, p) {
-			return true
-		}
-	}
-	return false
-}

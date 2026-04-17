@@ -403,11 +403,17 @@ func (dc *DynamicCatalog) loadCache(key string) (*ProviderSchema, error) {
 }
 
 func (dc *DynamicCatalog) saveCache(key string, schema *ProviderSchema) {
-	os.MkdirAll(dc.cacheDir, 0755)
+	if err := os.MkdirAll(dc.cacheDir, 0755); err != nil {
+		log.Printf("schema cache: mkdir %s: %v", dc.cacheDir, err)
+		return
+	}
 	data, err := json.Marshal(schema)
 	if err != nil {
 		return
 	}
-	os.WriteFile(dc.cacheFile(key), data, 0644)
+	if err := os.WriteFile(dc.cacheFile(key), data, 0644); err != nil {
+		log.Printf("schema cache: write %s: %v", dc.cacheFile(key), err)
+		return
+	}
 	log.Printf("Cached provider schema: %s", dc.cacheFile(key))
 }

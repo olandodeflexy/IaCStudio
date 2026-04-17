@@ -359,7 +359,7 @@ func (m *Manager) writeVarFile(projectDir string, env Environment) error {
 
 	var lines []string
 	lines = append(lines, fmt.Sprintf("# Environment: %s", env.Name))
-	lines = append(lines, fmt.Sprintf("# Managed by IaC Studio — do not edit directly"))
+	lines = append(lines, "# Managed by IaC Studio — do not edit directly")
 	lines = append(lines, "")
 	for k, v := range env.VarOverrides {
 		lines = append(lines, fmt.Sprintf("%s = \"%s\"", k, v))

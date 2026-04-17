@@ -96,13 +96,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 
 	// Health
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "0.1.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "0.1.0"})
 	})
 
 	// List available IaC tools detected on this machine
 	mux.HandleFunc("GET /api/tools", func(w http.ResponseWriter, r *http.Request) {
 		tools := run.DetectTools()
-		json.NewEncoder(w).Encode(tools)
+		_ = json.NewEncoder(w).Encode(tools)
 	})
 
 	// Resource catalog — returns all resources for a tool, optionally filtered by provider
@@ -118,7 +118,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		} else {
 			cat = catalog.GetCatalog(tool)
 		}
-		json.NewEncoder(w).Encode(cat)
+		_ = json.NewEncoder(w).Encode(cat)
 	})
 
 	// List projects
@@ -137,7 +137,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 				})
 			}
 		}
-		json.NewEncoder(w).Encode(projects)
+		_ = json.NewEncoder(w).Encode(projects)
 	})
 
 	// Create project
@@ -170,9 +170,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}
 
 		// Start watching the project directory
-		fw.Watch(projectPath)
+		_ = fw.Watch(projectPath)
 
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"name": req.Name,
 			"path": projectPath,
 			"tool": req.Tool,
@@ -200,7 +200,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 				Inputs:      bp.Inputs(),
 			})
 		}
-		json.NewEncoder(w).Encode(out)
+		_ = json.NewEncoder(w).Encode(out)
 	})
 
 	// Render a blueprint into a new project directory.
@@ -250,13 +250,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 
-		fw.Watch(projectPath)
+		_ = fw.Watch(projectPath)
 
 		paths := make([]string, len(files))
 		for i, f := range files {
 			paths[i] = f.Path
 		}
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"name":      req.Name,
 			"path":      projectPath,
 			"blueprint": bp.ID(),
@@ -281,7 +281,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(resources)
+		_ = json.NewEncoder(w).Encode(resources)
 	})
 
 	// Sync resources from UI to disk
@@ -423,7 +423,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			mainCode = code
 		}
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"file": filepath.Join(projectPath, "main"+ext),
 			"code": mainCode,
 		})
@@ -456,7 +456,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			if !hasPlan(projectPath) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(map[string]string{
+				_ = json.NewEncoder(w).Encode(map[string]string{
 					"error":  "plan_required",
 					"detail": "run plan first — no plan has been run for this project recently",
 				})
@@ -465,7 +465,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			if !req.Approved {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
-				json.NewEncoder(w).Encode(map[string]string{
+				_ = json.NewEncoder(w).Encode(map[string]string{
 					"error":  "approval_required",
 					"detail": "plan exists — re-submit with approved:true to proceed",
 				})
@@ -500,7 +500,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}()
 
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "running"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "running"})
 	})
 
 	// Kill a running command
@@ -515,7 +515,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 404)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "cancelled"})
 	})
 
 	// AI chat
@@ -536,7 +536,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		// Also return suggestions for what to add next
 		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
 
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"message":     response,
 			"resources":   resources,
 			"suggestions": suggestions,
@@ -556,7 +556,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
-		json.NewEncoder(w).Encode(suggestions)
+		_ = json.NewEncoder(w).Encode(suggestions)
 	})
 
 	// Analyze plan/apply output and suggest fixes
@@ -574,7 +574,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			fix = ai.AnalyzePlanFallback(req.Output, req.ExitCode)
 		}
 
-		json.NewEncoder(w).Encode(fix)
+		_ = json.NewEncoder(w).Encode(fix)
 	})
 
 	// ─── Project State Persistence ───
@@ -588,7 +588,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(states)
+		_ = json.NewEncoder(w).Encode(states)
 	})
 
 	// Load project state (canvas positions, edges, tool)
@@ -600,10 +600,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		if state == nil {
-			json.NewEncoder(w).Encode(nil)
+			_ = json.NewEncoder(w).Encode(nil)
 			return
 		}
-		json.NewEncoder(w).Encode(state)
+		_ = json.NewEncoder(w).Encode(state)
 	})
 
 	// Save project state
@@ -621,7 +621,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "saved"})
 	})
 
 	// Open project directory in OS file manager
@@ -650,7 +650,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, fmt.Sprintf("failed to open: %v", err), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "opened", "path": projectPath})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "opened", "path": projectPath})
 	})
 
 	// Delete a project (removes directory and state)
@@ -661,21 +661,21 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		// Remove state from manager
-		pm.Delete(name)
+		// Remove state from manager — best-effort, directory removal is the source of truth.
+		_ = pm.Delete(name)
 		// Remove the project directory
 		if err := os.RemoveAll(projectPath); err != nil {
 			http.Error(w, fmt.Sprintf("failed to delete: %v", err), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "name": name})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted", "name": name})
 	})
 
 	// ─── AI Settings ───
 
 	// Get current AI provider config
 	mux.HandleFunc("GET /api/ai/settings", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(aiClient.GetConfig())
+		_ = json.NewEncoder(w).Encode(aiClient.GetConfig())
 	})
 
 	// Update AI provider config (supports Ollama and OpenAI-compatible APIs)
@@ -691,7 +691,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		aiClient.UpdateConfig(req.Endpoint, req.Model, req.APIKey)
-		json.NewEncoder(w).Encode(aiClient.GetConfig())
+		_ = json.NewEncoder(w).Encode(aiClient.GetConfig())
 	})
 
 	// ─── Import & Filesystem Browser ───
@@ -710,7 +710,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}
 		// Include parent path for navigation
 		parent := filepath.Dir(dir)
-		json.NewEncoder(w).Encode(map[string]interface{}{
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
 			"path":    dir,
 			"parent":  parent,
 			"entries": entries,
@@ -739,9 +739,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		}
 
 		// Start watching the imported project directory
-		fw.Watch(req.Path)
+		_ = fw.Watch(req.Path)
 
-		json.NewEncoder(w).Encode(project)
+		_ = json.NewEncoder(w).Encode(project)
 	})
 
 	// AI topology builder — runs async, sends progress via WebSocket, returns result via HTTP
@@ -755,7 +755,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 
 		// Send immediate acknowledgment
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{"status": "generating"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "generating"})
 
 		// Run AI generation in background, broadcast result via WebSocket
 		go func() {
@@ -803,7 +803,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		report := secScanner.Scan(resources)
-		json.NewEncoder(w).Encode(report)
+		_ = json.NewEncoder(w).Encode(report)
 	})
 
 	// Security scan from canvas resources (no project dir needed)
@@ -815,7 +815,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		report := secScanner.Scan(resources)
-		json.NewEncoder(w).Encode(report)
+		_ = json.NewEncoder(w).Encode(report)
 	})
 
 	// ─── Drift Detection ───
@@ -846,7 +846,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 500)
 			return
 		}
-		json.NewEncoder(w).Encode(report)
+		_ = json.NewEncoder(w).Encode(report)
 	})
 
 	// ─── Multi-Format Export ───
@@ -854,7 +854,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 	exp := exporter.New()
 
 	mux.HandleFunc("GET /api/export/formats", func(w http.ResponseWriter, _ *http.Request) {
-		json.NewEncoder(w).Encode(exp.SupportedFormats())
+		_ = json.NewEncoder(w).Encode(exp.SupportedFormats())
 	})
 
 	mux.HandleFunc("POST /api/export", func(w http.ResponseWriter, r *http.Request) {
@@ -872,7 +872,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		json.NewEncoder(w).Encode(result)
+		_ = json.NewEncoder(w).Encode(result)
 	})
 
 	// WebSocket for live sync

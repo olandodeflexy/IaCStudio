@@ -313,9 +313,10 @@ retry_files_enabled = False
 `,
 	}
 
-	// Create roles directory
-	os.MkdirAll(filepath.Join(dir, "roles"), 0755)
-	os.MkdirAll(filepath.Join(dir, "group_vars"), 0755)
+	// Create roles directory — best-effort; WriteFile below will surface any
+	// real failures when it tries to create individual files inside.
+	_ = os.MkdirAll(filepath.Join(dir, "roles"), 0755)
+	_ = os.MkdirAll(filepath.Join(dir, "group_vars"), 0755)
 
 	for name, content := range files {
 		path := filepath.Join(dir, name)

@@ -194,10 +194,10 @@ env:
 	}
 
 	// --- Apply jobs (runs on merge to main) ---
+	// Approval is enforced by GitHub "environment" protection rules, not by
+	// anything we emit here. AutoApplyDev is the only per-env knob we honour
+	// explicitly today; other envs gate via the environment name above.
 	for i, env := range c.Environments {
-		needsApproval := contains(c.RequireApproval, env)
-		autoApply := env == "dev" && c.AutoApplyDev
-
 		needs := "validate"
 		if i > 0 {
 			needs = fmt.Sprintf("apply-%s", c.Environments[i-1])
@@ -212,10 +212,6 @@ env:
     environment:
       name: %s
 `, env, env, needs, env))
-
-		if !autoApply || needsApproval {
-			// GitHub environment protection rules handle approval
-		}
 
 		sb.WriteString(fmt.Sprintf(`    steps:
       - uses: actions/checkout@v4
