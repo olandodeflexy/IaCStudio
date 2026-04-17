@@ -235,14 +235,17 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if err := os.MkdirAll(projectPath, 0755); err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
 
+		// Render first so an input-validation error (400) never leaves an
+		// empty project directory behind. Only create the directory once we
+		// know we have files to write.
 		files, err := bp.Render(req.Values)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := os.MkdirAll(projectPath, 0755); err != nil {
+			http.Error(w, err.Error(), 500)
 			return
 		}
 		if err := scaffold.Write(projectPath, files); err != nil {

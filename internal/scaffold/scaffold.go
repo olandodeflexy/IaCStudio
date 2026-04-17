@@ -129,11 +129,21 @@ func Write(root string, files []File) error {
 
 	resolved := make([]resolvedFile, 0, len(files))
 	var conflicts []string
+	var duplicates []string
+	// seen tracks cleaned paths within this batch so a second File with the
+	// same target doesn't silently clobber the first — on-disk conflict
+	// detection alone can't catch intra-batch collisions.
+	seen := make(map[string]struct{}, len(files))
 	for _, f := range files {
 		cleaned, full, err := resolveWritePath(root, f.Path)
 		if err != nil {
 			return err
 		}
+		if _, dup := seen[cleaned]; dup {
+			duplicates = append(duplicates, cleaned)
+			continue
+		}
+		seen[cleaned] = struct{}{}
 		if _, err := os.Stat(full); err == nil {
 			conflicts = append(conflicts, cleaned)
 		} else if !os.IsNotExist(err) {
@@ -144,6 +154,9 @@ func Write(root string, files []File) error {
 			path: cleaned,
 			full: full,
 		})
+	}
+	if len(duplicates) > 0 {
+		return fmt.Errorf("blueprint emitted duplicate paths: %s", strings.Join(duplicates, ", "))
 	}
 	if len(conflicts) > 0 {
 		return fmt.Errorf("refusing to overwrite existing files: %s", strings.Join(conflicts, ", "))

@@ -3,6 +3,7 @@ package scaffold
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
 	"testing"
@@ -107,8 +108,8 @@ func TestLayeredTerraformRequiresProjectName(t *testing.T) {
 }
 
 // TestLayeredTerraformRejectsUnsafeInputs exercises the conservative
-// character-set validator on the two free-form string inputs that flow into
-// HCL strings and cloud resource names.
+// character-set validator on the free-form string inputs that flow into HCL
+// strings and cloud resource names.
 func TestLayeredTerraformRejectsUnsafeInputs(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -118,7 +119,17 @@ func TestLayeredTerraformRejectsUnsafeInputs(t *testing.T) {
 		{"newline in project_name", map[string]any{"project_name": "acme\nrm -rf"}},
 		{"uppercase project_name", map[string]any{"project_name": "ACME"}},
 		{"empty project_name", map[string]any{"project_name": ""}},
+		{"two-char project_name below S3 floor", map[string]any{"project_name": "ab"}},
 		{"bad state_bucket", map[string]any{"project_name": "acme", "state_bucket": `bad";drop`}},
+		{"hyphen state_bucket on azurerm", map[string]any{
+			"project_name": "acme", "backend": "azurerm", "state_bucket": "acme-tfstate",
+		}},
+		{"too-long state_bucket on azurerm", map[string]any{
+			"project_name": "acme", "backend": "azurerm", "state_bucket": "acmethisisabsolutelywaytoolongforazure",
+		}},
+		{"quote in owner_tag", map[string]any{"project_name": "acme", "owner_tag": `ops" injected`}},
+		{"newline in owner_tag", map[string]any{"project_name": "acme", "owner_tag": "ops\nrm"}},
+		{"quote in cost_center_tag", map[string]any{"project_name": "acme", "cost_center_tag": `shared"`}},
 	}
 	bp := &LayeredTerraformBlueprint{}
 	for _, tc := range cases {
@@ -127,6 +138,23 @@ func TestLayeredTerraformRejectsUnsafeInputs(t *testing.T) {
 				t.Fatalf("expected validation error, got nil")
 			}
 		})
+	}
+}
+
+// TestWriteRejectsDuplicatePaths verifies Write fails fast when the same
+// cleaned path appears twice in the same batch — without this, the second
+// WriteFile would silently clobber the first.
+func TestWriteRejectsDuplicatePaths(t *testing.T) {
+	dir := t.TempDir()
+	err := Write(dir, []File{
+		{Path: "a.tf", Content: []byte("first")},
+		{Path: "a.tf", Content: []byte("second")},
+	})
+	if err == nil {
+		t.Fatal("expected duplicate-path error, got nil")
+	}
+	if !strings.Contains(err.Error(), "duplicate") {
+		t.Errorf("error should mention duplicate paths; got: %v", err)
 	}
 }
 
@@ -194,21 +222,27 @@ func TestLayeredTerraformValidateScriptInitsEnvRoots(t *testing.T) {
 // state backends to make sure each produces a syntactically plausible block.
 func TestLayeredTerraformBackendVariants(t *testing.T) {
 	cases := []struct {
-		backend string
-		needle  string
+		backend     string
+		needle      string
+		stateBucket string // override default when the backend has stricter rules
 	}{
-		{"s3", `backend "s3"`},
-		{"gcs", `backend "gcs"`},
-		{"azurerm", `backend "azurerm"`},
+		{backend: "s3", needle: `backend "s3"`},
+		{backend: "gcs", needle: `backend "gcs"`},
+		// Azure storage account names must be 3-24 lowercase alnum, no hyphens.
+		{backend: "azurerm", needle: `backend "azurerm"`, stateBucket: "acmestate01"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.backend, func(t *testing.T) {
 			bp := &LayeredTerraformBlueprint{}
-			files, err := bp.Render(map[string]any{
+			values := map[string]any{
 				"project_name": "acme",
 				"cloud":        "aws",
 				"backend":      tc.backend,
-			})
+			}
+			if tc.stateBucket != "" {
+				values["state_bucket"] = tc.stateBucket
+			}
+			files, err := bp.Render(values)
 			if err != nil {
 				t.Fatalf("Render failed: %v", err)
 			}
@@ -273,6 +307,11 @@ func TestWriteMaterialisesTree(t *testing.T) {
 	info, err := os.Stat(sh)
 	if err != nil {
 		t.Fatalf("script not written: %v", err)
+	}
+	// POSIX executable bit isn't represented the same way on Windows, where
+	// chmod is largely a no-op — skip this assertion there rather than fail.
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if info.Mode().Perm()&0o100 == 0 {
 		t.Errorf("script %s missing executable bit; mode=%v", sh, info.Mode().Perm())

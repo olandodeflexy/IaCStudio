@@ -11,8 +11,21 @@ import (
 // Values are embedded in generated HCL and cloud resource names, so anything
 // outside this set would either break HCL parsing or produce invalid provider
 // identifiers. S3 buckets are the strictest consumer (3-63 chars, lowercase,
-// hyphen-separated); we use that as the common denominator.
-var safeNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`)
+// hyphen-separated); we use that as the common denominator — minimum of 3 so
+// the first character + 2 more satisfy S3's floor.
+var safeNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{2,62}$`)
+
+// azureStorageAccountRE matches the stricter Azure rules: 3–24 chars,
+// lowercase letters and digits only — no hyphens, no starting-digit check
+// beyond that. Applied on top of safeNameRE when the azurerm backend is
+// selected, since state_bucket ends up as storage_account_name there.
+var azureStorageAccountRE = regexp.MustCompile(`^[a-z0-9]{3,24}$`)
+
+// hclSafeValueRE matches strings that can be embedded as HCL string literals
+// without escaping — letters, digits, and a small set of punctuation seen in
+// real tag values (space, _, ., :, /, =, +, -, @). Excludes quotes, newlines,
+// and backslashes, any of which would break terraform fmt/validate.
+var hclSafeValueRE = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+\-@]{1,128}$`)
 
 // validateSafeName rejects user-supplied strings that would either break
 // generated HCL or produce invalid cloud resource names.
@@ -21,7 +34,20 @@ func validateSafeName(key, value string) error {
 		return fmt.Errorf("%s must not be empty", key)
 	}
 	if !safeNameRE.MatchString(value) {
-		return fmt.Errorf("%s %q is invalid: use lowercase letters, digits, and hyphens; must start with a letter and be 2–63 characters long", key, value)
+		return fmt.Errorf("%s %q is invalid: use lowercase letters, digits, and hyphens; must start with a letter and be 3–63 characters long", key, value)
+	}
+	return nil
+}
+
+// validateHCLSafeValue rejects strings that would break HCL parsing when
+// embedded as a string literal (quotes, newlines, backslashes). Used for tag
+// values which allow a broader character set than resource identifiers.
+func validateHCLSafeValue(key, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", key)
+	}
+	if !hclSafeValueRE.MatchString(value) {
+		return fmt.Errorf("%s %q contains characters that would break generated HCL — stick to letters, digits, spaces, and _.:/=+-@", key, value)
 	}
 	return nil
 }
@@ -92,9 +118,22 @@ func (b *LayeredTerraformBlueprint) Render(values map[string]any) ([]File, error
 	if err := validateSafeName("state_bucket", stateBucket); err != nil {
 		return nil, err
 	}
+	// Azure storage account names are stricter than S3 buckets (3-24 chars,
+	// lowercase alnum, no hyphens). When targeting azurerm, enforce that on
+	// state_bucket directly so backend.tf doesn't render an invalid account
+	// name that fails at `terraform init`.
+	if backend == "azurerm" && !azureStorageAccountRE.MatchString(stateBucket) {
+		return nil, fmt.Errorf("state_bucket %q is invalid for azurerm backend: must be 3–24 lowercase letters/digits with no hyphens", stateBucket)
+	}
 	stateRegion := stringInput(values, "state_region", "us-east-1")
 	owner := stringInput(values, "owner_tag", "platform")
+	if err := validateHCLSafeValue("owner_tag", owner); err != nil {
+		return nil, err
+	}
 	costCenter := stringInput(values, "cost_center_tag", "shared")
+	if err := validateHCLSafeValue("cost_center_tag", costCenter); err != nil {
+		return nil, err
+	}
 
 	ctx := layeredCtx{
 		Name: name, Cloud: cloud, Envs: envs, Modules: modules,
