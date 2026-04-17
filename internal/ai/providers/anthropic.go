@@ -210,8 +210,24 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (string, 
 	}
 	defer resp.Body.Close()
 
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("read anthropic response: %w", err)
+	}
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		var apiErr anthropicResponse
+		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error != nil && apiErr.Error.Message != "" {
+			return "", fmt.Errorf("anthropic API error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
+		}
+		if msg := strings.TrimSpace(string(body)); msg != "" {
+			return "", fmt.Errorf("anthropic API error (status %d): %s", resp.StatusCode, msg)
+		}
+		return "", fmt.Errorf("anthropic API error (status %d)", resp.StatusCode)
+	}
+
 	var decoded anthropicResponse
-	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
+	if err := json.Unmarshal(body, &decoded); err != nil {
 		return "", fmt.Errorf("decode anthropic response: %w", err)
 	}
 	if decoded.Error != nil {
