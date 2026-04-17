@@ -279,7 +279,10 @@ export const api = {
     // lines. We accumulate into buffer and split on blank lines.
     while (true) {
       const { value, done } = await reader.read();
-      if (done) break;
+      if (done) {
+        buffer += decoder.decode();
+        break;
+      }
       buffer += decoder.decode(value, { stream: true });
       let sep = buffer.indexOf('\n\n');
       while (sep !== -1) {
