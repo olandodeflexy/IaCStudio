@@ -407,98 +407,55 @@ func (c *Client) GenerateIaCSimple(ctx context.Context, message, tool string) (s
 	})
 }
 
+// buildSystemPrompt renders the main IaC system prompt from the embedded
+// template file (internal/ai/prompts/system.md). The template receives
+// Tool, ProviderGuide, and CanvasContext; the caller never hand-composes the
+// prompt string any more.
 func buildSystemPrompt(tool, provider string, canvas []CanvasResource) string {
-	// Determine the correct provider context
-	providerGuide := buildProviderGuide(tool, provider)
+	return renderPrompt("system", map[string]string{
+		"Tool":          tool,
+		"ProviderGuide": buildProviderGuide(tool, provider),
+		"CanvasContext": buildCanvasContext(canvas),
+	})
+}
 
-	// Build canvas context so the AI knows what exists
-	canvasContext := ""
-	if len(canvas) > 0 {
-		var items []string
-		for _, r := range canvas {
-			items = append(items, fmt.Sprintf("  - %s.%s", r.Type, r.Name))
-		}
-		canvasContext = fmt.Sprintf(`
+// buildCanvasContext is extracted so the system prompt template can receive
+// pre-rendered text rather than a nested slice. Empty canvases return the
+// empty string so the template leaves no dangling whitespace.
+func buildCanvasContext(canvas []CanvasResource) string {
+	if len(canvas) == 0 {
+		return ""
+	}
+	items := make([]string, 0, len(canvas))
+	for _, r := range canvas {
+		items = append(items, fmt.Sprintf("  - %s.%s", r.Type, r.Name))
+	}
+	return fmt.Sprintf(`
 
 EXISTING RESOURCES ON CANVAS (do not duplicate these):
 %s
 
 When the user asks for follow-up resources, build on what already exists.
-Reference existing resources by their type.name when creating connections.`, strings.Join(items, "\n"))
-	}
-
-	return fmt.Sprintf(`You are an Infrastructure as Code assistant for %s.
-
-CRITICAL RULES:
-1. ONLY use %s resource types. NEVER mix providers in a single response.
-2. Follow the user's conversation context — if they started with a specific cloud provider, STAY with that provider.
-3. If resources already exist on the canvas, build on them rather than creating duplicates.
-
-%s%s
-
-When the user describes infrastructure, respond with a JSON object:
-{
-  "message": "Brief explanation of what you created and why",
-  "resources": [
-    {
-      "type": "resource_type",
-      "name": "descriptive_name",
-      "properties": {"key": "value"}
-    }
-  ]
+Reference existing resources by their type.name when creating connections.`,
+		strings.Join(items, "\n"))
 }
 
-IMPORTANT:
-- Use descriptive snake_case names (web_server, not main or default)
-- Include sensible default properties for each resource
-- If the user asks a question rather than requesting resources, set "resources" to an empty array
-- Only respond with valid JSON. No markdown, no code fences.`, tool, providerGuide, providerGuide, canvasContext)
-}
-
+// buildProviderGuide picks the right provider-guide prompt file. Ansible
+// overrides the provider since modules are shared across clouds. The guide
+// text itself lives in internal/ai/prompts/provider_*.md.
 func buildProviderGuide(tool, provider string) string {
+	id := "provider_aws"
 	if tool == "ansible" {
-		return `Ansible modules. Use official module names:
-- Package management: apt, yum, dnf, pip
-- System: service, systemd, user, cron, hostname
-- Files: copy, template, file, lineinfile
-- Containers: docker_container, docker_image, k8s
-- Cloud (AWS): amazon.aws.ec2_instance, amazon.aws.s3_bucket
-- Cloud (GCP): google.cloud.gcp_compute_instance
-- Cloud (Azure): azure.azcollection.azure_rm_virtualmachine`
+		id = "provider_ansible"
+	} else {
+		switch provider {
+		case "google":
+			id = "provider_gcp"
+		case "azurerm":
+			id = "provider_azurerm"
+		}
 	}
-
-	switch provider {
-	case "google":
-		return `Google Cloud (GCP) resource types ONLY. Examples:
-- Networking: google_compute_network, google_compute_subnetwork, google_compute_firewall, google_compute_router
-- Compute: google_compute_instance, google_container_cluster, google_cloud_run_service, google_cloudfunctions_function
-- Storage: google_storage_bucket, google_compute_disk
-- Database: google_sql_database_instance, google_redis_instance, google_spanner_instance, google_firestore_database
-- Security: google_service_account, google_kms_key_ring, google_secret_manager_secret
-- Messaging: google_pubsub_topic, google_pubsub_subscription
-- Data: google_bigquery_dataset, google_bigquery_table
-NEVER use aws_ or azurerm_ prefixed resources`
-
-	case "azurerm":
-		return `Azure resource types ONLY. Examples:
-- Core: azurerm_resource_group (required for all Azure resources)
-- Networking: azurerm_virtual_network, azurerm_subnet, azurerm_network_security_group, azurerm_public_ip
-- Compute: azurerm_linux_virtual_machine, azurerm_kubernetes_cluster, azurerm_function_app, azurerm_linux_web_app
-- Storage: azurerm_storage_account, azurerm_storage_container
-- Database: azurerm_mssql_server, azurerm_mssql_database, azurerm_postgresql_flexible_server, azurerm_cosmosdb_account
-- Security: azurerm_key_vault, azurerm_user_assigned_identity
-ALWAYS create an azurerm_resource_group first. NEVER use aws_ or google_ prefixed resources`
-
-	default: // aws is default
-		return `AWS resource types ONLY. Examples:
-- Networking: aws_vpc, aws_subnet, aws_internet_gateway, aws_nat_gateway, aws_security_group, aws_route_table
-- Compute: aws_instance, aws_lambda_function, aws_ecs_cluster, aws_eks_cluster
-- Storage: aws_s3_bucket, aws_ebs_volume, aws_ecr_repository
-- Database: aws_db_instance, aws_dynamodb_table, aws_elasticache_cluster, aws_rds_cluster
-- Security: aws_iam_role, aws_iam_policy, aws_kms_key, aws_secretsmanager_secret
-- Load Balancing: aws_lb, aws_lb_target_group
-NEVER use google_ or azurerm_ prefixed resources`
-	}
+	return renderPrompt(id, nil)
 }
 
 func parseAIResponse(raw string) (string, []parser.Resource, error) {

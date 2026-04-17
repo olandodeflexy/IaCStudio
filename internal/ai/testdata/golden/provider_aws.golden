@@ -1,0 +1,8 @@
+AWS resource types ONLY. Examples:
+- Networking: aws_vpc, aws_subnet, aws_internet_gateway, aws_nat_gateway, aws_security_group, aws_route_table
+- Compute: aws_instance, aws_lambda_function, aws_ecs_cluster, aws_eks_cluster
+- Storage: aws_s3_bucket, aws_ebs_volume, aws_ecr_repository
+- Database: aws_db_instance, aws_dynamodb_table, aws_elasticache_cluster, aws_rds_cluster
+- Security: aws_iam_role, aws_iam_policy, aws_kms_key, aws_secretsmanager_secret
+- Load Balancing: aws_lb, aws_lb_target_group
+NEVER use google_ or azurerm_ prefixed resources
