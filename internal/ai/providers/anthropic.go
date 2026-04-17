@@ -88,7 +88,12 @@ func NewAnthropic(cfg Config) Provider {
 	// Accept both the base URL and the full /v1/messages URL, same convenience
 	// we offer for OpenAI-compatible endpoints.
 	endpoint = strings.TrimSuffix(endpoint, "/")
-	if !strings.HasSuffix(endpoint, "/messages") {
+	switch {
+	case strings.HasSuffix(endpoint, "/messages"):
+		// Already a full Messages API endpoint.
+	case strings.HasSuffix(endpoint, "/v1"):
+		endpoint += "/messages"
+	default:
 		endpoint += "/v1/messages"
 	}
 	return &anthropicProvider{
