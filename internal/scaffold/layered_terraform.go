@@ -3,8 +3,40 @@ package scaffold
 import (
 	"encoding/json"
 	"fmt"
-	"strings"
+	"regexp"
+	"unicode"
 )
+
+// safeNameRE restricts free-form string inputs to a conservative character set.
+// Values are embedded in generated HCL and cloud resource names, so anything
+// outside this set would either break HCL parsing or produce invalid provider
+// identifiers. S3 buckets are the strictest consumer (3-63 chars, lowercase,
+// hyphen-separated); we use that as the common denominator.
+var safeNameRE = regexp.MustCompile(`^[a-z][a-z0-9-]{1,62}$`)
+
+// validateSafeName rejects user-supplied strings that would either break
+// generated HCL or produce invalid cloud resource names.
+func validateSafeName(key, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", key)
+	}
+	if !safeNameRE.MatchString(value) {
+		return fmt.Errorf("%s %q is invalid: use lowercase letters, digits, and hyphens; must start with a letter and be 2–63 characters long", key, value)
+	}
+	return nil
+}
+
+// titleCase uppercases the first rune of s. Stands in for the deprecated
+// strings.Title — sufficient for single-word module names (networking,
+// compute, …) we actually pass in.
+func titleCase(s string) string {
+	if s == "" {
+		return s
+	}
+	r := []rune(s)
+	r[0] = unicode.ToUpper(r[0])
+	return string(r)
+}
 
 // LayeredTerraformBlueprint renders the canonical layered Terraform layout:
 //
@@ -49,14 +81,17 @@ func (b *LayeredTerraformBlueprint) Inputs() []Input {
 
 func (b *LayeredTerraformBlueprint) Render(values map[string]any) ([]File, error) {
 	name := stringInput(values, "project_name", "")
-	if name == "" {
-		return nil, fmt.Errorf("project_name is required")
+	if err := validateSafeName("project_name", name); err != nil {
+		return nil, err
 	}
 	cloud := stringInput(values, "cloud", "aws")
 	envs := stringSliceInput(values, "environments", []string{"dev", "prod"})
 	modules := stringSliceInput(values, "modules", []string{"networking", "compute", "database", "security", "monitoring"})
 	backend := stringInput(values, "backend", "s3")
 	stateBucket := stringInput(values, "state_bucket", name+"-tfstate")
+	if err := validateSafeName("state_bucket", stateBucket); err != nil {
+		return nil, err
+	}
 	stateRegion := stringInput(values, "state_region", "us-east-1")
 	owner := stringInput(values, "owner_tag", "platform")
 	costCenter := stringInput(values, "cost_center_tag", "shared")
@@ -239,7 +274,7 @@ func (c layeredCtx) moduleFiles(mod string) []File {
 
 	main := moduleMainFor(mod, c.Cloud)
 	variables := moduleVariablesFor(mod)
-	outputs := moduleOutputsFor(mod)
+	outputs := moduleOutputsFor(mod, c.Cloud)
 	versions := versionsBlock(c.Cloud)
 	readme := fmt.Sprintf(`# %s module
 
@@ -252,7 +287,7 @@ See variables.tf for the full list.
 ## Outputs
 
 See outputs.tf. Downstream modules consume these via root-level references (e.g. module.networking.vpc_id).
-`, strings.Title(mod))
+`, titleCase(mod))
 
 	return []File{
 		{Path: base + "/main.tf", Content: []byte(main)},
@@ -410,14 +445,16 @@ terraform destroy -var-file=terraform.tfvars
 
 	validateSh := `#!/usr/bin/env bash
 # Format and validate all Terraform code. Useful in pre-commit and CI.
+# Both envs and modules are init'd with -backend=false so this script works
+# on a fresh checkout without touching remote state.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 terraform fmt -recursive
 for env in environments/*/; do
-  (cd "$env" && terraform validate)
+  (cd "$env" && terraform init -backend=false -input=false >/dev/null && terraform validate)
 done
 for mod in modules/*/; do
-  (cd "$mod" && terraform init -backend=false >/dev/null && terraform validate)
+  (cd "$mod" && terraform init -backend=false -input=false >/dev/null && terraform validate)
 done
 `
 

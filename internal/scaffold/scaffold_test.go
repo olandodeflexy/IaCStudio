@@ -106,6 +106,90 @@ func TestLayeredTerraformRequiresProjectName(t *testing.T) {
 	}
 }
 
+// TestLayeredTerraformRejectsUnsafeInputs exercises the conservative
+// character-set validator on the two free-form string inputs that flow into
+// HCL strings and cloud resource names.
+func TestLayeredTerraformRejectsUnsafeInputs(t *testing.T) {
+	cases := []struct {
+		name   string
+		values map[string]any
+	}{
+		{"quote in project_name", map[string]any{"project_name": `acme"; hack`}},
+		{"newline in project_name", map[string]any{"project_name": "acme\nrm -rf"}},
+		{"uppercase project_name", map[string]any{"project_name": "ACME"}},
+		{"empty project_name", map[string]any{"project_name": ""}},
+		{"bad state_bucket", map[string]any{"project_name": "acme", "state_bucket": `bad";drop`}},
+	}
+	bp := &LayeredTerraformBlueprint{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := bp.Render(tc.values); err == nil {
+				t.Fatalf("expected validation error, got nil")
+			}
+		})
+	}
+}
+
+// TestLayeredTerraformNonAWSOutputsDoNotReferenceAWS guards against issue #6:
+// for GCP/Azure renders, module outputs.tf must not reference aws_* resources
+// (they don't exist in the corresponding main.tf skeletons, so `terraform
+// validate` would fail).
+func TestLayeredTerraformNonAWSOutputsDoNotReferenceAWS(t *testing.T) {
+	for _, cloud := range []string{"gcp", "azure"} {
+		t.Run(cloud, func(t *testing.T) {
+			bp := &LayeredTerraformBlueprint{}
+			files, err := bp.Render(map[string]any{
+				"project_name": "acme",
+				"cloud":        cloud,
+			})
+			if err != nil {
+				t.Fatalf("render: %v", err)
+			}
+			for _, f := range files {
+				if !strings.HasPrefix(f.Path, "modules/") || !strings.HasSuffix(f.Path, "/outputs.tf") {
+					continue
+				}
+				if strings.Contains(string(f.Content), "aws_") {
+					t.Errorf("%s (%s) still references aws_ resources:\n%s", f.Path, cloud, f.Content)
+				}
+			}
+		})
+	}
+}
+
+// TestLayeredTerraformValidateScriptInitsEnvRoots guards against issue #5:
+// the generated validate.sh must terraform init each environment root (with
+// -backend=false) before running terraform validate, otherwise the script
+// fails on a fresh checkout.
+func TestLayeredTerraformValidateScriptInitsEnvRoots(t *testing.T) {
+	bp := &LayeredTerraformBlueprint{}
+	files, err := bp.Render(map[string]any{"project_name": "acme"})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	var script string
+	for _, f := range files {
+		if f.Path == "scripts/validate.sh" {
+			script = string(f.Content)
+			break
+		}
+	}
+	if script == "" {
+		t.Fatal("scripts/validate.sh missing from render output")
+	}
+	// The env loop must init before validate. We look for the ordered substring
+	// so either -backend=false or -input=false reordering is allowed as long as
+	// init precedes validate within the env loop.
+	envLoop := "for env in environments/"
+	if !strings.Contains(script, envLoop) {
+		t.Fatal("env loop not found in validate.sh")
+	}
+	loopBody := script[strings.Index(script, envLoop):]
+	if !strings.Contains(loopBody, "terraform init -backend=false") {
+		t.Errorf("env loop in validate.sh does not terraform init before validate:\n%s", script)
+	}
+}
+
 // TestLayeredTerraformBackendVariants exercises the three supported remote
 // state backends to make sure each produces a syntactically plausible block.
 func TestLayeredTerraformBackendVariants(t *testing.T) {

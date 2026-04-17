@@ -407,7 +407,17 @@ variable "security_group_ids" {
 	}
 }
 
-func moduleOutputsFor(mod string) string {
+// moduleOutputsFor emits the outputs.tf body for a module.
+//
+// Outputs must reference only resources that exist in main.tf — today only the
+// AWS skeletons declare real resources, so non-AWS renders get placeholder
+// outputs (empty list / empty string) that keep the wiring intact without
+// breaking `terraform validate`. Once the GCP/Azure module bodies fill in,
+// swap the placeholders here for provider-specific references.
+func moduleOutputsFor(mod, cloud string) string {
+	if cloud != "aws" {
+		return moduleOutputsPlaceholder(mod)
+	}
 	switch mod {
 	case "networking":
 		return `output "vpc_id" {
@@ -452,6 +462,61 @@ output "database_security_group_id" {
 		return `output "log_group_name" {
   description = "Application log group name."
   value       = aws_cloudwatch_log_group.app.name
+}
+`
+	}
+	return ""
+}
+
+// moduleOutputsPlaceholder returns outputs whose values are literals rather
+// than resource references — used for non-AWS renders where main.tf is still
+// a comment-only skeleton. The output NAMES match the AWS versions so root
+// modules can keep wiring module.<name>.<output> consistently.
+func moduleOutputsPlaceholder(mod string) string {
+	switch mod {
+	case "networking":
+		return `output "vpc_id" {
+  description = "VPC identifier (placeholder — populate when module body lands)."
+  value       = ""
+}
+
+output "public_subnet_ids" {
+  description = "IDs of the public subnets (placeholder)."
+  value       = []
+}
+
+output "private_subnet_ids" {
+  description = "IDs of the private subnets (placeholder)."
+  value       = []
+}
+`
+	case "security":
+		return `output "app_security_group_id" {
+  description = "Security group ID for application workloads (placeholder)."
+  value       = ""
+}
+
+output "database_security_group_id" {
+  description = "Security group ID for database workloads (placeholder)."
+  value       = ""
+}
+`
+	case "compute":
+		return `output "endpoints" {
+  description = "Application entrypoints (placeholder)."
+  value       = []
+}
+`
+	case "database":
+		return `output "endpoint" {
+  description = "Database connection endpoint (placeholder)."
+  value       = ""
+}
+`
+	case "monitoring":
+		return `output "log_group_name" {
+  description = "Application log group name (placeholder)."
+  value       = ""
 }
 `
 	}
