@@ -1,10 +1,12 @@
 package providers
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 )
@@ -71,6 +73,7 @@ type anthropicRequest struct {
 	Messages    []anthropicMessage `json:"messages"`
 	MaxTokens   int                `json:"max_tokens"`
 	Temperature float64            `json:"temperature,omitempty"`
+	Stream      bool               `json:"stream,omitempty"`
 }
 
 type anthropicContentBlock struct {
@@ -149,4 +152,91 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (string, 
 		return "", ErrEmptyResponse
 	}
 	return out.String(), nil
+}
+
+// anthropicStreamEvent is the shape of the event JSON carried by each SSE
+// "data:" line from the Messages API. We care about content_block_delta for
+// incremental text and message_delta / message_stop for stream end. Event
+// types we don't recognise are ignored so new fields don't break parsing.
+type anthropicStreamEvent struct {
+	Type  string `json:"type"`
+	Delta struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	} `json:"delta"`
+	Error *struct {
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// Stream consumes Anthropic's Messages SSE stream. Each token arrives as a
+// content_block_delta event whose delta.text carries the increment.
+func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta DeltaFunc) (string, error) {
+	maxTokens := req.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = 4096
+	}
+	body := anthropicRequest{
+		Model:  p.model,
+		System: req.System,
+		Messages: []anthropicMessage{
+			{Role: "user", Content: req.User},
+		},
+		MaxTokens:   maxTokens,
+		Temperature: req.Temperature,
+		Stream:      true,
+	}
+	raw, _ := json.Marshal(body)
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(raw))
+	if err != nil {
+		return "", err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("x-api-key", p.apiKey)
+	httpReq.Header.Set("anthropic-version", p.apiVersion)
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	resp, err := p.client.Do(httpReq)
+	if err != nil {
+		return "", fmt.Errorf("anthropic API unavailable: %w", err)
+	}
+	defer resp.Body.Close()
+
+	var accum strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return accum.String(), err
+		}
+		line := scanner.Text()
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "" {
+			continue
+		}
+		var ev anthropicStreamEvent
+		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
+			continue
+		}
+		if ev.Error != nil {
+			return accum.String(), fmt.Errorf("anthropic API error: %s", ev.Error.Message)
+		}
+		if ev.Type == "content_block_delta" && ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
+			onDelta(ev.Delta.Text)
+			accum.WriteString(ev.Delta.Text)
+		}
+		if ev.Type == "message_stop" {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil && err != io.EOF {
+		return accum.String(), fmt.Errorf("anthropic stream: %w", err)
+	}
+	if accum.Len() == 0 {
+		return "", ErrEmptyResponse
+	}
+	return accum.String(), nil
 }

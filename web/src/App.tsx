@@ -484,19 +484,45 @@ export default function App() {
     if (!chatInput.trim() || !tool) return;
     const input = chatInput;
     setChatInput('');
-    setChatMessages(prev => [...prev, { role: 'user', text: input }]);
+    // Append the user turn and a placeholder AI bubble that will be filled in
+    // by the streaming deltas below. Tracking the assistant turn's index lets
+    // us patch just that one entry as tokens arrive without re-rendering the
+    // whole message list each time.
+    let aiIndex = -1;
+    setChatMessages(prev => {
+      const next = [...prev, { role: 'user' as const, text: input }, { role: 'ai' as const, text: '' }];
+      aiIndex = next.length - 1;
+      return next;
+    });
     setChatLoading(true);
 
     try {
       const provider = detectProvider();
-      const result = await api.chat({
-        message: input,
-        tool,
-        provider,
-        history: chatMessages.map(m => ({ role: m.role === 'ai' ? 'ai' : 'user', content: m.text })),
-        canvas: nodes.map(n => ({ type: n.type, name: n.name })),
+      const history = chatMessages.map(m => ({ role: m.role === 'ai' ? 'ai' : 'user', content: m.text }));
+      const canvas = nodes.map(n => ({ type: n.type, name: n.name }));
+
+      const result = await api.chatStream(
+        { message: input, tool, provider, history, canvas },
+        (delta: string) => {
+          // Append raw tokens to the live assistant bubble. The server parses
+          // the final JSON in the "complete" event, so we still get clean
+          // message + resources at the end — this just shows progress.
+          setChatMessages(prev => {
+            if (aiIndex < 0 || aiIndex >= prev.length) return prev;
+            const next = [...prev];
+            next[aiIndex] = { ...next[aiIndex], text: next[aiIndex].text + delta };
+            return next;
+          });
+        },
+      );
+
+      // Replace the streamed raw text with the parsed clean message.
+      setChatMessages(prev => {
+        if (aiIndex < 0 || aiIndex >= prev.length) return prev;
+        const next = [...prev];
+        next[aiIndex] = { ...next[aiIndex], text: result.message };
+        return next;
       });
-      setChatMessages(prev => [...prev, { role: 'ai', text: result.message }]);
       if (result.suggestions) setSuggestions(result.suggestions);
       if (result.resources) {
         result.resources.forEach(r => {
@@ -510,7 +536,12 @@ export default function App() {
         });
       }
     } catch {
-      setChatMessages(prev => [...prev, { role: 'ai', text: 'AI is unavailable. Make sure Ollama is running.' }]);
+      setChatMessages(prev => {
+        if (aiIndex < 0 || aiIndex >= prev.length) return prev;
+        const next = [...prev];
+        next[aiIndex] = { ...next[aiIndex], text: 'AI is unavailable. Make sure your provider is reachable.' };
+        return next;
+      });
     }
     setChatLoading(false);
   };

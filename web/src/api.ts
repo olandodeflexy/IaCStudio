@@ -216,7 +216,8 @@ export const api = {
     return (await check(res)).json();
   },
 
-  // AI chat with conversation context
+  // AI chat with conversation context (non-streaming).
+  // Kept for callers that don't need progressive rendering.
   async chat(req: {
     message: string;
     tool: string;
@@ -230,6 +231,79 @@ export const api = {
       body: JSON.stringify(req),
     });
     return (await check(res)).json();
+  },
+
+  // AI chat with streaming — tokens arrive via onDelta as the model generates.
+  // The promise resolves with the final parsed {message, resources, suggestions}
+  // once the "complete" SSE event arrives. Throws on network error or abort.
+  //
+  // We don't use EventSource because EventSource only supports GET and can't
+  // send a JSON body. The manual ReadableStream reader below handles the SSE
+  // wire format directly.
+  async chatStream(
+    req: {
+      message: string;
+      tool: string;
+      provider: string;
+      history: { role: string; content: string }[];
+      canvas: { type: string; name: string }[];
+    },
+    onDelta: (text: string) => void,
+    signal?: AbortSignal,
+  ): Promise<{ message: string; resources: Resource[] | null; suggestions?: Suggestion[] }> {
+    const res = await fetch(`${BASE}/api/ai/chat/stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
+      body: JSON.stringify(req),
+      signal,
+    });
+    if (!res.ok || !res.body) {
+      throw new Error(`chat stream failed: ${res.status} ${res.statusText}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let complete: { message: string; resources: Resource[] | null; suggestions?: Suggestion[] } | null = null;
+
+    // SSE events are separated by "\n\n"; each event has "event: X\ndata: Y\n"
+    // lines. We accumulate into buffer and split on blank lines.
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let sep = buffer.indexOf('\n\n');
+      while (sep !== -1) {
+        const raw = buffer.slice(0, sep);
+        buffer = buffer.slice(sep + 2);
+        sep = buffer.indexOf('\n\n');
+
+        let eventType = 'message';
+        let data = '';
+        for (const line of raw.split('\n')) {
+          if (line.startsWith('event: ')) eventType = line.slice(7).trim();
+          else if (line.startsWith('data: ')) data += line.slice(6);
+        }
+        if (!data) continue;
+        try {
+          const payload = JSON.parse(data);
+          if (eventType === 'delta' && typeof payload.text === 'string') {
+            onDelta(payload.text);
+          } else if (eventType === 'complete') {
+            complete = payload;
+          } else if (eventType === 'error') {
+            throw new Error(payload.error || 'chat stream error');
+          }
+        } catch (e) {
+          // Malformed event — skip rather than aborting the whole stream.
+          console.warn('malformed SSE event', e, data);
+        }
+      }
+    }
+    if (!complete) {
+      throw new Error('chat stream ended without a complete event');
+    }
+    return complete;
   },
 
   // Analyze plan/apply output and get AI fix suggestions

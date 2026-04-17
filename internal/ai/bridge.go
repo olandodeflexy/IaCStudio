@@ -132,6 +132,35 @@ func (c *Client) callLLM(ctx context.Context, systemPrompt, userPrompt string) (
 	})
 }
 
+// StreamChat runs the same IaC chat generation as GenerateIaC but emits
+// incremental text chunks via onDelta as they arrive from the provider. The
+// returned tuple is (full response text, parsed resources, error) — the
+// caller is responsible for feeding onDelta to an SSE response writer.
+//
+// The parsed resources come from the same JSON parser GenerateIaC uses, so
+// the contract downstream of this function is identical: callers can render
+// tokens live and still get a clean structured result at the end.
+func (c *Client) StreamChat(ctx context.Context, req ChatRequest, onDelta providers.DeltaFunc) (string, []parser.Resource, error) {
+	if c.providerErr != nil {
+		return "", nil, c.providerErr
+	}
+	systemPrompt := buildSystemPrompt(req.Tool, req.Provider, req.Canvas)
+	userPrompt := buildChatUserPrompt(req)
+
+	raw, err := c.provider.Stream(ctx, providers.Request{
+		System:      systemPrompt,
+		User:        userPrompt,
+		Temperature: defaultTemperature,
+		MaxTokens:   defaultMaxTokens,
+		JSONMode:    true,
+	}, onDelta)
+	if err != nil {
+		return raw, nil, err
+	}
+	msg, resources, err := parseAIResponse(raw)
+	return msg, resources, err
+}
+
 // ChatMessage represents one message in a conversation.
 type ChatMessage struct {
 	Role    string `json:"role"`    // "user" or "ai"
@@ -157,33 +186,37 @@ type CanvasResource struct {
 // full conversation context, provider awareness, and canvas state.
 func (c *Client) GenerateIaC(ctx context.Context, req ChatRequest) (string, []parser.Resource, error) {
 	systemPrompt := buildSystemPrompt(req.Tool, req.Provider, req.Canvas)
-
-	// Build user prompt with conversation context
-	var userPrompt string
-	if len(req.History) > 0 {
-		var parts []string
-		history := req.History
-		if len(history) > 6 {
-			history = history[len(history)-6:]
-		}
-		for _, msg := range history {
-			if msg.Role == "user" {
-				parts = append(parts, "User: "+msg.Content)
-			} else {
-				parts = append(parts, "Assistant: "+msg.Content)
-			}
-		}
-		userPrompt = fmt.Sprintf("Conversation so far:\n%s\n\nUser request: %s\n\nRespond with JSON only.",
-			strings.Join(parts, "\n"), req.Message)
-	} else {
-		userPrompt = fmt.Sprintf("User request: %s\n\nRespond with JSON only.", req.Message)
-	}
+	userPrompt := buildChatUserPrompt(req)
 
 	raw, err := c.callLLM(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return "", nil, err
 	}
 	return parseAIResponse(raw)
+}
+
+// buildChatUserPrompt composes the user-side prompt for a chat turn. It folds
+// in up to the last six history messages plus the current user message, and
+// reminds the model to emit JSON. Shared between GenerateIaC and StreamChat
+// so both paths see identical context.
+func buildChatUserPrompt(req ChatRequest) string {
+	if len(req.History) == 0 {
+		return fmt.Sprintf("User request: %s\n\nRespond with JSON only.", req.Message)
+	}
+	history := req.History
+	if len(history) > 6 {
+		history = history[len(history)-6:]
+	}
+	parts := make([]string, 0, len(history))
+	for _, msg := range history {
+		if msg.Role == "user" {
+			parts = append(parts, "User: "+msg.Content)
+		} else {
+			parts = append(parts, "Assistant: "+msg.Content)
+		}
+	}
+	return fmt.Sprintf("Conversation so far:\n%s\n\nUser request: %s\n\nRespond with JSON only.",
+		strings.Join(parts, "\n"), req.Message)
 }
 
 // PlanFixRequest is a request to analyze plan/apply output and suggest fixes.

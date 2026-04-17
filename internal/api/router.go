@@ -566,6 +566,59 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		})
 	})
 
+	// Streaming AI chat via Server-Sent Events.
+	// Event types emitted:
+	//   - "delta"     — {text: "..."}        for every incremental chunk
+	//   - "complete"  — {message, resources, suggestions}  on successful finish
+	//   - "error"     — {error: "..."}       when the provider call fails
+	// The non-streaming /api/ai/chat handler above is retained so older
+	// clients keep working; new clients should prefer this endpoint.
+	mux.HandleFunc("POST /api/ai/chat/stream", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var req ai.ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported by this server", 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no") // bypass nginx/proxy buffering
+		w.WriteHeader(http.StatusOK)
+
+		writeEvent := func(event string, payload any) {
+			data, _ := json.Marshal(payload)
+			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+			flusher.Flush()
+		}
+
+		onDelta := func(chunk string) {
+			writeEvent("delta", map[string]string{"text": chunk})
+		}
+
+		response, resources, err := aiClient.StreamChat(r.Context(), req, onDelta)
+		if err != nil {
+			// Fall back to deterministic pattern matching so users aren't
+			// left hanging when the provider is unreachable, matching the
+			// non-streaming handler's behaviour.
+			log.Printf("AI stream failed, falling back to pattern match: %v", err)
+			response, resources = ai.PatternMatch(req.Message, req.Tool, req.Provider)
+		}
+		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
+
+		writeEvent("complete", map[string]interface{}{
+			"message":     response,
+			"resources":   resources,
+			"suggestions": suggestions,
+		})
+	})
+
 	// Smart resource suggestions based on canvas state
 	mux.HandleFunc("POST /api/ai/suggest", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)

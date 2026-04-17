@@ -247,6 +247,92 @@ func TestAnthropicProviderDefaultMaxTokens(t *testing.T) {
 	}
 }
 
+// TestOllamaProviderStream verifies NDJSON streaming: every non-empty
+// "response" line is delivered as a delta and the full text is returned
+// on completion.
+func TestOllamaProviderStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		// Three chunks then a done marker. Each line is one JSON object.
+		_, _ = w.Write([]byte(`{"response":"hel","done":false}` + "\n"))
+		_, _ = w.Write([]byte(`{"response":"lo ","done":false}` + "\n"))
+		_, _ = w.Write([]byte(`{"response":"world","done":false}` + "\n"))
+		_, _ = w.Write([]byte(`{"response":"","done":true}` + "\n"))
+	}))
+	defer srv.Close()
+
+	var deltas []string
+	p := NewOllama(Config{Endpoint: srv.URL, Model: "m"})
+	got, err := p.Stream(context.Background(), Request{System: "s", User: "u"}, func(d string) {
+		deltas = append(deltas, d)
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if got != "hello world" {
+		t.Errorf("final text = %q", got)
+	}
+	if len(deltas) != 3 {
+		t.Errorf("want 3 deltas, got %d: %v", len(deltas), deltas)
+	}
+}
+
+// TestOpenAIProviderStream exercises SSE parsing: "data: {...}" lines turned
+// into deltas, "data: [DONE]" terminates.
+func TestOpenAIProviderStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"he\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"llo\"}}]}\n\n"))
+		// Unrelated event line must be ignored, not broken on.
+		_, _ = w.Write([]byte(": comment keep-alive\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	var accum string
+	p := NewOpenAI(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
+	got, err := p.Stream(context.Background(), Request{System: "s", User: "u"}, func(d string) {
+		accum += d
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if got != "hello" || accum != "hello" {
+		t.Errorf("final=%q accum=%q", got, accum)
+	}
+}
+
+// TestAnthropicProviderStream covers the Messages API event stream:
+// content_block_delta with text_delta → delta callback; message_stop ends.
+func TestAnthropicProviderStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Intersperse event types so we confirm we only react to the right ones.
+		_, _ = w.Write([]byte("data: {\"type\":\"message_start\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"he\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"llo\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_delta\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer srv.Close()
+
+	var deltas []string
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "claude-opus-4-7", APIKey: "sk-ant"})
+	got, err := p.Stream(context.Background(), Request{System: "s", User: "u"}, func(d string) {
+		deltas = append(deltas, d)
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if got != "hello" {
+		t.Errorf("final text = %q", got)
+	}
+	if len(deltas) != 2 {
+		t.Errorf("want 2 deltas, got %d: %v", len(deltas), deltas)
+	}
+}
+
 // TestAnthropicProviderError surfaces the typed error message from the API.
 func TestAnthropicProviderError(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

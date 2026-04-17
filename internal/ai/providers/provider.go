@@ -53,15 +53,24 @@ type Request struct {
 	JSONMode bool
 }
 
+// DeltaFunc receives incremental text chunks as they arrive from the LLM.
+// It MUST NOT block on the caller's UI — implementations of Provider.Stream
+// call this inline during the SSE/NDJSON read loop, so slow callbacks back
+// up the whole stream.
+type DeltaFunc func(delta string)
+
 // Provider is the minimum surface every LLM backend must implement.
-// Streaming will be added as a second method in a follow-up commit once the
-// refactor lands; the single-shot Complete signature is enough to keep
-// feature parity with the original bridge for now.
 type Provider interface {
 	// Kind returns the stable identifier of this provider ("ollama" | …).
 	Kind() Kind
 	// Complete returns the full assistant reply for the given request.
 	Complete(ctx context.Context, req Request) (string, error)
+	// Stream invokes onDelta for each chunk as it arrives and returns the
+	// full accumulated text on success. Cancel via ctx to stop mid-stream.
+	// Providers that lack native streaming should fall back to a single
+	// onDelta call with the full Complete response so callers always see at
+	// least one delta before the final return.
+	Stream(ctx context.Context, req Request, onDelta DeltaFunc) (string, error)
 }
 
 // ErrEmptyResponse is returned when a provider round-trips successfully but
