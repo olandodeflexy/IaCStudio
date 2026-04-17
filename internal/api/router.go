@@ -604,10 +604,14 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 		response, resources, err := aiClient.StreamChat(r.Context(), req, onDelta)
 		if err != nil {
+			// Emit the documented error event so clients can distinguish a
+			// real provider stream from the deterministic fallback below.
+			log.Printf("AI stream failed, falling back to pattern match: %v", err)
+			writeEvent("error", map[string]string{"error": err.Error()})
+
 			// Fall back to deterministic pattern matching so users aren't
 			// left hanging when the provider is unreachable, matching the
 			// non-streaming handler's behaviour.
-			log.Printf("AI stream failed, falling back to pattern match: %v", err)
 			response, resources = ai.PatternMatch(req.Message, req.Tool, req.Provider)
 		}
 		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
