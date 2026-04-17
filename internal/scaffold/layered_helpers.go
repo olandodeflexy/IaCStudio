@@ -1,17 +1,9 @@
 package scaffold
 
 import (
-	"encoding/json"
 	"fmt"
 	"strings"
 )
-
-// jsonStringArray renders a []string as a compact JSON array literal for use
-// in hand-written JSON files (.iac-studio.json).
-func jsonStringArray(items []string) string {
-	b, _ := json.Marshal(items)
-	return string(b)
-}
 
 // providerBlock returns the HCL provider block appropriate for the target cloud
 // and environment. The region is left as a variable reference so tfvars wins.

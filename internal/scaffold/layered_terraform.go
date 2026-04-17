@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -135,19 +136,31 @@ override.tf.json
 Thumbs.db
 `
 
-	studioMeta := fmt.Sprintf(`{
-  "layout": "layered-v1",
-  "tool": "terraform",
-  "cloud": "%s",
-  "environments": %s,
-  "modules": %s,
-  "tags": {
-    "Owner": "%s",
-    "CostCenter": "%s",
-    "ManagedBy": "iac-studio"
-  }
-}
-`, c.Cloud, jsonStringArray(c.Envs), jsonStringArray(c.Modules), c.Owner, c.CostCenter)
+	metaObj := struct {
+		Layout       string            `json:"layout"`
+		Tool         string            `json:"tool"`
+		Cloud        string            `json:"cloud"`
+		Environments []string          `json:"environments"`
+		Modules      []string          `json:"modules"`
+		Tags         map[string]string `json:"tags"`
+	}{
+		Layout:       "layered-v1",
+		Tool:         "terraform",
+		Cloud:        c.Cloud,
+		Environments: c.Envs,
+		Modules:      c.Modules,
+		Tags: map[string]string{
+			"Owner":      c.Owner,
+			"CostCenter": c.CostCenter,
+			"ManagedBy":  "iac-studio",
+		},
+	}
+	studioMetaBytes, err := json.MarshalIndent(metaObj, "", "  ")
+	if err != nil {
+		// This should never happen with plain string fields; surface it clearly.
+		panic(fmt.Sprintf("scaffold: failed to marshal .iac-studio.json: %v", err))
+	}
+	studioMeta := string(studioMetaBytes) + "\n"
 
 	return []File{
 		{Path: "README.md", Content: []byte(readme)},
