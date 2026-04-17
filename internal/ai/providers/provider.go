@@ -51,6 +51,12 @@ type Request struct {
 	// if it natively supports such a mode (Ollama's "format":"json", OpenAI's
 	// response_format, etc.). Providers that don't support it ignore the hint.
 	JSONMode bool
+	// Cacheable asks the provider to cache the System prompt across calls
+	// when it supports prompt caching. Today only Anthropic honours this
+	// (via cache_control on the system block). Ignored elsewhere. When the
+	// system prompt is below a provider's minimum cacheable size, the hint
+	// is silently dropped by the provider.
+	Cacheable bool
 }
 
 // DeltaFunc receives incremental text chunks as they arrive from the LLM.

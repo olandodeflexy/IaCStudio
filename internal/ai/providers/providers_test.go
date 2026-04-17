@@ -247,6 +247,143 @@ func TestAnthropicProviderDefaultMaxTokens(t *testing.T) {
 	}
 }
 
+// TestAnthropicPromptCachingRequestShape verifies that when Cacheable=true
+// the system field is serialised as an array of blocks with cache_control,
+// and that it stays a plain string otherwise.
+func TestAnthropicPromptCachingRequestShape(t *testing.T) {
+	cases := []struct {
+		name      string
+		cacheable bool
+		checkBody func(t *testing.T, raw []byte)
+	}{
+		{
+			name:      "cacheable serialises system as blocks with cache_control",
+			cacheable: true,
+			checkBody: func(t *testing.T, raw []byte) {
+				// Probe the JSON loosely so the test doesn't break if Anthropic
+				// adds new top-level fields.
+				var body map[string]any
+				if err := json.Unmarshal(raw, &body); err != nil {
+					t.Fatalf("unmarshal request: %v", err)
+				}
+				arr, ok := body["system"].([]any)
+				if !ok {
+					t.Fatalf("system should be array when Cacheable=true, got %T", body["system"])
+				}
+				if len(arr) != 1 {
+					t.Fatalf("expected one system block, got %d", len(arr))
+				}
+				block := arr[0].(map[string]any)
+				if block["type"] != "text" || block["text"] != "the system prompt" {
+					t.Errorf("block content wrong: %+v", block)
+				}
+				cc, ok := block["cache_control"].(map[string]any)
+				if !ok || cc["type"] != "ephemeral" {
+					t.Errorf("missing ephemeral cache_control: %+v", block)
+				}
+			},
+		},
+		{
+			name:      "non-cacheable uses plain string",
+			cacheable: false,
+			checkBody: func(t *testing.T, raw []byte) {
+				var body map[string]any
+				if err := json.Unmarshal(raw, &body); err != nil {
+					t.Fatalf("unmarshal request: %v", err)
+				}
+				s, ok := body["system"].(string)
+				if !ok {
+					t.Fatalf("system should be string when Cacheable=false, got %T", body["system"])
+				}
+				if s != "the system prompt" {
+					t.Errorf("system = %q", s)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				tc.checkBody(t, body)
+				_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+			}))
+			defer srv.Close()
+			p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
+			_, err := p.Complete(context.Background(), Request{
+				System: "the system prompt", User: "u", Cacheable: tc.cacheable,
+			})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+		})
+	}
+}
+
+// TestAnthropicLastUsageFromComplete ensures cache-hit telemetry flows through
+// to LastUsage() after a blocking call — callers can read it to verify the
+// 80% cache-hit target.
+func TestAnthropicLastUsageFromComplete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"content": [{"type":"text","text":"ok"}],
+			"usage": {"input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 8, "cache_creation_input_tokens": 0}
+		}`))
+	}))
+	defer srv.Close()
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"}).(*anthropicProvider)
+	if _, err := p.Complete(context.Background(), Request{System: "s", User: "u", Cacheable: true}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	usage := p.LastUsage()
+	if usage.InputTokens != 10 || usage.OutputTokens != 2 || usage.CacheReadInputTokens != 8 {
+		t.Errorf("LastUsage wrong: %+v", usage)
+	}
+}
+
+// TestAnthropicLastUsageFromStream ensures streaming also populates
+// LastUsage, merged across message_start + message_delta events.
+func TestAnthropicLastUsageFromStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":0,"cache_read_input_tokens":10}}}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"type":"message_delta","usage":{"output_tokens":5}}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"type":"message_stop"}` + "\n\n"))
+	}))
+	defer srv.Close()
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"}).(*anthropicProvider)
+	_, err := p.Stream(context.Background(), Request{System: "s", User: "u", Cacheable: true}, func(string) {})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	usage := p.LastUsage()
+	if usage.InputTokens != 12 || usage.OutputTokens != 5 || usage.CacheReadInputTokens != 10 {
+		t.Errorf("LastUsage wrong: %+v", usage)
+	}
+}
+
+// TestOllamaIgnoresCacheableFlag proves Cacheable is a no-op for providers
+// that don't support it — no wire-format changes when the flag is set.
+func TestOllamaIgnoresCacheableFlag(t *testing.T) {
+	var captured ollamaRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		_ = json.NewEncoder(w).Encode(ollamaResponse{Response: "ok"})
+	}))
+	defer srv.Close()
+	p := NewOllama(Config{Endpoint: srv.URL, Model: "m"})
+	_, err := p.Complete(context.Background(), Request{System: "s", User: "u", Cacheable: true})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	// Wire format is unchanged regardless of the cacheable flag.
+	if captured.Model != "m" || !strings.Contains(captured.Prompt, "s") {
+		t.Errorf("ollama request shape changed unexpectedly: %+v", captured)
+	}
+}
+
 // TestOllamaProviderStream verifies NDJSON streaming: every non-empty
 // "response" line is delivered as a delta and the full text is returned
 // on completion.

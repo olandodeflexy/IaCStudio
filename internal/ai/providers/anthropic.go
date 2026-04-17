@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 )
 
 // anthropicProvider talks to Anthropic's Messages API.
@@ -28,6 +29,47 @@ type anthropicProvider struct {
 	apiKey     string
 	apiVersion string
 	client     *http.Client
+
+	// lastUsage carries the usage block from the most recent response.
+	// Exported via LastUsage() so tests and the /api/ai/settings endpoint
+	// can read cache-hit ratios without re-plumbing telemetry through the
+	// Provider interface (which stays tiny on purpose).
+	mu        sync.Mutex
+	lastUsage AnthropicUsage
+}
+
+// AnthropicUsage is a public snapshot of the decoded usage fields from the
+// last Anthropic response. Exposed for observability — callers treat the
+// whole struct as read-only.
+type AnthropicUsage struct {
+	InputTokens              int
+	OutputTokens             int
+	CacheCreationInputTokens int
+	CacheReadInputTokens     int
+}
+
+// LastUsage returns the usage snapshot from the most recent round-trip. Safe
+// to call concurrently with other provider methods.
+func (p *anthropicProvider) LastUsage() AnthropicUsage {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.lastUsage
+}
+
+func (p *anthropicProvider) recordUsage(u struct {
+	InputTokens              int `json:"input_tokens"`
+	OutputTokens             int `json:"output_tokens"`
+	CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+}) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.lastUsage = AnthropicUsage{
+		InputTokens:              u.InputTokens,
+		OutputTokens:             u.OutputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+	}
 }
 
 // DefaultAnthropicEndpoint is the public Messages API. Users can point at a
@@ -67,13 +109,49 @@ type anthropicMessage struct {
 	Content string `json:"content"`
 }
 
+// anthropicCacheControl marks a content block as cacheable. Anthropic currently
+// exposes one type ("ephemeral"), which caches for about 5 minutes.
+type anthropicCacheControl struct {
+	Type string `json:"type"`
+}
+
+// anthropicSystemBlock is one element of the system-as-array form. When
+// present, CacheControl tells the API to put a cache breakpoint at the end of
+// this block so subsequent calls with the same prefix hit the cache.
+type anthropicSystemBlock struct {
+	Type         string                 `json:"type"` // always "text" today
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
+// anthropicRequest.System accepts either a plain string or an array of
+// content blocks. We send the array form when caching is requested (so we can
+// attach cache_control) and the string form otherwise — both are valid per
+// Anthropic's docs; the simpler shape keeps non-cached requests compact and
+// easy to read in logs.
 type anthropicRequest struct {
 	Model       string             `json:"model"`
-	System      string             `json:"system,omitempty"`
+	System      any                `json:"system,omitempty"`
 	Messages    []anthropicMessage `json:"messages"`
 	MaxTokens   int                `json:"max_tokens"`
 	Temperature float64            `json:"temperature,omitempty"`
 	Stream      bool               `json:"stream,omitempty"`
+}
+
+// buildSystemField returns the appropriate JSON shape for the System field
+// depending on whether the caller opted into caching.
+func buildSystemField(text string, cacheable bool) any {
+	if text == "" {
+		return nil
+	}
+	if !cacheable {
+		return text
+	}
+	return []anthropicSystemBlock{{
+		Type:         "text",
+		Text:         text,
+		CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+	}}
 }
 
 type anthropicContentBlock struct {
@@ -106,7 +184,7 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (string, 
 	}
 	body := anthropicRequest{
 		Model:  p.model,
-		System: req.System,
+		System: buildSystemField(req.System, req.Cacheable),
 		Messages: []anthropicMessage{
 			{Role: "user", Content: req.User},
 		},
@@ -136,6 +214,7 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (string, 
 	if decoded.Error != nil {
 		return "", fmt.Errorf("anthropic API error: %s", decoded.Error.Message)
 	}
+	p.recordUsage(decoded.Usage)
 	if len(decoded.Content) == 0 {
 		return "", ErrEmptyResponse
 	}
@@ -158,12 +237,27 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (string, 
 // "data:" line from the Messages API. We care about content_block_delta for
 // incremental text and message_delta / message_stop for stream end. Event
 // types we don't recognise are ignored so new fields don't break parsing.
+//
+// Usage fields live on message_start (initial input_tokens + cache_*) and on
+// message_delta (output_tokens running total). We merge both so LastUsage
+// after a stream is directly comparable to the non-streaming path.
 type anthropicStreamEvent struct {
 	Type  string `json:"type"`
 	Delta struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	} `json:"delta"`
+	Message struct {
+		Usage struct {
+			InputTokens              int `json:"input_tokens"`
+			OutputTokens             int `json:"output_tokens"`
+			CacheCreationInputTokens int `json:"cache_creation_input_tokens,omitempty"`
+			CacheReadInputTokens     int `json:"cache_read_input_tokens,omitempty"`
+		} `json:"usage"`
+	} `json:"message"`
+	Usage struct {
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error"`
@@ -178,7 +272,7 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta Del
 	}
 	body := anthropicRequest{
 		Model:  p.model,
-		System: req.System,
+		System: buildSystemField(req.System, req.Cacheable),
 		Messages: []anthropicMessage{
 			{Role: "user", Content: req.User},
 		},
@@ -203,6 +297,9 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta Del
 	defer resp.Body.Close()
 
 	var accum strings.Builder
+	// Accumulate usage across the stream: message_start carries input_tokens
+	// and the cache counts; message_delta carries the running output_tokens.
+	streamUsage := AnthropicUsage{}
 	scanner := bufio.NewScanner(resp.Body)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
@@ -221,6 +318,15 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta Del
 		if err := json.Unmarshal([]byte(payload), &ev); err != nil {
 			continue
 		}
+		if ev.Type == "message_start" {
+			streamUsage.InputTokens = ev.Message.Usage.InputTokens
+			streamUsage.CacheCreationInputTokens = ev.Message.Usage.CacheCreationInputTokens
+			streamUsage.CacheReadInputTokens = ev.Message.Usage.CacheReadInputTokens
+			streamUsage.OutputTokens = ev.Message.Usage.OutputTokens
+		}
+		if ev.Type == "message_delta" && ev.Usage.OutputTokens > 0 {
+			streamUsage.OutputTokens = ev.Usage.OutputTokens
+		}
 		if ev.Error != nil {
 			return accum.String(), fmt.Errorf("anthropic API error: %s", ev.Error.Message)
 		}
@@ -235,6 +341,11 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta Del
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		return accum.String(), fmt.Errorf("anthropic stream: %w", err)
 	}
+	// Persist the merged usage snapshot so LastUsage() works identically
+	// after a streaming call and a blocking Complete call.
+	p.mu.Lock()
+	p.lastUsage = streamUsage
+	p.mu.Unlock()
 	if accum.Len() == 0 {
 		return "", ErrEmptyResponse
 	}

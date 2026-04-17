@@ -129,6 +129,7 @@ func (c *Client) callLLM(ctx context.Context, systemPrompt, userPrompt string) (
 		Temperature: defaultTemperature,
 		MaxTokens:   defaultMaxTokens,
 		JSONMode:    true,
+		Cacheable:   true,
 	})
 }
 
@@ -153,6 +154,7 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest, onDelta provid
 		Temperature: defaultTemperature,
 		MaxTokens:   defaultMaxTokens,
 		JSONMode:    true,
+		Cacheable:   true,
 	}, onDelta)
 	if err != nil {
 		return raw, nil, err
