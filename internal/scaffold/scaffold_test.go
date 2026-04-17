@@ -143,6 +143,58 @@ func TestLayeredTerraformRejectsUnsafeInputs(t *testing.T) {
 	}
 }
 
+// TestLayeredTerraformAzureDefaultStateBucket confirms that omitting
+// state_bucket with backend="azurerm" still yields a valid Azure storage
+// account name (3-24 lowercase alnum) instead of the hyphenated generic
+// default that would fail validation.
+func TestLayeredTerraformAzureDefaultStateBucket(t *testing.T) {
+	bp := &LayeredTerraformBlueprint{}
+	_, err := bp.Render(map[string]any{
+		"project_name": "acme-corp",
+		"backend":      "azurerm",
+		// state_bucket intentionally omitted — the default must be Azure-safe.
+	})
+	if err != nil {
+		t.Fatalf("default state_bucket should be Azure-safe, got: %v", err)
+	}
+
+	if got := defaultStateBucket("acme-corp", "azurerm"); !azureStorageAccountRE.MatchString(got) {
+		t.Errorf("defaultStateBucket(acme-corp, azurerm) = %q, not Azure-valid", got)
+	}
+	if got := defaultStateBucket("acme-corp", "azurerm"); strings.Contains(got, "-") {
+		t.Errorf("Azure default must not contain hyphens, got %q", got)
+	}
+	if got := defaultStateBucket("this-is-a-very-long-project-name", "azurerm"); len(got) > 24 {
+		t.Errorf("Azure default must be ≤24 chars, got %d (%q)", len(got), got)
+	}
+	if got := defaultStateBucket("acme", "s3"); got != "acme-tfstate" {
+		t.Errorf("s3 default should keep hyphen form, got %q", got)
+	}
+}
+
+// TestLayeredTerraformRejectsPathTraversalInEnvsModules prevents env/module
+// names that would escape the project directory or break HCL.
+func TestLayeredTerraformRejectsPathTraversalInEnvsModules(t *testing.T) {
+	cases := []struct {
+		name   string
+		values map[string]any
+	}{
+		{"slash in env", map[string]any{"project_name": "acme", "environments": []any{"../scripts"}}},
+		{"dot in env", map[string]any{"project_name": "acme", "environments": []any{".hidden"}}},
+		{"space in env", map[string]any{"project_name": "acme", "environments": []any{"dev env"}}},
+		{"slash in module", map[string]any{"project_name": "acme", "modules": []any{"net/work"}}},
+		{"uppercase module", map[string]any{"project_name": "acme", "modules": []any{"Networking"}}},
+	}
+	bp := &LayeredTerraformBlueprint{}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := bp.Render(tc.values); err == nil {
+				t.Fatalf("expected validation error, got nil")
+			}
+		})
+	}
+}
+
 // TestLayeredTerraformBackendNoneSkipsStateBucketValidation confirms that
 // selecting backend="none" disables state_bucket validation entirely — the
 // value isn't rendered, so rejecting it would be user-hostile.

@@ -227,7 +227,12 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			req.Values = map[string]any{}
 		}
 		if _, has := req.Values["project_name"]; !has {
-			req.Values["project_name"] = req.Name
+			// safeProjectPath accepts underscores and mixed case for directory
+			// names, but blueprints apply stricter rules (lowercase + hyphens)
+			// on project_name since it lands inside HCL and cloud resource
+			// identifiers. Normalise here so a valid-on-disk name doesn't
+			// unexpectedly fail blueprint validation.
+			req.Values["project_name"] = strings.ReplaceAll(strings.ToLower(req.Name), "_", "-")
 		}
 
 		projectPath, err := safeProjectPath(projectsDir, req.Name)

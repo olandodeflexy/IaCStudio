@@ -4,8 +4,28 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
+	"strings"
 	"unicode"
 )
+
+// segmentRE restricts an env or module name to a form that's safe to embed
+// as a single path segment ("environments/<env>/...") and as an HCL
+// identifier. It rules out dots, slashes, whitespace, and path-traversal
+// constructions, which would otherwise escape the project directory or break
+// generated code.
+var segmentRE = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+
+// validatePathSegment rejects an env/module name that would be unsafe to use
+// as a directory name or HCL identifier.
+func validatePathSegment(kind, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", kind)
+	}
+	if !segmentRE.MatchString(value) {
+		return fmt.Errorf("%s %q is invalid: use lowercase letters, digits, hyphens, and underscores; must start with a letter and be 1–32 chars", kind, value)
+	}
+	return nil
+}
 
 // safeNameRE restricts free-form string inputs to a conservative character set.
 // Values are embedded in generated HCL and cloud resource names, so anything
@@ -50,6 +70,24 @@ func validateHCLSafeValue(key, value string) error {
 		return fmt.Errorf("%s %q contains characters that would break generated HCL — stick to letters, digits, spaces, and _.:/=+-@", key, value)
 	}
 	return nil
+}
+
+// defaultStateBucket builds the fallback state_bucket value from the project
+// name, respecting each backend's name rules. s3/gcs accept the canonical
+// "<name>-tfstate"; azurerm storage accounts reject hyphens and cap at 24
+// chars, so we normalise.
+func defaultStateBucket(project, backend string) string {
+	if backend != "azurerm" {
+		return project + "-tfstate"
+	}
+	// Azure: lowercase alnum only, 3-24 chars.
+	stripped := strings.ReplaceAll(project, "-", "")
+	stripped = strings.ReplaceAll(stripped, "_", "")
+	candidate := stripped + "tfstate"
+	if len(candidate) > 24 {
+		candidate = candidate[:24]
+	}
+	return candidate
 }
 
 // titleCase uppercases the first rune of s. Stands in for the deprecated
@@ -112,9 +150,23 @@ func (b *LayeredTerraformBlueprint) Render(values map[string]any) ([]File, error
 	}
 	cloud := stringInput(values, "cloud", "aws")
 	envs := stringSliceInput(values, "environments", []string{"dev", "prod"})
+	for _, env := range envs {
+		if err := validatePathSegment("environment", env); err != nil {
+			return nil, err
+		}
+	}
 	modules := stringSliceInput(values, "modules", []string{"networking", "compute", "database", "security", "monitoring"})
+	for _, mod := range modules {
+		if err := validatePathSegment("module", mod); err != nil {
+			return nil, err
+		}
+	}
 	backend := stringInput(values, "backend", "s3")
-	stateBucket := stringInput(values, "state_bucket", name+"-tfstate")
+	// Derive a backend-appropriate default for state_bucket only when the
+	// caller didn't supply one. Azure storage accounts reject hyphens, so the
+	// generic "<name>-tfstate" default would always fail validation — strip
+	// hyphens and clamp to Azure's 24-char limit for that backend.
+	stateBucket := stringInput(values, "state_bucket", defaultStateBucket(name, backend))
 	// state_bucket validation is backend-specific. Each backend has different
 	// name rules, and backend="none" doesn't use state_bucket at all so we
 	// skip the check entirely rather than reject otherwise-valid scaffolds.

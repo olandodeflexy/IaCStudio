@@ -1,9 +1,10 @@
 // Package scaffold renders opinionated project layouts (blueprints) onto disk.
 //
 // A Blueprint declares a set of input fields and a Render function that turns
-// those inputs into a map of relative file paths → file contents. The scaffold
-// package writes those files to disk, respecting script-executable bits and
-// creating any missing directories along the way.
+// those inputs into a slice of File values carrying relative paths, contents,
+// and an executable flag. The scaffold package writes those files to disk,
+// respecting script-executable bits and creating any missing directories
+// along the way.
 //
 // Blueprints are registered in a Registry at package init time. The API layer
 // asks the Registry for the list of available blueprints, shows inputs to the
