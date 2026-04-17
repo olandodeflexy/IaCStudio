@@ -75,6 +75,20 @@ type openAIResponse struct {
 	} `json:"error,omitempty"`
 }
 
+func formatOpenAIErrorResponse(statusCode int, body []byte) error {
+	var decoded openAIResponse
+	if err := json.Unmarshal(body, &decoded); err == nil && decoded.Error != nil && strings.TrimSpace(decoded.Error.Message) != "" {
+		return fmt.Errorf("API error (%d): %s", statusCode, decoded.Error.Message)
+	}
+
+	message := strings.TrimSpace(string(body))
+	if message != "" {
+		return fmt.Errorf("API error (%d): %s", statusCode, message)
+	}
+
+	return fmt.Errorf("API error (%d): %s", statusCode, http.StatusText(statusCode))
+}
+
 func (p *openAIProvider) Complete(ctx context.Context, req Request) (string, error) {
 	body := openAIRequest{
 		Model: p.model,
@@ -98,6 +112,14 @@ func (p *openAIProvider) Complete(ctx context.Context, req Request) (string, err
 		return "", fmt.Errorf("openai-compatible API unavailable: %w", err)
 	}
 	defer resp.Body.Close()
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return "", fmt.Errorf("API error (%d): failed to read response body: %w", resp.StatusCode, err)
+		}
+		return "", formatOpenAIErrorResponse(resp.StatusCode, body)
+	}
 
 	var decoded openAIResponse
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
