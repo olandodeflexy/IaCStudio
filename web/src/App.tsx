@@ -480,10 +480,15 @@ export default function App() {
     api.suggest(tool, provider, canvas).then(setSuggestions).catch(() => {});
   }, [nodes, tool, detectProvider]);
 
-  const aiIndexRef = useRef<number>(-1);
+  const chatInFlightRef = useRef(false);
 
   const handleChat = async () => {
+    if (chatLoading || chatInFlightRef.current) return;
     if (!chatInput.trim() || !tool) return;
+
+    chatInFlightRef.current = true;
+    setChatLoading(true);
+
     const input = chatInput;
     setChatInput('');
     // Append the user turn and a placeholder AI bubble that will be filled in
@@ -491,13 +496,11 @@ export default function App() {
     // us patch just that one entry as tokens arrive without re-rendering the
     // whole message list each time.
     const nextAiIndex = chatMessages.length + 1;
-    aiIndexRef.current = nextAiIndex;
     setChatMessages(prev => [
       ...prev,
       { role: 'user' as const, text: input },
       { role: 'ai' as const, text: '' },
     ]);
-    setChatLoading(true);
 
     try {
       const provider = detectProvider();
@@ -511,10 +514,9 @@ export default function App() {
           // the final JSON in the "complete" event, so we still get clean
           // message + resources at the end — this just shows progress.
           setChatMessages(prev => {
-            const currentAiIndex = aiIndexRef.current;
-            if (currentAiIndex < 0 || currentAiIndex >= prev.length) return prev;
+            if (nextAiIndex < 0 || nextAiIndex >= prev.length) return prev;
             const next = [...prev];
-            next[currentAiIndex] = { ...next[currentAiIndex], text: next[currentAiIndex].text + delta };
+            next[nextAiIndex] = { ...next[nextAiIndex], text: next[nextAiIndex].text + delta };
             return next;
           });
         },
@@ -522,10 +524,9 @@ export default function App() {
 
       // Replace the streamed raw text with the parsed clean message.
       setChatMessages(prev => {
-        const currentAiIndex = aiIndexRef.current;
-        if (currentAiIndex < 0 || currentAiIndex >= prev.length) return prev;
+        if (nextAiIndex < 0 || nextAiIndex >= prev.length) return prev;
         const next = [...prev];
-        next[currentAiIndex] = { ...next[currentAiIndex], text: result.message };
+        next[nextAiIndex] = { ...next[nextAiIndex], text: result.message };
         return next;
       });
       if (result.suggestions) setSuggestions(result.suggestions);
@@ -542,14 +543,15 @@ export default function App() {
       }
     } catch {
       setChatMessages(prev => {
-        const currentAiIndex = aiIndexRef.current;
-        if (currentAiIndex < 0 || currentAiIndex >= prev.length) return prev;
+        if (nextAiIndex < 0 || nextAiIndex >= prev.length) return prev;
         const next = [...prev];
-        next[currentAiIndex] = { ...next[currentAiIndex], text: 'AI is unavailable. Make sure your provider is reachable.' };
+        next[nextAiIndex] = { ...next[nextAiIndex], text: 'AI is unavailable. Make sure your provider is reachable.' };
         return next;
       });
+    } finally {
+      chatInFlightRef.current = false;
+      setChatLoading(false);
     }
-    setChatLoading(false);
   };
 
   const runCmd = (command: string) => {
