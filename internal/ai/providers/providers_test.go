@@ -26,7 +26,8 @@ func TestFactoryInfersKindFromCredentials(t *testing.T) {
 		{"non-empty key infers openai", Config{Endpoint: "http://x", Model: "m", APIKey: "sk-1234"}, KindOpenAI, false},
 		{"explicit ollama wins over key", Config{Kind: KindOllama, APIKey: "sk-ignored", Endpoint: "http://x", Model: "m"}, KindOllama, false},
 		{"openai requires key", Config{Kind: KindOpenAI, Endpoint: "http://x", Model: "m"}, "", true},
-		{"anthropic not yet implemented", Config{Kind: KindAnthropic, APIKey: "sk-ant-123", Model: "m"}, "", true},
+		{"anthropic with key", Config{Kind: KindAnthropic, APIKey: "sk-ant-123", Model: "claude-opus-4-7"}, KindAnthropic, false},
+		{"anthropic requires key", Config{Kind: KindAnthropic, Model: "claude-opus-4-7"}, "", true},
 		{"unknown kind rejected", Config{Kind: "palm", Model: "m"}, "", true},
 	}
 	for _, tc := range cases {
@@ -167,6 +168,95 @@ func TestOpenAIProviderError(t *testing.T) {
 	p := NewOpenAI(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
 	_, err := p.Complete(context.Background(), Request{System: "s", User: "u"})
 	if err == nil || !strings.Contains(err.Error(), "rate limit exceeded") {
+		t.Fatalf("want upstream error message, got %v", err)
+	}
+}
+
+// TestAnthropicProviderComplete exercises the Messages API shape: top-level
+// system field (not a message), messages array with just user turn, required
+// max_tokens, and Anthropic's specific headers (x-api-key + anthropic-version).
+func TestAnthropicProviderComplete(t *testing.T) {
+	var captured anthropicRequest
+	var gotKey, gotVersion string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/v1/messages") {
+			t.Errorf("anthropic must POST to /v1/messages, got %s", r.URL.Path)
+		}
+		gotKey = r.Header.Get("x-api-key")
+		gotVersion = r.Header.Get("anthropic-version")
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("bad request: %v", err)
+		}
+		_, _ = w.Write([]byte(`{
+			"content": [
+				{"type":"text","text":"hello "},
+				{"type":"text","text":"world"}
+			],
+			"usage": {"input_tokens": 10, "output_tokens": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "claude-opus-4-7", APIKey: "sk-ant-xyz"})
+	got, err := p.Complete(context.Background(), Request{
+		System: "you are helpful", User: "hi", MaxTokens: 256, Temperature: 0.2,
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	// Multiple text blocks should be concatenated rather than dropped.
+	if got != "hello world" {
+		t.Errorf("Complete() = %q, want hello world", got)
+	}
+	if gotKey != "sk-ant-xyz" {
+		t.Errorf("x-api-key header = %q", gotKey)
+	}
+	if gotVersion != DefaultAnthropicVersion {
+		t.Errorf("anthropic-version header = %q, want %s", gotVersion, DefaultAnthropicVersion)
+	}
+	if captured.System != "you are helpful" {
+		t.Errorf("System should live at top level, got %q", captured.System)
+	}
+	if len(captured.Messages) != 1 || captured.Messages[0].Role != "user" {
+		t.Errorf("expected single user message, got %+v", captured.Messages)
+	}
+	if captured.MaxTokens != 256 {
+		t.Errorf("MaxTokens = %d, want 256", captured.MaxTokens)
+	}
+}
+
+// TestAnthropicProviderDefaultMaxTokens guarantees we never send max_tokens=0
+// (which the Messages API rejects) when the caller forgets to set it.
+func TestAnthropicProviderDefaultMaxTokens(t *testing.T) {
+	var captured anthropicRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
+	_, err := p.Complete(context.Background(), Request{System: "s", User: "u"})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if captured.MaxTokens == 0 {
+		t.Error("MaxTokens must default to a non-zero value for the Messages API")
+	}
+}
+
+// TestAnthropicProviderError surfaces the typed error message from the API.
+func TestAnthropicProviderError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"bad model"}}`))
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
+	_, err := p.Complete(context.Background(), Request{System: "s", User: "u"})
+	if err == nil || !strings.Contains(err.Error(), "bad model") {
 		t.Fatalf("want upstream error message, got %v", err)
 	}
 }

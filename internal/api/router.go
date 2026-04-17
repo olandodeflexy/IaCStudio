@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/iac-studio/iac-studio/internal/ai"
+	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/catalog"
 	"github.com/iac-studio/iac-studio/internal/drift"
 	"github.com/iac-studio/iac-studio/internal/exporter"
@@ -700,7 +701,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		_ = json.NewEncoder(w).Encode(aiClient.GetConfig())
 	})
 
-	// Update AI provider config (supports Ollama and OpenAI-compatible APIs)
+	// Update AI provider config (supports Ollama, OpenAI-compatible, and Anthropic).
+	// Type is validated explicitly so a user selecting "anthropic" in the UI
+	// isn't silently downgraded to the OpenAI path just because they supplied
+	// an API key.
 	mux.HandleFunc("PUT /api/ai/settings", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
 		var req ai.ProviderConfig
@@ -708,11 +712,33 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, "invalid request", 400)
 			return
 		}
-		if req.Endpoint == "" || req.Model == "" {
-			http.Error(w, "endpoint and model are required", 400)
+		if req.Model == "" {
+			http.Error(w, "model is required", 400)
 			return
 		}
-		aiClient.UpdateConfig(req.Endpoint, req.Model, req.APIKey)
+		// Local providers need an endpoint; cloud providers have a public
+		// default, so empty endpoint is fine for those.
+		kind := providers.Kind(req.Type)
+		if kind == "" {
+			if req.APIKey != "" {
+				kind = providers.KindOpenAI
+			} else {
+				kind = providers.KindOllama
+			}
+		}
+		switch kind {
+		case providers.KindOllama:
+			if req.Endpoint == "" {
+				http.Error(w, "endpoint is required for ollama", 400)
+				return
+			}
+		case providers.KindOpenAI, providers.KindAnthropic:
+			// endpoint optional — providers fall back to a public default.
+		default:
+			http.Error(w, "unsupported provider type: "+req.Type, 400)
+			return
+		}
+		aiClient.UpdateConfigKind(kind, req.Endpoint, req.Model, req.APIKey)
 		_ = json.NewEncoder(w).Encode(aiClient.GetConfig())
 	})
 

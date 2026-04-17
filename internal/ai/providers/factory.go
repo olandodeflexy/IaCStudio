@@ -25,10 +25,10 @@ func New(cfg Config) (Provider, error) {
 		}
 		return NewOpenAI(cfg), nil
 	case KindAnthropic:
-		// Added in a later commit; surface a clear error until then so the
-		// router can tell the user the feature is on the way rather than
-		// silently falling back to another provider.
-		return nil, fmt.Errorf("anthropic provider not implemented yet")
+		if cfg.APIKey == "" {
+			return nil, fmt.Errorf("anthropic provider requires an API key")
+		}
+		return NewAnthropic(cfg), nil
 	default:
 		return nil, fmt.Errorf("unknown provider kind: %q", kind)
 	}
