@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -254,7 +255,20 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			return
 		}
 		if err := scaffold.Write(projectPath, files); err != nil {
-			http.Error(w, err.Error(), 409)
+			// Map scaffold error kinds to meaningful HTTP status codes.
+			//  - Existing file / symlinked root: 409 Conflict (precondition).
+			//  - Blueprint bug (duplicate or invalid emitted path): 500.
+			//  - Anything else (I/O, permissions): 500.
+			status := http.StatusInternalServerError
+			switch {
+			case errors.Is(err, scaffold.ErrConflict),
+				errors.Is(err, scaffold.ErrSymlinkInRoot):
+				status = http.StatusConflict
+			case errors.Is(err, scaffold.ErrInvalidPath),
+				errors.Is(err, scaffold.ErrDuplicatePath):
+				status = http.StatusInternalServerError
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 

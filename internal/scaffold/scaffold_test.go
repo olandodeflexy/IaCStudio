@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -237,8 +238,82 @@ func TestWriteRejectsDuplicatePaths(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected duplicate-path error, got nil")
 	}
-	if !strings.Contains(err.Error(), "duplicate") {
-		t.Errorf("error should mention duplicate paths; got: %v", err)
+	if !errors.Is(err, ErrDuplicatePath) {
+		t.Errorf("error should wrap ErrDuplicatePath; got: %v", err)
+	}
+}
+
+// TestWriteReturnsTypedErrors is the contract the HTTP handler relies on:
+// Write's failure modes are distinguishable via errors.Is so the router can
+// map them to 409 (conflict), 500 (programmer bug), etc.
+func TestWriteReturnsTypedErrors(t *testing.T) {
+	t.Run("conflict on existing file", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(dir, "x.tf"), []byte("keep"), 0o644); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+		err := Write(dir, []File{{Path: "x.tf", Content: []byte("new")}})
+		if !errors.Is(err, ErrConflict) {
+			t.Errorf("want ErrConflict, got %v", err)
+		}
+	})
+	t.Run("invalid path", func(t *testing.T) {
+		err := Write(t.TempDir(), []File{{Path: "/absolute.tf", Content: []byte("x")}})
+		if !errors.Is(err, ErrInvalidPath) {
+			t.Errorf("want ErrInvalidPath, got %v", err)
+		}
+	})
+}
+
+// TestWriteRejectsSymlinkInRoot defends against a pre-existing symlink inside
+// the project root redirecting a write outside root. Lexical ".." checks
+// can't catch this because `<root>/linked/file` doesn't contain "..".
+func TestWriteRejectsSymlinkInRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink semantics differ on Windows")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	// Create a symlink `linked` inside root pointing to an unrelated directory.
+	if err := os.Symlink(outside, filepath.Join(root, "linked")); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+	err := Write(root, []File{
+		{Path: "linked/escaped.tf", Content: []byte("pwned")},
+	})
+	if !errors.Is(err, ErrSymlinkInRoot) {
+		t.Errorf("want ErrSymlinkInRoot, got %v", err)
+	}
+	// And confirm no file was written on the other side of the symlink.
+	if _, err := os.Stat(filepath.Join(outside, "escaped.tf")); err == nil {
+		t.Error("symlink traversal succeeded — file was written outside root")
+	}
+}
+
+// TestLayeredTerraformRejectsUnsupportedCloudAndBackend validates the new
+// explicit allowlists on cloud and backend — unsupported values used to fall
+// through silently to defaults.
+func TestLayeredTerraformRejectsUnsupportedCloudAndBackend(t *testing.T) {
+	bp := &LayeredTerraformBlueprint{}
+	if _, err := bp.Render(map[string]any{"project_name": "acme", "cloud": "oracle"}); err == nil {
+		t.Error("expected error for unknown cloud")
+	}
+	if _, err := bp.Render(map[string]any{"project_name": "acme", "backend": "etcd"}); err == nil {
+		t.Error("expected error for unknown backend")
+	}
+}
+
+// TestLayeredTerraformRejectsLooseStateRegion confirms the stricter state_region
+// check rejects values that were HCL-safe but not plausible region names.
+func TestLayeredTerraformRejectsLooseStateRegion(t *testing.T) {
+	bp := &LayeredTerraformBlueprint{}
+	for _, bad := range []string{" ", "not a region", "US-EAST-1"} {
+		t.Run(bad, func(t *testing.T) {
+			_, err := bp.Render(map[string]any{"project_name": "acme", "state_region": bad})
+			if err == nil {
+				t.Errorf("expected validation error for state_region %q", bad)
+			}
+		})
 	}
 }
 

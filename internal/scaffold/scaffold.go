@@ -12,11 +12,31 @@
 package scaffold
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+)
+
+// Sentinel errors from Write. Callers (e.g. the HTTP API) use errors.Is to
+// map these to meaningful status codes.
+//
+//   - ErrInvalidPath: the blueprint emitted a bad relative path — programmer
+//     error on the blueprint side, maps to 500.
+//   - ErrDuplicatePath: blueprint emitted the same cleaned path twice — also
+//     a programmer error, 500.
+//   - ErrConflict: a file at the target path already exists on disk — user-
+//     facing precondition failure, 409.
+//   - ErrSymlinkInRoot: an existing path component inside root is a symlink,
+//     which could redirect writes outside root — 409 (config failure), not a
+//     server bug.
+var (
+	ErrInvalidPath    = errors.New("invalid file path")
+	ErrDuplicatePath  = errors.New("duplicate file path")
+	ErrConflict       = errors.New("target file already exists")
+	ErrSymlinkInRoot  = errors.New("symlink in project root path")
 )
 
 // Input describes a single user-supplied value a Blueprint needs to render.
@@ -85,30 +105,62 @@ var Default = NewRegistry()
 // resolveWritePath validates a rendered file path and resolves it under root.
 func resolveWritePath(root, p string) (string, string, error) {
 	if p == "" {
-		return "", "", fmt.Errorf("invalid empty file path")
+		return "", "", fmt.Errorf("%w: empty", ErrInvalidPath)
 	}
 	if filepath.IsAbs(p) {
-		return "", "", fmt.Errorf("invalid absolute file path %q", p)
+		return "", "", fmt.Errorf("%w: absolute %q", ErrInvalidPath, p)
 	}
 
 	cleaned := filepath.Clean(p)
 	if cleaned == "." || cleaned == "" {
-		return "", "", fmt.Errorf("invalid file path %q", p)
+		return "", "", fmt.Errorf("%w: %q", ErrInvalidPath, p)
 	}
 	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("invalid file path %q", p)
+		return "", "", fmt.Errorf("%w: %q", ErrInvalidPath, p)
 	}
 
 	full := filepath.Join(root, cleaned)
 	rel, err := filepath.Rel(root, full)
 	if err != nil {
-		return "", "", fmt.Errorf("resolve %q: %w", p, err)
+		return "", "", fmt.Errorf("%w: resolve %q: %v", ErrInvalidPath, p, err)
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", "", fmt.Errorf("file path escapes root %q", p)
+		return "", "", fmt.Errorf("%w: escapes root %q", ErrInvalidPath, p)
 	}
 
 	return cleaned, full, nil
+}
+
+// ensureNoSymlinkInPath walks from root towards full (exclusive of `full`
+// itself, which doesn't yet exist) and refuses to proceed if any existing
+// component is a symlink. Without this check, a pre-existing symlink inside
+// root (e.g. `root/linked -> /tmp`) could redirect writes outside root even
+// after lexical path validation passes. Components that don't exist yet are
+// fine — they'll be created by MkdirAll.
+func ensureNoSymlinkInPath(root, full string) error {
+	rel, err := filepath.Rel(root, full)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidPath, err)
+	}
+	segments := strings.Split(rel, string(filepath.Separator))
+	// Walk down from root, inspecting each intermediate directory only (the
+	// final segment is the file itself which doesn't exist yet).
+	current := root
+	for _, seg := range segments[:len(segments)-1] {
+		current = filepath.Join(current, seg)
+		info, err := os.Lstat(current)
+		if err != nil {
+			if os.IsNotExist(err) {
+				// Remaining components don't exist — nothing more to check.
+				return nil
+			}
+			return fmt.Errorf("lstat %s: %w", current, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("%w: %s", ErrSymlinkInRoot, current)
+		}
+	}
+	return nil
 }
 
 // Write materializes a rendered blueprint onto disk under root.
@@ -145,6 +197,9 @@ func Write(root string, files []File) error {
 			continue
 		}
 		seen[cleaned] = struct{}{}
+		if err := ensureNoSymlinkInPath(root, full); err != nil {
+			return err
+		}
 		if _, err := os.Stat(full); err == nil {
 			conflicts = append(conflicts, cleaned)
 		} else if !os.IsNotExist(err) {
@@ -157,10 +212,10 @@ func Write(root string, files []File) error {
 		})
 	}
 	if len(duplicates) > 0 {
-		return fmt.Errorf("blueprint emitted duplicate paths: %s", strings.Join(duplicates, ", "))
+		return fmt.Errorf("%w: %s", ErrDuplicatePath, strings.Join(duplicates, ", "))
 	}
 	if len(conflicts) > 0 {
-		return fmt.Errorf("refusing to overwrite existing files: %s", strings.Join(conflicts, ", "))
+		return fmt.Errorf("%w: %s", ErrConflict, strings.Join(conflicts, ", "))
 	}
 
 	for _, rf := range resolved {

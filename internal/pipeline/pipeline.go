@@ -194,9 +194,11 @@ env:
 	}
 
 	// --- Apply jobs (runs on merge to main) ---
-	// Approval is enforced by GitHub "environment" protection rules, not by
-	// anything we emit here. AutoApplyDev is the only per-env knob we honour
-	// explicitly today; other envs gate via the environment name above.
+	// Approval, if any, is enforced by the GitHub "environment" protection
+	// rules attached to the emitted environment name below. This loop
+	// currently generates an apply job for every configured environment and
+	// does not branch on AutoApplyDev or RequireApproval — those fields
+	// exist on Config but are not yet wired into the emitted workflow.
 	for i, env := range c.Environments {
 		needs := "validate"
 		if i > 0 {

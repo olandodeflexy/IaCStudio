@@ -149,6 +149,11 @@ func (b *LayeredTerraformBlueprint) Render(values map[string]any) ([]File, error
 		return nil, err
 	}
 	cloud := stringInput(values, "cloud", "aws")
+	switch cloud {
+	case "aws", "gcp", "azure":
+	default:
+		return nil, fmt.Errorf("cloud %q is unsupported: must be one of aws, gcp, azure", cloud)
+	}
 	envs := stringSliceInput(values, "environments", []string{"dev", "prod"})
 	for _, env := range envs {
 		if err := validatePathSegment("environment", env); err != nil {
@@ -162,6 +167,11 @@ func (b *LayeredTerraformBlueprint) Render(values map[string]any) ([]File, error
 		}
 	}
 	backend := stringInput(values, "backend", "s3")
+	switch backend {
+	case "s3", "gcs", "azurerm", "none":
+	default:
+		return nil, fmt.Errorf("backend %q is unsupported: must be one of s3, gcs, azurerm, none", backend)
+	}
 	// Derive a backend-appropriate default for state_bucket only when the
 	// caller didn't supply one. Azure storage accounts reject hyphens, so the
 	// generic "<name>-tfstate" default would always fail validation — strip
@@ -188,10 +198,12 @@ func (b *LayeredTerraformBlueprint) Render(values map[string]any) ([]File, error
 		}
 	}
 	stateRegion := stringInput(values, "state_region", "us-east-1")
-	// state_region lands in backend.tf's region = "..." literal, so it needs
-	// the same HCL-safety check as tag values to stop a quote/newline from
-	// breaking the generated file.
-	if err := validateHCLSafeValue("state_region", stateRegion); err != nil {
+	// state_region lands in backend.tf's region = "..." literal. Use the
+	// strict safe-name rules (lowercase alnum + hyphens, starts with a
+	// letter, 3-63 chars) rather than the looser HCL-safe regex — real cloud
+	// region identifiers are well within that shape, and the stricter check
+	// rejects obvious junk like " " or "not a region".
+	if err := validateSafeName("state_region", stateRegion); err != nil {
 		return nil, err
 	}
 	owner := stringInput(values, "owner_tag", "platform")
