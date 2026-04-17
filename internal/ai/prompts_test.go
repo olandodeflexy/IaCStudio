@@ -4,7 +4,7 @@ import (
 	"flag"
 	"os"
 	"path/filepath"
-	"strings"
+	"strconv"
 	"testing"
 )
 
@@ -129,17 +129,5 @@ func truncate(s string, n int) string {
 	if len(s) <= n {
 		return s
 	}
-	return s[:n] + "…" + "\n(truncated, full length " + itoa(len(s)) + ")"
-}
-
-func itoa(n int) string {
-	return strings.TrimLeft(string([]byte{
-		byte('0' + n/1000000%10),
-		byte('0' + n/100000%10),
-		byte('0' + n/10000%10),
-		byte('0' + n/1000%10),
-		byte('0' + n/100%10),
-		byte('0' + n/10%10),
-		byte('0' + n%10),
-	}), "0")
+	return s[:n] + "…" + "\n(truncated, full length " + strconv.Itoa(len(s)) + ")"
 }
