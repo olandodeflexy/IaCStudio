@@ -795,8 +795,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, "model is required", 400)
 			return
 		}
-		// Local providers need an endpoint; cloud providers have a public
-		// default, so empty endpoint is fine for those.
+		// Only providers with a known built-in public default may omit an
+		// endpoint. Others must provide one explicitly.
 		kind := providers.Kind(req.Type)
 		if kind == "" {
 			if req.APIKey != "" {
@@ -811,8 +811,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				http.Error(w, "endpoint is required for ollama", 400)
 				return
 			}
-		case providers.KindOpenAI, providers.KindAnthropic:
-			// endpoint optional — providers fall back to a public default.
+		case providers.KindOpenAI:
+			if req.Endpoint == "" {
+				http.Error(w, "endpoint is required for openai", 400)
+				return
+			}
+		case providers.KindAnthropic:
+			// endpoint optional — provider falls back to a public default.
 		default:
 			http.Error(w, "unsupported provider type: "+req.Type, 400)
 			return
