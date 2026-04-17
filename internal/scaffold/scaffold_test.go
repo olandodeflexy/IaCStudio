@@ -50,26 +50,18 @@ func TestLayeredTerraformRendersExpectedTree(t *testing.T) {
 		got[f.Path] = f
 	}
 
+	// Build the expected paths programmatically from the same envs/modules
+	// list passed to Render, so adding an env or module in the blueprint
+	// doesn't silently slip past this regression check.
+	envs := []string{"dev", "prod"}
+	modules := []string{"networking", "compute", "database", "security", "monitoring"}
+	envFiles := []string{"main.tf", "variables.tf", "outputs.tf", "terraform.tfvars", "backend.tf"}
+	moduleFiles := []string{"main.tf", "variables.tf", "outputs.tf", "versions.tf", "README.md"}
+
 	want := []string{
 		"README.md",
 		".gitignore",
 		".iac-studio.json",
-		"environments/dev/main.tf",
-		"environments/dev/variables.tf",
-		"environments/dev/outputs.tf",
-		"environments/dev/terraform.tfvars",
-		"environments/dev/backend.tf",
-		"environments/prod/main.tf",
-		"environments/prod/backend.tf",
-		"modules/networking/main.tf",
-		"modules/networking/variables.tf",
-		"modules/networking/outputs.tf",
-		"modules/networking/versions.tf",
-		"modules/networking/README.md",
-		"modules/compute/main.tf",
-		"modules/database/main.tf",
-		"modules/security/main.tf",
-		"modules/monitoring/main.tf",
 		"policies/sentinel/cost-control.sentinel",
 		"policies/sentinel/security-baseline.sentinel",
 		"policies/sentinel/naming-conventions.sentinel",
@@ -81,6 +73,16 @@ func TestLayeredTerraformRendersExpectedTree(t *testing.T) {
 		"scripts/apply.sh",
 		"scripts/destroy.sh",
 		"scripts/validate.sh",
+	}
+	for _, env := range envs {
+		for _, name := range envFiles {
+			want = append(want, "environments/"+env+"/"+name)
+		}
+	}
+	for _, mod := range modules {
+		for _, name := range moduleFiles {
+			want = append(want, "modules/"+mod+"/"+name)
+		}
 	}
 
 	for _, path := range want {
@@ -138,6 +140,36 @@ func TestLayeredTerraformRejectsUnsafeInputs(t *testing.T) {
 				t.Fatalf("expected validation error, got nil")
 			}
 		})
+	}
+}
+
+// TestLayeredTerraformBackendNoneSkipsStateBucketValidation confirms that
+// selecting backend="none" disables state_bucket validation entirely — the
+// value isn't rendered, so rejecting it would be user-hostile.
+func TestLayeredTerraformBackendNoneSkipsStateBucketValidation(t *testing.T) {
+	bp := &LayeredTerraformBlueprint{}
+	_, err := bp.Render(map[string]any{
+		"project_name": "acme",
+		"backend":      "none",
+		// An otherwise-invalid value that would normally be rejected:
+		"state_bucket": `bad"; value`,
+	})
+	if err != nil {
+		t.Fatalf("backend=none should skip state_bucket validation, got: %v", err)
+	}
+}
+
+// TestLayeredTerraformRejectsUnsafeStateRegion guards against a state_region
+// value that would break HCL (e.g. an injected quote) making it into the
+// rendered backend.tf.
+func TestLayeredTerraformRejectsUnsafeStateRegion(t *testing.T) {
+	bp := &LayeredTerraformBlueprint{}
+	_, err := bp.Render(map[string]any{
+		"project_name": "acme",
+		"state_region": `us-east-1"; evil = "x`,
+	})
+	if err == nil {
+		t.Fatal("expected state_region validation error, got nil")
 	}
 }
 

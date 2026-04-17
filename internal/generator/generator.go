@@ -313,10 +313,15 @@ retry_files_enabled = False
 `,
 	}
 
-	// Create roles directory — best-effort; WriteFile below will surface any
-	// real failures when it tries to create individual files inside.
-	_ = os.MkdirAll(filepath.Join(dir, "roles"), 0755)
-	_ = os.MkdirAll(filepath.Join(dir, "group_vars"), 0755)
+	// Pre-create the expected Ansible layout. Nothing else here writes into
+	// these dirs, so a silent failure would leave the scaffold incomplete —
+	// return any error straight to the caller.
+	if err := os.MkdirAll(filepath.Join(dir, "roles"), 0755); err != nil {
+		return fmt.Errorf("creating roles directory: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "group_vars"), 0755); err != nil {
+		return fmt.Errorf("creating group_vars directory: %w", err)
+	}
 
 	for name, content := range files {
 		path := filepath.Join(dir, name)

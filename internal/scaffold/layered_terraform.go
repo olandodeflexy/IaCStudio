@@ -115,17 +115,33 @@ func (b *LayeredTerraformBlueprint) Render(values map[string]any) ([]File, error
 	modules := stringSliceInput(values, "modules", []string{"networking", "compute", "database", "security", "monitoring"})
 	backend := stringInput(values, "backend", "s3")
 	stateBucket := stringInput(values, "state_bucket", name+"-tfstate")
-	if err := validateSafeName("state_bucket", stateBucket); err != nil {
-		return nil, err
-	}
-	// Azure storage account names are stricter than S3 buckets (3-24 chars,
-	// lowercase alnum, no hyphens). When targeting azurerm, enforce that on
-	// state_bucket directly so backend.tf doesn't render an invalid account
-	// name that fails at `terraform init`.
-	if backend == "azurerm" && !azureStorageAccountRE.MatchString(stateBucket) {
-		return nil, fmt.Errorf("state_bucket %q is invalid for azurerm backend: must be 3–24 lowercase letters/digits with no hyphens", stateBucket)
+	// state_bucket validation is backend-specific. Each backend has different
+	// name rules, and backend="none" doesn't use state_bucket at all so we
+	// skip the check entirely rather than reject otherwise-valid scaffolds.
+	switch backend {
+	case "none":
+		// state_bucket isn't rendered; no validation needed.
+	case "azurerm":
+		// Azure storage account names: 3-24 lowercase alnum, no hyphens.
+		// Note this is stricter than safeNameRE and allows a leading digit,
+		// so we apply only this rule (safeNameRE's letter-first rule would
+		// reject valid Azure names like "0abc123").
+		if !azureStorageAccountRE.MatchString(stateBucket) {
+			return nil, fmt.Errorf("state_bucket %q is invalid for azurerm backend: must be 3–24 lowercase letters/digits with no hyphens", stateBucket)
+		}
+	default:
+		// s3, gcs: the conservative safe-name rules are fine for both.
+		if err := validateSafeName("state_bucket", stateBucket); err != nil {
+			return nil, err
+		}
 	}
 	stateRegion := stringInput(values, "state_region", "us-east-1")
+	// state_region lands in backend.tf's region = "..." literal, so it needs
+	// the same HCL-safety check as tag values to stop a quote/newline from
+	// breaking the generated file.
+	if err := validateHCLSafeValue("state_region", stateRegion); err != nil {
+		return nil, err
+	}
 	owner := stringInput(values, "owner_tag", "platform")
 	if err := validateHCLSafeValue("owner_tag", owner); err != nil {
 		return nil, err
