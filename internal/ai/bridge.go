@@ -88,6 +88,9 @@ func (c *Client) applyConfig(cfg providers.Config) {
 	p, err := providers.New(cfg)
 	c.provider = p
 	c.providerErr = err
+	if err == nil && cfg.Kind == "" && p != nil {
+		c.cfg.Kind = p.Kind()
+	}
 }
 
 // GetConfig returns the current provider config with the API key masked.
