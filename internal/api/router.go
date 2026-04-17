@@ -592,17 +592,36 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		w.Header().Set("X-Accel-Buffering", "no") // bypass nginx/proxy buffering
 		w.WriteHeader(http.StatusOK)
 
-		writeEvent := func(event string, payload any) {
-			data, _ := json.Marshal(payload)
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+
+		writeEvent := func(event string, payload any) error {
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+				return err
+			}
 			flusher.Flush()
+			return nil
 		}
 
+		var streamErr error
 		onDelta := func(chunk string) {
-			writeEvent("delta", map[string]string{"text": chunk})
+			if streamErr != nil {
+				return
+			}
+			if err := writeEvent("delta", map[string]string{"text": chunk}); err != nil {
+				streamErr = err
+				cancel()
+			}
 		}
 
-		response, resources, err := aiClient.StreamChat(r.Context(), req, onDelta)
+		response, resources, err := aiClient.StreamChat(ctx, req, onDelta)
+		if streamErr != nil || errors.Is(ctx.Err(), context.Canceled) {
+			return
+		}
 		if err != nil {
 			// Emit the documented error event so clients can distinguish a
 			// real provider stream from the deterministic fallback below.
@@ -616,11 +635,14 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		}
 		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
 
-		writeEvent("complete", map[string]interface{}{
+		if err := writeEvent("complete", map[string]interface{}{
 			"message":     response,
 			"resources":   resources,
 			"suggestions": suggestions,
-		})
+		}); err != nil {
+			cancel()
+			return
+		}
 	})
 
 	// Smart resource suggestions based on canvas state
