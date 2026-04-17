@@ -273,6 +273,7 @@ export const api = {
     const decoder = new TextDecoder();
     let buffer = '';
     let complete: { message: string; resources: Resource[] | null; suggestions?: Suggestion[] } | null = null;
+    let streamError: Error | null = null;
 
     // SSE events are separated by "\n\n"; each event has "event: X\ndata: Y\n"
     // lines. We accumulate into buffer and split on blank lines.
@@ -293,20 +294,29 @@ export const api = {
           else if (line.startsWith('data: ')) data += line.slice(6);
         }
         if (!data) continue;
+
+        let payload: any;
         try {
-          const payload = JSON.parse(data);
-          if (eventType === 'delta' && typeof payload.text === 'string') {
-            onDelta(payload.text);
-          } else if (eventType === 'complete') {
-            complete = payload;
-          } else if (eventType === 'error') {
-            throw new Error(payload.error || 'chat stream error');
-          }
+          payload = JSON.parse(data);
         } catch (e) {
           // Malformed event — skip rather than aborting the whole stream.
           console.warn('malformed SSE event', e, data);
+          continue;
+        }
+
+        if (eventType === 'delta' && typeof payload.text === 'string') {
+          onDelta(payload.text);
+        } else if (eventType === 'complete') {
+          complete = payload;
+        } else if (eventType === 'error') {
+          streamError = new Error(payload.error || 'chat stream error');
+          break;
         }
       }
+      if (streamError) break;
+    }
+    if (streamError) {
+      throw streamError;
     }
     if (!complete) {
       throw new Error('chat stream ended without a complete event');
