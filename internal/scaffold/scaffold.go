@@ -81,34 +81,84 @@ func (r *Registry) List() []Blueprint {
 // Default is the package-level registry populated by init() in blueprint files.
 var Default = NewRegistry()
 
+// resolveWritePath validates a rendered file path and resolves it under root.
+func resolveWritePath(root, p string) (string, string, error) {
+	if p == "" {
+		return "", "", fmt.Errorf("invalid empty file path")
+	}
+	if filepath.IsAbs(p) {
+		return "", "", fmt.Errorf("invalid absolute file path %q", p)
+	}
+
+	cleaned := filepath.Clean(p)
+	if cleaned == "." || cleaned == "" {
+		return "", "", fmt.Errorf("invalid file path %q", p)
+	}
+	if cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("invalid file path %q", p)
+	}
+
+	full := filepath.Join(root, cleaned)
+	rel, err := filepath.Rel(root, full)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve %q: %w", p, err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", "", fmt.Errorf("file path escapes root %q", p)
+	}
+
+	return cleaned, full, nil
+}
+
 // Write materializes a rendered blueprint onto disk under root.
 //
 // Existing files are NOT overwritten; Write returns an error listing the
 // conflicting paths so callers can surface them to the user. This avoids
 // clobbering in-progress user work when scaffolding into a non-empty directory.
 func Write(root string, files []File) error {
+	root, err := filepath.Abs(root)
+	if err != nil {
+		return fmt.Errorf("resolve root %s: %w", root, err)
+	}
+
+	type resolvedFile struct {
+		file    File
+		path    string
+		full    string
+	}
+
+	resolved := make([]resolvedFile, 0, len(files))
 	var conflicts []string
 	for _, f := range files {
-		full := filepath.Join(root, f.Path)
-		if _, err := os.Stat(full); err == nil {
-			conflicts = append(conflicts, f.Path)
+		cleaned, full, err := resolveWritePath(root, f.Path)
+		if err != nil {
+			return err
 		}
+		if _, err := os.Stat(full); err == nil {
+			conflicts = append(conflicts, cleaned)
+		} else if !os.IsNotExist(err) {
+			return fmt.Errorf("stat %s: %w", cleaned, err)
+		}
+		resolved = append(resolved, resolvedFile{
+			file: f,
+			path: cleaned,
+			full: full,
+		})
 	}
 	if len(conflicts) > 0 {
 		return fmt.Errorf("refusing to overwrite existing files: %s", strings.Join(conflicts, ", "))
 	}
 
-	for _, f := range files {
-		full := filepath.Join(root, f.Path)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			return fmt.Errorf("mkdir %s: %w", filepath.Dir(full), err)
+	for _, rf := range resolved {
+		if err := os.MkdirAll(filepath.Dir(rf.full), 0o755); err != nil {
+			return fmt.Errorf("mkdir %s: %w", filepath.Dir(rf.full), err)
 		}
 		mode := os.FileMode(0o644)
-		if f.Executable {
+		if rf.file.Executable {
 			mode = 0o755
 		}
-		if err := os.WriteFile(full, f.Content, mode); err != nil {
-			return fmt.Errorf("write %s: %w", f.Path, err)
+		if err := os.WriteFile(rf.full, rf.file.Content, mode); err != nil {
+			return fmt.Errorf("write %s: %w", rf.path, err)
 		}
 	}
 	return nil
