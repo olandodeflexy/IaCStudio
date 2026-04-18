@@ -277,47 +277,67 @@ export const api = {
 
     // SSE events are separated by "\n\n"; each event has "event: X\ndata: Y\n"
     // lines. We accumulate into buffer and split on blank lines.
+    const processSseEvent = (raw: string) => {
+      let eventType = 'message';
+      const dataLines: string[] = [];
+
+      for (const line of raw.split('\n')) {
+        if (line.startsWith('event:')) {
+          let value = line.slice(6);
+          if (value.startsWith(' ')) value = value.slice(1);
+          eventType = value.trim() || 'message';
+        } else if (line.startsWith('data:')) {
+          let value = line.slice(5);
+          if (value.startsWith(' ')) value = value.slice(1);
+          dataLines.push(value);
+        }
+      }
+
+      if (dataLines.length === 0) return;
+      const data = dataLines.join('\n');
+
+      let payload: any;
+      try {
+        payload = JSON.parse(data);
+      } catch (e) {
+        // Malformed event — skip rather than aborting the whole stream.
+        console.warn('malformed SSE event', e, data);
+        return;
+      }
+
+      if (eventType === 'delta' && typeof payload.text === 'string') {
+        onDelta(payload.text);
+      } else if (eventType === 'complete') {
+        complete = payload;
+      } else if (eventType === 'error' || eventType === 'provider_error') {
+        // The server may emit an informational error event and then still send
+        // a final complete event with a fallback result. Record the error, but
+        // keep reading so we do not discard a subsequent complete payload.
+        streamError = new Error(payload.error || 'chat stream error');
+      }
+    };
+
     while (true) {
       const { value, done } = await reader.read();
       if (done) {
         buffer += decoder.decode();
+        buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
         break;
       }
       buffer += decoder.decode(value, { stream: true });
+      buffer = buffer.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
       let sep = buffer.indexOf('\n\n');
       while (sep !== -1) {
         const raw = buffer.slice(0, sep);
         buffer = buffer.slice(sep + 2);
+        processSseEvent(raw);
         sep = buffer.indexOf('\n\n');
-
-        let eventType = 'message';
-        let data = '';
-        for (const line of raw.split('\n')) {
-          if (line.startsWith('event: ')) eventType = line.slice(7).trim();
-          else if (line.startsWith('data: ')) data += line.slice(6);
-        }
-        if (!data) continue;
-
-        let payload: any;
-        try {
-          payload = JSON.parse(data);
-        } catch (e) {
-          // Malformed event — skip rather than aborting the whole stream.
-          console.warn('malformed SSE event', e, data);
-          continue;
-        }
-
-        if (eventType === 'delta' && typeof payload.text === 'string') {
-          onDelta(payload.text);
-        } else if (eventType === 'complete') {
-          complete = payload;
-        } else if (eventType === 'error' || eventType === 'provider_error') {
-          // The server may emit an informational error event and then still send
-          // a final complete event with a fallback result. Record the error, but
-          // keep reading so we do not discard a subsequent complete payload.
-          streamError = new Error(payload.error || 'chat stream error');
-        }
       }
+    }
+
+    if (buffer.trim()) {
+      processSseEvent(buffer);
     }
     if (complete) {
       return complete;
