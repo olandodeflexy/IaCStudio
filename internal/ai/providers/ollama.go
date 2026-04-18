@@ -68,6 +68,18 @@ func (p *ollamaProvider) Complete(ctx context.Context, req Request) (string, err
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		respBody, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return "", fmt.Errorf("ollama request failed: status %s (failed to read response body: %w)", resp.Status, readErr)
+		}
+		msg := strings.TrimSpace(string(respBody))
+		if msg == "" {
+			return "", fmt.Errorf("ollama request failed: status %s", resp.Status)
+		}
+		return "", fmt.Errorf("ollama request failed: status %s: %s", resp.Status, msg)
+	}
+
 	var decoded ollamaResponse
 	if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 		return "", err
