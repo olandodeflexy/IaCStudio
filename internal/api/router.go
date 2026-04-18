@@ -794,6 +794,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, "invalid request", 400)
 			return
 		}
+		req.Type = strings.TrimSpace(req.Type)
+		req.Model = strings.TrimSpace(req.Model)
+		req.Endpoint = strings.TrimSpace(req.Endpoint)
+		req.APIKey = strings.TrimSpace(req.APIKey)
 		if req.Model == "" {
 			http.Error(w, "model is required", 400)
 			return
@@ -815,8 +819,16 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 		case providers.KindOpenAI:
+			if req.APIKey == "" {
+				http.Error(w, "api key is required for openai", 400)
+				return
+			}
 			// endpoint optional — provider falls back to the public OpenAI default.
 		case providers.KindAnthropic:
+			if req.APIKey == "" {
+				http.Error(w, "api key is required for anthropic", 400)
+				return
+			}
 			// endpoint optional — provider falls back to a public default.
 		default:
 			http.Error(w, "unsupported provider type: "+req.Type, 400)
