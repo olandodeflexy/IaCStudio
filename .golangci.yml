@@ -1,0 +1,7 @@
+version: "2"
+
+# Mirror the implicit defaults of golangci-lint v1.x: errcheck, govet,
+# ineffassign, staticcheck, unused. v2 requires an explicit config and
+# would otherwise lint nothing.
+linters:
+  default: standard
