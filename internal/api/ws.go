@@ -117,7 +117,7 @@ var allowedClientMessageTypes = map[string]bool{
 func (c *Client) readPump() {
 	defer func() {
 		c.hub.unregister <- c
-		c.conn.Close()
+		_ = c.conn.Close()
 	}()
 	// Cap incoming message size to 1MB to prevent abuse
 	c.conn.SetReadLimit(1 << 20)
@@ -145,7 +145,7 @@ func (c *Client) readPump() {
 }
 
 func (c *Client) writePump() {
-	defer c.conn.Close()
+	defer func() { _ = c.conn.Close() }()
 	for msg := range c.send {
 		if err := c.conn.WriteMessage(websocket.TextMessage, msg); err != nil {
 			break

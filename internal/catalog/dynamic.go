@@ -77,7 +77,7 @@ func (dc *DynamicCatalog) FetchProviderSchema(ctx context.Context, providers []s
 	if err != nil {
 		return nil, fmt.Errorf("creating temp dir: %w", err)
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	// Write a minimal config that references the requested providers
 	config := generateProviderConfig(providers)

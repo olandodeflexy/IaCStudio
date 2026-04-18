@@ -431,7 +431,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 			if err := os.Rename(tmpFile, file); err != nil {
-				os.Remove(tmpFile) // cleanup on failure
+				_ = os.Remove(tmpFile) // best-effort cleanup on failure
 				http.Error(w, err.Error(), 500)
 				return
 			}

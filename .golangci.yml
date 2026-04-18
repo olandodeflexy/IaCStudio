@@ -5,3 +5,14 @@ version: "2"
 # would otherwise lint nothing.
 linters:
   default: standard
+  settings:
+    staticcheck:
+      # Drop the QF* "quick-fix" group. These are stylistic refactoring
+      # nudges (De Morgan's law, tagged switches, fmt.Fprintf vs WriteString)
+      # rather than correctness issues, and we don't want them to block CI
+      # on unrelated files.
+      checks:
+        - all
+        - -QF1001
+        - -QF1003
+        - -QF1012

@@ -66,7 +66,7 @@ func (p *ollamaProvider) Complete(ctx context.Context, req Request) (string, err
 	if err != nil {
 		return "", fmt.Errorf("ollama unavailable: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		respBody, readErr := io.ReadAll(resp.Body)
