@@ -33,13 +33,11 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Go lint
-        # v6 honours the Go version installed by setup-go above and ships
-        # golangci-lint v2.x. The version: latest pin must match Go 1.24+ —
-        # earlier action versions pin to v1.64.x built with Go 1.24, which is
-        # fine for code that targets ≤1.24.
-        uses: golangci/golangci-lint-action@v6
+        # v8 supports golangci-lint v2.x. We pin to a known-good v2.x release
+        # so future linter releases can't silently break CI.
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.6.1
 
       - name: Go test
         run: go test ./... -v -race -coverprofile=coverage.out
