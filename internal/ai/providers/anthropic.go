@@ -208,7 +208,7 @@ func (p *anthropicProvider) Complete(ctx context.Context, req Request) (string, 
 	if err != nil {
 		return "", fmt.Errorf("anthropic API unavailable: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
@@ -313,7 +313,7 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta Del
 	if err != nil {
 		return "", fmt.Errorf("anthropic API unavailable: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body, _ := io.ReadAll(resp.Body)
 		var apiErr struct {

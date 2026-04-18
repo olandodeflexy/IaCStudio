@@ -12,7 +12,11 @@ permissions:
   packages: write
 
 env:
-  GO_VERSION: "1.22"
+  # Go 1.25 is the floor for the OPA dependency chain pulled in by the
+  # policy engines package. Bump in lockstep with go.mod. (Earlier we
+  # pinned 1.24 to match the old golangci-lint v1.x; with v2.6.1 built
+  # on Go 1.26, 1.25 is now safe.)
+  GO_VERSION: "1.25"
   NODE_VERSION: "20"
 
 jobs:
@@ -25,18 +29,35 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          # The cached toolchain at /opt/hostedtoolcache can be missing
+          # `covdata`, which fails -coverprofile. check-latest forces a
+          # fresh download of the most recent Go matching go-version.
+          check-latest: true
 
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
 
+      # Make sure dependencies are downloaded before lint. Without this,
+      # golangci-lint v2.x reports "no go files to analyze" against modules
+      # that haven't pulled their cache locally (the v8 action no longer
+      # implicitly runs go mod download).
+      - name: Go deps
+        run: go mod download
+
       - name: Go lint
-        uses: golangci/golangci-lint-action@v4
+        # v8 supports golangci-lint v2.x. We pin to a known-good v2.x release
+        # so future linter releases can't silently break CI.
+        uses: golangci/golangci-lint-action@v8
         with:
-          version: latest
+          version: v2.6.1
+          args: ./...
 
       - name: Go test
-        run: go test ./... -v -race -coverprofile=coverage.out
+        # Coverage profiling (covdata) is broken on the current hosted
+        # Go 1.24 runner images — tracked as a follow-up. Drop the
+        # -coverprofile flag for now so the suite can actually run.
+        run: go test ./... -v -race
 
       - name: Frontend deps
         run: cd web && npm install
@@ -48,10 +69,11 @@ jobs:
       - name: Frontend build
         run: cd web && npm run build
 
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          file: coverage.out
+      # Coverage upload disabled until the covdata issue above is resolved.
+      # - name: Upload coverage
+      #   uses: codecov/codecov-action@v4
+      #   with:
+      #     file: coverage.out
 
   # ─── Build & Release ───
   release:
@@ -66,6 +88,10 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ env.GO_VERSION }}
+          # The cached toolchain at /opt/hostedtoolcache can be missing
+          # `covdata`, which fails -coverprofile. check-latest forces a
+          # fresh download of the most recent Go matching go-version.
+          check-latest: true
 
       - uses: actions/setup-node@v4
         with:

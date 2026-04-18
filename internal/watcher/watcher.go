@@ -64,7 +64,7 @@ func (fw *FileWatcher) Resume(dir string) {
 }
 
 func (fw *FileWatcher) Close() {
-	fw.watcher.Close()
+	_ = fw.watcher.Close()
 }
 
 func (fw *FileWatcher) loop() {

@@ -1,0 +1,19 @@
+version: "2"
+
+# Mirror the implicit defaults of golangci-lint v1.x: errcheck, govet,
+# ineffassign, staticcheck, unused. v2 requires an explicit config and
+# would otherwise lint nothing.
+linters:
+  default: standard
+  settings:
+    staticcheck:
+      # Drop the QF* "quick-fix" group. These are stylistic refactoring
+      # nudges (De Morgan's law, tagged switches, fmt.Fprintf vs WriteString)
+      # rather than correctness issues, and we don't want them to block CI
+      # on unrelated files.
+      checks:
+        - all
+        - -QF1001 # De Morgan's law (stylistic)
+        - -QF1003 # tagged switch suggestion (stylistic)
+        - -QF1012 # fmt.Fprintf vs WriteString (stylistic)
+        - -ST1000 # missing package doc — opt back in per package via a doc.go later

@@ -48,11 +48,28 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 	}
 	resolved := filepath.Join(projectsDir, name)
 	// Resolve symlinks so a symlink at ~/iac-projects/evil -> /etc/ is caught
-	absProjects, _ := filepath.Abs(projectsDir)
-	absResolved, _ := filepath.Abs(resolved)
-	// If the directory already exists, resolve symlinks in the actual path
+	// (and so macOS's /var/folders -> /private/var/folders symlink doesn't
+	// cause httptest-based tests to trip the escape check below).
+	//
+	// filepath.Abs errors surface explicitly — a failure would leave an
+	// empty absProjects, which would then let any resolved path pass the
+	// HasPrefix check and weaken the symlink-escape protection.
+	absProjects, err := filepath.Abs(projectsDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve projects dir: %w", err)
+	}
+	if evalProjects, err := filepath.EvalSymlinks(absProjects); err == nil {
+		absProjects = evalProjects
+	}
+	absResolved, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve project path: %w", err)
+	}
+	// If the directory already exists, resolve symlinks in the actual path.
 	if evalResolved, err := filepath.EvalSymlinks(resolved); err == nil {
-		absResolved, _ = filepath.Abs(evalResolved)
+		if absEval, absErr := filepath.Abs(evalResolved); absErr == nil {
+			absResolved = absEval
+		}
 	}
 	if !strings.HasPrefix(absResolved, absProjects+string(filepath.Separator)) {
 		return "", fmt.Errorf("project path escapes root: %q", name)
@@ -431,7 +448,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 			if err := os.Rename(tmpFile, file); err != nil {
-				os.Remove(tmpFile) // cleanup on failure
+				_ = os.Remove(tmpFile) // best-effort cleanup on failure
 				http.Error(w, err.Error(), 500)
 				return
 			}
@@ -466,6 +483,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			Tool     string `json:"tool"`
 			Command  string `json:"command"`  // init | plan | apply | check | playbook
 			Approved bool   `json:"approved"` // must be true for apply/destroy
+			// Acknowledged explicitly overrides the policy gate — the caller
+			// is telling us they've read the findings and still want to
+			// proceed. Logged server-side so the override is audit-trailable.
+			Acknowledged bool `json:"acknowledged"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -475,6 +496,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// Block apply/destroy unless:
 		// 1. A plan was run for this project within the last hour (server-verified)
 		// 2. The client explicitly confirms (approved:true)
+		// 3. No error-severity policy findings exist, OR the client sets
+		//    acknowledged:true after reading the findings.
 		if run.RequiresApproval(req.Command) {
 			if !hasPlan(projectPath) {
 				w.Header().Set("Content-Type", "application/json")
@@ -493,6 +516,25 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 					"detail": "plan exists — re-submit with approved:true to proceed",
 				})
 				return
+			}
+			if !req.Acknowledged {
+				// Walk every available engine against the project so we can
+				// surface blocking findings before the apply runs. On any
+				// error (engine crash, missing binary, malformed plan) we
+				// fall through to execution — apply should not be gated by
+				// a broken policy engine.
+				if findings, blocking := evaluateBlockingPolicies(r.Context(), projectPath, req.Tool); blocking {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"error":    "policy_blocked",
+						"detail":   "policy engine returned error-severity findings — re-submit with acknowledged:true to override",
+						"findings": findings,
+					})
+					return
+				}
+			} else {
+				log.Printf("apply gate: policy findings acknowledged by client for %s (command=%s)", name, req.Command)
 			}
 		}
 
@@ -1090,6 +1132,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	mux.HandleFunc("GET /ws", func(w http.ResponseWriter, r *http.Request) {
 		ServeWS(hub, w, r)
 	})
+
+	// Policy engines — builtin + OPA (embedded) + Conftest + Sentinel (shell-out).
+	registerPolicyRoutes(mux, projectsDir)
 
 	return mux
 }
