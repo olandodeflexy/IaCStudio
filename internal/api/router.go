@@ -795,6 +795,45 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// Type is validated explicitly so a user selecting "anthropic" in the UI
 	// isn't silently downgraded to the OpenAI path just because they supplied
 	// an API key.
+	hasConfiguredProviderAPIKey := func(kind providers.Kind, cfg ai.ProviderConfig) bool {
+		if strings.TrimSpace(cfg.APIKey) != "" {
+			return true
+		}
+		switch kind {
+		case providers.KindOpenAI:
+			return strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != ""
+		case providers.KindAnthropic:
+			return strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) != ""
+		default:
+			return false
+		}
+	}
+
+	resolveRequestedAPIKey := func(kind providers.Kind, submitted string, cfg ai.ProviderConfig) (string, error) {
+		currentAPIKey := strings.TrimSpace(cfg.APIKey)
+		hasExistingAPIKey := hasConfiguredProviderAPIKey(kind, cfg)
+
+		if submitted == "" {
+			if hasExistingAPIKey {
+				// Keep the existing configured key. If the current key comes from
+				// the environment rather than persisted config, this remains empty
+				// so provider resolution can continue to use env vars.
+				return currentAPIKey, nil
+			}
+			return "", nil
+		}
+
+		if isLikelyMaskedAPIKey(submitted) {
+			if hasExistingAPIKey {
+				// Treat a masked placeholder as "no change".
+				return currentAPIKey, nil
+			}
+			return "", errors.New("api key placeholder submitted; provide a new api key instead of the masked value")
+		}
+
+		return submitted, nil
+	}
+
 	mux.HandleFunc("PUT /api/ai/settings", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
 		var req ai.ProviderConfig
@@ -811,11 +850,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		req.APIKey = strings.TrimSpace(req.APIKey)
 
 		currentCfg := aiClient.GetConfig()
-		currentAPIKey := strings.TrimSpace(currentCfg.APIKey)
-		if req.APIKey != "" && req.APIKey == currentAPIKey && isLikelyMaskedAPIKey(req.APIKey) {
-			http.Error(w, "api key placeholder submitted; provide a new api key instead of the masked value", 400)
-			return
-		}
 
 		if req.Model == "" {
 			http.Error(w, "model is required", 400)
@@ -825,12 +859,23 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// endpoint. Others must provide one explicitly.
 		kind := providers.Kind(req.Type)
 		if kind == "" {
-			if req.APIKey != "" {
+			currentKind := providers.Kind(strings.TrimSpace(currentCfg.Type))
+			if currentKind != "" {
+				kind = currentKind
+			} else if req.APIKey != "" {
 				kind = providers.KindOpenAI
 			} else {
 				kind = providers.KindOllama
 			}
 		}
+
+		resolvedAPIKey, err := resolveRequestedAPIKey(kind, req.APIKey, currentCfg)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		req.APIKey = resolvedAPIKey
+
 		switch kind {
 		case providers.KindOllama:
 			if req.Endpoint == "" {
@@ -838,13 +883,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 		case providers.KindOpenAI:
-			if req.APIKey == "" {
+			if req.APIKey == "" && !hasConfiguredProviderAPIKey(kind, currentCfg) {
 				http.Error(w, "api key is required for openai", 400)
 				return
 			}
 			// endpoint optional — provider falls back to the public OpenAI default.
 		case providers.KindAnthropic:
-			if req.APIKey == "" {
+			if req.APIKey == "" && !hasConfiguredProviderAPIKey(kind, currentCfg) {
 				http.Error(w, "api key is required for anthropic", 400)
 				return
 			}
