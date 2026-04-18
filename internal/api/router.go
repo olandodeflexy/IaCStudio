@@ -787,6 +787,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		_ = json.NewEncoder(w).Encode(aiClient.GetConfig())
 	})
 
+	isLikelyMaskedAPIKey := func(apiKey string) bool {
+		return apiKey != "" && (strings.Contains(apiKey, "*") || strings.Contains(apiKey, "•"))
+	}
+
 	// Update AI provider config (supports Ollama, OpenAI-compatible, and Anthropic).
 	// Type is validated explicitly so a user selecting "anthropic" in the UI
 	// isn't silently downgraded to the OpenAI path just because they supplied
@@ -805,6 +809,14 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		req.Model = strings.TrimSpace(req.Model)
 		req.Endpoint = strings.TrimSpace(req.Endpoint)
 		req.APIKey = strings.TrimSpace(req.APIKey)
+
+		currentCfg := aiClient.GetConfig()
+		currentAPIKey := strings.TrimSpace(currentCfg.APIKey)
+		if req.APIKey != "" && req.APIKey == currentAPIKey && isLikelyMaskedAPIKey(req.APIKey) {
+			http.Error(w, "api key placeholder submitted; provide a new api key instead of the masked value", 400)
+			return
+		}
+
 		if req.Model == "" {
 			http.Error(w, "model is required", 400)
 			return
