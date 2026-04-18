@@ -48,8 +48,8 @@ type Request struct {
 	Temperature float64 // 0.0-1.0; providers clamp as needed
 	MaxTokens   int     // upper bound on response length; 0 = provider default
 	// JSONMode hints that the provider should constrain the response to JSON
-	// if it natively supports such a mode (Ollama's "format":"json", OpenAI's
-	// response_format, etc.). Providers that don't support it ignore the hint.
+	// if it natively supports such a mode (for example, Ollama's
+	// "format":"json"). Providers that don't support it ignore the hint.
 	JSONMode bool
 	// Cacheable asks the provider to cache the System prompt across calls
 	// when it supports prompt caching. Today only Anthropic honours this
