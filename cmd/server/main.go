@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/iac-studio/iac-studio/internal/ai"
+	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/api"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/watcher"
@@ -74,7 +75,7 @@ func main() {
 		if model == "" {
 			model = "claude-opus-4-7"
 		}
-		aiClient.UpdateConfigKind("anthropic", "", model, key)
+		aiClient.UpdateConfigKind(providers.KindAnthropic, "", model, key)
 		log.Printf("ai: configured anthropic provider from ANTHROPIC_API_KEY (model=%s)", model)
 	} else if key := os.Getenv("OPENAI_API_KEY"); key != "" {
 		endpoint := os.Getenv("OPENAI_ENDPOINT")
@@ -85,7 +86,7 @@ func main() {
 		if model == "" {
 			model = "gpt-4o-mini"
 		}
-		aiClient.UpdateConfigKind("openai", endpoint, model, key)
+		aiClient.UpdateConfigKind(providers.KindOpenAI, endpoint, model, key)
 		log.Printf("ai: configured openai provider from OPENAI_API_KEY (model=%s)", model)
 	}
 	safeRun := runner.NewSafeRunner(runner.DefaultSafetyConfig())
