@@ -18,7 +18,7 @@ import (
 // Compared to the OpenAI shape:
 //   - the system prompt is a top-level "system" field, not a message with role;
 //   - the anthropic-version header is required;
-//   - response content is an array of blocks (we only use the first text block today);
+//   - response content is an array of blocks (we concatenate all text blocks today);
 //   - max_tokens is required, not optional;
 //   - prompt caching is supported via cache_control on the top-level system field.
 type anthropicProvider struct {
