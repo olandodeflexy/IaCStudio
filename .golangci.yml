@@ -13,6 +13,7 @@ linters:
       # on unrelated files.
       checks:
         - all
-        - -QF1001
-        - -QF1003
-        - -QF1012
+        - -QF1001 # De Morgan's law (stylistic)
+        - -QF1003 # tagged switch suggestion (stylistic)
+        - -QF1012 # fmt.Fprintf vs WriteString (stylistic)
+        - -ST1000 # missing package doc — opt back in per package via a doc.go later

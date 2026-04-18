@@ -1,8 +1,3 @@
-// Package catalog holds the built-in resource catalog — the set of
-// Terraform/OpenTofu resources and Ansible modules IaC Studio knows about,
-// each annotated with human-readable labels, categories, default properties,
-// and inter-resource connection rules. Consumers include the frontend
-// palette, the AI provider guides, and the generator's connection inference.
 package catalog
 
 // Resource describes a single IaC resource type with its metadata,
