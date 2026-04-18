@@ -1091,6 +1091,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		ServeWS(hub, w, r)
 	})
 
+	// Policy engines — builtin + OPA (embedded) + Conftest + Sentinel (shell-out).
+	registerPolicyRoutes(mux, projectsDir)
+
 	return mux
 }
 
