@@ -795,29 +795,32 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// Type is validated explicitly so a user selecting "anthropic" in the UI
 	// isn't silently downgraded to the OpenAI path just because they supplied
 	// an API key.
-	hasConfiguredProviderAPIKey := func(kind providers.Kind, cfg ai.ProviderConfig) bool {
-		if strings.TrimSpace(cfg.APIKey) != "" {
-			return true
+	getConfiguredProviderAPIKey := func(kind providers.Kind, cfg ai.ProviderConfig) string {
+		if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
+			return apiKey
 		}
 		switch kind {
 		case providers.KindOpenAI:
-			return strings.TrimSpace(os.Getenv("OPENAI_API_KEY")) != ""
+			return strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
 		case providers.KindAnthropic:
-			return strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY")) != ""
+			return strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
 		default:
-			return false
+			return ""
 		}
 	}
 
+	hasConfiguredProviderAPIKey := func(kind providers.Kind, cfg ai.ProviderConfig) bool {
+		return getConfiguredProviderAPIKey(kind, cfg) != ""
+	}
+
 	resolveRequestedAPIKey := func(kind providers.Kind, submitted string, cfg ai.ProviderConfig) (string, error) {
-		currentAPIKey := strings.TrimSpace(cfg.APIKey)
+		currentAPIKey := getConfiguredProviderAPIKey(kind, cfg)
 		hasExistingAPIKey := hasConfiguredProviderAPIKey(kind, cfg)
 
 		if submitted == "" {
 			if hasExistingAPIKey {
-				// Keep the existing configured key. If the current key comes from
-				// the environment rather than persisted config, this remains empty
-				// so provider resolution can continue to use env vars.
+				// Keep the existing configured key, regardless of whether it was
+				// persisted directly in config or supplied via environment.
 				return currentAPIKey, nil
 			}
 			return "", nil
