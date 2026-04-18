@@ -1,180 +1,169 @@
 package ai
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"time"
 
+	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/parser"
 )
 
-// OllamaClient communicates with a local Ollama instance or OpenAI-compatible API.
-type OllamaClient struct {
-	endpoint string
-	model    string
-	apiKey   string // if set, uses OpenAI-compatible API instead of Ollama
-	client   *http.Client
+// defaultTemperature and defaultMaxTokens are the sampling knobs used for all
+// IaC-generation calls. Low temperature keeps output structured and JSON-
+// friendly; max_tokens is high enough to cover multi-resource topologies.
+const (
+	defaultTemperature = 0.3
+	defaultMaxTokens   = 4096
+)
+
+// Client is the high-level AI bridge. It holds a configured Provider and
+// exposes IaC-specific operations (chat, fix, topology). All LLM wire-format
+// concerns live in the providers package.
+type Client struct {
+	cfg      providers.Config
+	provider providers.Provider
+	// providerErr is retained if New returned an error so callers hitting the
+	// bridge can fall back to deterministic heuristics (PatternMatch) instead
+	// of crashing; every method checks it before attempting a call.
+	providerErr error
 }
 
-// ProviderConfig holds configuration for an AI provider.
+// ProviderConfig is the JSON-friendly view of the currently-configured
+// provider returned by /api/ai/settings. The APIKey field is masked on read.
 type ProviderConfig struct {
 	Type     string `json:"type"`     // "ollama" | "openai" | "anthropic"
 	Endpoint string `json:"endpoint"` // API endpoint URL
 	Model    string `json:"model"`    // model name
-	APIKey   string `json:"api_key"`  // API key (for cloud providers)
+	APIKey   string `json:"api_key"`  // masked on read, full on write
 }
 
-func NewOllamaClient(endpoint, model string) *OllamaClient {
-	return &OllamaClient{
-		endpoint: endpoint,
-		model:    model,
-		client:   &http.Client{Timeout: 5 * time.Minute}, // Increased for large models
+// NewClient builds a Client wired to a local Ollama instance by default.
+// Use UpdateConfig at runtime to switch providers or supply an API key.
+func NewClient(endpoint, model string) *Client {
+	c := &Client{}
+	c.applyConfig(providers.Config{
+		Kind:     providers.KindOllama,
+		Endpoint: endpoint,
+		Model:    model,
+		Timeout:  5 * time.Minute,
+	})
+	return c
+}
+
+// UpdateConfig swaps the active provider. Kind is inferred from credentials
+// when not supplied — a non-empty APIKey implies OpenAI-compatible, empty
+// implies Ollama. The router validates kind strings before calling so the
+// user sees a meaningful error for unsupported backends.
+func (c *Client) UpdateConfig(endpoint, model, apiKey string) {
+	cfg := c.cfg
+	cfg.Endpoint = endpoint
+	cfg.Model = model
+	cfg.APIKey = apiKey
+	// Reset inferred kind so the factory re-detects based on apiKey.
+	cfg.Kind = ""
+	c.applyConfig(cfg)
+}
+
+// UpdateConfigKind is a typed variant of UpdateConfig for callers (the router)
+// that know the Kind explicitly — e.g. when the user picks "anthropic" in the
+// UI even though they have an OpenAI-compatible key string format.
+const maskedAPIKeyPlaceholder = "********"
+
+func (c *Client) UpdateConfigKind(kind providers.Kind, endpoint, model, apiKey string) {
+	if apiKey == maskedAPIKeyPlaceholder {
+		apiKey = c.cfg.APIKey
+	}
+	c.applyConfig(providers.Config{
+		Kind:     kind,
+		Endpoint: endpoint,
+		Model:    model,
+		APIKey:   apiKey,
+		Timeout:  c.cfg.Timeout,
+	})
+}
+
+func (c *Client) applyConfig(cfg providers.Config) {
+	if cfg.Timeout == 0 {
+		cfg.Timeout = 5 * time.Minute
+	}
+	c.cfg = cfg
+	p, err := providers.New(cfg)
+	c.provider = p
+	c.providerErr = err
+	if err == nil && cfg.Kind == "" && p != nil {
+		c.cfg.Kind = p.Kind()
 	}
 }
 
-// UpdateConfig allows changing the model/endpoint/key at runtime.
-func (c *OllamaClient) UpdateConfig(endpoint, model, apiKey string) {
-	c.endpoint = endpoint
-	c.model = model
-	c.apiKey = apiKey
-}
-
-// GetConfig returns the current configuration (key is masked).
-func (c *OllamaClient) GetConfig() ProviderConfig {
-	provType := "ollama"
-	if c.apiKey != "" {
-		provType = "openai"
+// GetConfig returns the current provider config without exposing the current
+// API key value. When a key is already configured, it returns a masked
+// placeholder so callers can round-trip settings without re-entering the
+// secret; UpdateConfigKind treats that placeholder as "keep existing key".
+func (c *Client) GetConfig() ProviderConfig {
+	kind := c.cfg.Kind
+	if kind == "" {
+		kind = providers.KindOllama
 	}
-	maskedKey := ""
-	if c.apiKey != "" {
-		maskedKey = c.apiKey[:4] + "..." + c.apiKey[len(c.apiKey)-4:]
+	apiKey := ""
+	if c.cfg.APIKey != "" {
+		apiKey = maskedAPIKeyPlaceholder
 	}
 	return ProviderConfig{
-		Type:     provType,
-		Endpoint: c.endpoint,
-		Model:    c.model,
-		APIKey:   maskedKey,
+		Type:     string(kind),
+		Endpoint: c.cfg.Endpoint,
+		Model:    c.cfg.Model,
+		APIKey:   apiKey,
 	}
 }
 
-type ollamaRequest struct {
-	Model  string `json:"model"`
-	Prompt string `json:"prompt"`
-	Stream bool   `json:"stream"`
-	Format string `json:"format"`
-}
-
-type ollamaResponse struct {
-	Response string `json:"response"`
-}
-
-// OpenAI-compatible request/response for external providers
-type openAIRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openAIMessage `json:"messages"`
-	Temperature float64         `json:"temperature,omitempty"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-}
-
-type openAIMessage struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type openAIResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-	Error *struct {
-		Message string `json:"message"`
-	} `json:"error,omitempty"`
-}
-
-// callLLM sends a prompt to the configured LLM and returns the raw response text.
-// Supports both Ollama and OpenAI-compatible APIs.
-func (c *OllamaClient) callLLM(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	if c.apiKey != "" {
-		return c.callOpenAI(ctx, systemPrompt, userPrompt)
+// callLLM is the single internal chokepoint for every IaC-generation method
+// on Client. It attaches the shared sampling knobs, delegates to the active
+// Provider, and normalises error shapes.
+func (c *Client) callLLM(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
+	if c.providerErr != nil {
+		return "", c.providerErr
 	}
-	return c.callOllama(ctx, systemPrompt+"\n\n"+userPrompt)
+	return c.provider.Complete(ctx, providers.Request{
+		System:      systemPrompt,
+		User:        userPrompt,
+		Temperature: defaultTemperature,
+		MaxTokens:   defaultMaxTokens,
+		JSONMode:    true,
+		Cacheable:   true,
+	})
 }
 
-func (c *OllamaClient) callOllama(ctx context.Context, prompt string) (string, error) {
-	reqBody := ollamaRequest{
-		Model:  c.model,
-		Prompt: prompt,
-		Stream: false,
-		Format: "json",
+// StreamChat runs the same IaC chat generation as GenerateIaC but emits
+// incremental text chunks via onDelta as they arrive from the provider. The
+// returned tuple is (full response text, parsed resources, error) — the
+// caller is responsible for feeding onDelta to an SSE response writer.
+//
+// The parsed resources come from the same JSON parser GenerateIaC uses, so
+// the contract downstream of this function is identical: callers can render
+// tokens live and still get a clean structured result at the end.
+func (c *Client) StreamChat(ctx context.Context, req ChatRequest, onDelta providers.DeltaFunc) (string, []parser.Resource, error) {
+	if c.providerErr != nil {
+		return "", nil, c.providerErr
 	}
-	body, _ := json.Marshal(reqBody)
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", c.endpoint+"/api/generate", bytes.NewReader(body))
+	systemPrompt := buildSystemPrompt(req.Tool, req.Provider, req.Canvas)
+	userPrompt := buildChatUserPrompt(req)
+
+	raw, err := c.provider.Stream(ctx, providers.Request{
+		System:      systemPrompt,
+		User:        userPrompt,
+		Temperature: defaultTemperature,
+		MaxTokens:   defaultMaxTokens,
+		JSONMode:    true,
+		Cacheable:   true,
+	}, onDelta)
 	if err != nil {
-		return "", err
+		return raw, nil, err
 	}
-	httpReq.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("ollama unavailable: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var ollamaResp ollamaResponse
-	if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err != nil {
-		return "", err
-	}
-	return ollamaResp.Response, nil
-}
-
-func (c *OllamaClient) callOpenAI(ctx context.Context, systemPrompt, userPrompt string) (string, error) {
-	reqBody := openAIRequest{
-		Model: c.model,
-		Messages: []openAIMessage{
-			{Role: "system", Content: systemPrompt},
-			{Role: "user", Content: userPrompt},
-		},
-		Temperature: 0.3,
-		MaxTokens:   4096,
-	}
-	body, _ := json.Marshal(reqBody)
-
-	endpoint := c.endpoint
-	if !strings.HasSuffix(endpoint, "/chat/completions") {
-		endpoint = strings.TrimSuffix(endpoint, "/") + "/chat/completions"
-	}
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", endpoint, bytes.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
-	resp, err := c.client.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("API unavailable: %w", err)
-	}
-	defer resp.Body.Close()
-
-	var openAIResp openAIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&openAIResp); err != nil {
-		return "", err
-	}
-
-	if openAIResp.Error != nil {
-		return "", fmt.Errorf("API error: %s", openAIResp.Error.Message)
-	}
-
-	if len(openAIResp.Choices) == 0 {
-		return "", fmt.Errorf("no response from API")
-	}
-	return openAIResp.Choices[0].Message.Content, nil
+	msg, resources, err := parseAIResponse(raw)
+	return msg, resources, err
 }
 
 // ChatMessage represents one message in a conversation.
@@ -200,35 +189,39 @@ type CanvasResource struct {
 
 // GenerateIaC sends a natural language request to the configured LLM with
 // full conversation context, provider awareness, and canvas state.
-func (c *OllamaClient) GenerateIaC(ctx context.Context, req ChatRequest) (string, []parser.Resource, error) {
+func (c *Client) GenerateIaC(ctx context.Context, req ChatRequest) (string, []parser.Resource, error) {
 	systemPrompt := buildSystemPrompt(req.Tool, req.Provider, req.Canvas)
-
-	// Build user prompt with conversation context
-	var userPrompt string
-	if len(req.History) > 0 {
-		var parts []string
-		history := req.History
-		if len(history) > 6 {
-			history = history[len(history)-6:]
-		}
-		for _, msg := range history {
-			if msg.Role == "user" {
-				parts = append(parts, "User: "+msg.Content)
-			} else {
-				parts = append(parts, "Assistant: "+msg.Content)
-			}
-		}
-		userPrompt = fmt.Sprintf("Conversation so far:\n%s\n\nUser request: %s\n\nRespond with JSON only.",
-			strings.Join(parts, "\n"), req.Message)
-	} else {
-		userPrompt = fmt.Sprintf("User request: %s\n\nRespond with JSON only.", req.Message)
-	}
+	userPrompt := buildChatUserPrompt(req)
 
 	raw, err := c.callLLM(ctx, systemPrompt, userPrompt)
 	if err != nil {
 		return "", nil, err
 	}
 	return parseAIResponse(raw)
+}
+
+// buildChatUserPrompt composes the user-side prompt for a chat turn. It folds
+// in up to the last six history messages plus the current user message, and
+// reminds the model to emit JSON. Shared between GenerateIaC and StreamChat
+// so both paths see identical context.
+func buildChatUserPrompt(req ChatRequest) string {
+	if len(req.History) == 0 {
+		return fmt.Sprintf("User request: %s\n\nRespond with JSON only.", req.Message)
+	}
+	history := req.History
+	if len(history) > 6 {
+		history = history[len(history)-6:]
+	}
+	parts := make([]string, 0, len(history))
+	for _, msg := range history {
+		if msg.Role == "user" {
+			parts = append(parts, "User: "+msg.Content)
+		} else {
+			parts = append(parts, "Assistant: "+msg.Content)
+		}
+	}
+	return fmt.Sprintf("Conversation so far:\n%s\n\nUser request: %s\n\nRespond with JSON only.",
+		strings.Join(parts, "\n"), req.Message)
 }
 
 // PlanFixRequest is a request to analyze plan/apply output and suggest fixes.
@@ -259,7 +252,7 @@ type ResourceFix struct {
 }
 
 // AnalyzePlanOutput sends terraform plan/apply output to the AI for diagnosis and fix suggestions.
-func (c *OllamaClient) AnalyzePlanOutput(ctx context.Context, req PlanFixRequest) (*PlanFix, error) {
+func (c *Client) AnalyzePlanOutput(ctx context.Context, req PlanFixRequest) (*PlanFix, error) {
 	output := req.Output
 	if len(output) > 4000 {
 		output = output[:2000] + "\n\n... (truncated) ...\n\n" + output[len(output)-2000:]
@@ -371,7 +364,7 @@ type TopologyRequest struct {
 // GenerateTopology takes a free-text architecture description and generates
 // a full set of resources with connections. This is the "describe your
 // infrastructure and we'll build it" feature.
-func (c *OllamaClient) GenerateTopology(ctx context.Context, req TopologyRequest) (string, []parser.Resource, error) {
+func (c *Client) GenerateTopology(ctx context.Context, req TopologyRequest) (string, []parser.Resource, error) {
 	providerGuide := buildProviderGuide(req.Tool, req.Provider)
 
 	systemPrompt := fmt.Sprintf(`You are an expert Infrastructure as Code architect for %s.
@@ -410,105 +403,62 @@ Only respond with valid JSON.`, req.Tool, providerGuide)
 }
 
 // GenerateIaCSimple is the legacy single-message interface (used by pattern matching fallback).
-func (c *OllamaClient) GenerateIaCSimple(ctx context.Context, message, tool string) (string, []parser.Resource, error) {
+func (c *Client) GenerateIaCSimple(ctx context.Context, message, tool string) (string, []parser.Resource, error) {
 	return c.GenerateIaC(ctx, ChatRequest{
 		Message: message,
 		Tool:    tool,
 	})
 }
 
+// buildSystemPrompt renders the main IaC system prompt from the embedded
+// template file (internal/ai/prompts/system.md). The template receives
+// Tool, ProviderGuide, and CanvasContext; the caller never hand-composes the
+// prompt string any more.
 func buildSystemPrompt(tool, provider string, canvas []CanvasResource) string {
-	// Determine the correct provider context
-	providerGuide := buildProviderGuide(tool, provider)
+	return renderPrompt("system", map[string]string{
+		"Tool":          tool,
+		"ProviderGuide": buildProviderGuide(tool, provider),
+		"CanvasContext": buildCanvasContext(canvas),
+	})
+}
 
-	// Build canvas context so the AI knows what exists
-	canvasContext := ""
-	if len(canvas) > 0 {
-		var items []string
-		for _, r := range canvas {
-			items = append(items, fmt.Sprintf("  - %s.%s", r.Type, r.Name))
-		}
-		canvasContext = fmt.Sprintf(`
+// buildCanvasContext is extracted so the system prompt template can receive
+// pre-rendered text rather than a nested slice. Empty canvases return the
+// empty string so the template leaves no dangling whitespace.
+func buildCanvasContext(canvas []CanvasResource) string {
+	if len(canvas) == 0 {
+		return ""
+	}
+	items := make([]string, 0, len(canvas))
+	for _, r := range canvas {
+		items = append(items, fmt.Sprintf("  - %s.%s", r.Type, r.Name))
+	}
+	return fmt.Sprintf(`
 
 EXISTING RESOURCES ON CANVAS (do not duplicate these):
 %s
 
 When the user asks for follow-up resources, build on what already exists.
-Reference existing resources by their type.name when creating connections.`, strings.Join(items, "\n"))
-	}
-
-	return fmt.Sprintf(`You are an Infrastructure as Code assistant for %s.
-
-CRITICAL RULES:
-1. ONLY use %s resource types. NEVER mix providers in a single response.
-2. Follow the user's conversation context — if they started with a specific cloud provider, STAY with that provider.
-3. If resources already exist on the canvas, build on them rather than creating duplicates.
-
-%s%s
-
-When the user describes infrastructure, respond with a JSON object:
-{
-  "message": "Brief explanation of what you created and why",
-  "resources": [
-    {
-      "type": "resource_type",
-      "name": "descriptive_name",
-      "properties": {"key": "value"}
-    }
-  ]
+Reference existing resources by their type.name when creating connections.`,
+		strings.Join(items, "\n"))
 }
 
-IMPORTANT:
-- Use descriptive snake_case names (web_server, not main or default)
-- Include sensible default properties for each resource
-- If the user asks a question rather than requesting resources, set "resources" to an empty array
-- Only respond with valid JSON. No markdown, no code fences.`, tool, providerGuide, providerGuide, canvasContext)
-}
-
+// buildProviderGuide picks the right provider-guide prompt file. Ansible
+// overrides the provider since modules are shared across clouds. The guide
+// text itself lives in internal/ai/prompts/provider_*.md.
 func buildProviderGuide(tool, provider string) string {
+	id := "provider_aws"
 	if tool == "ansible" {
-		return `Ansible modules. Use official module names:
-- Package management: apt, yum, dnf, pip
-- System: service, systemd, user, cron, hostname
-- Files: copy, template, file, lineinfile
-- Containers: docker_container, docker_image, k8s
-- Cloud (AWS): amazon.aws.ec2_instance, amazon.aws.s3_bucket
-- Cloud (GCP): google.cloud.gcp_compute_instance
-- Cloud (Azure): azure.azcollection.azure_rm_virtualmachine`
+		id = "provider_ansible"
+	} else {
+		switch provider {
+		case "google":
+			id = "provider_gcp"
+		case "azurerm":
+			id = "provider_azurerm"
+		}
 	}
-
-	switch provider {
-	case "google":
-		return `Google Cloud (GCP) resource types ONLY. Examples:
-- Networking: google_compute_network, google_compute_subnetwork, google_compute_firewall, google_compute_router
-- Compute: google_compute_instance, google_container_cluster, google_cloud_run_service, google_cloudfunctions_function
-- Storage: google_storage_bucket, google_compute_disk
-- Database: google_sql_database_instance, google_redis_instance, google_spanner_instance, google_firestore_database
-- Security: google_service_account, google_kms_key_ring, google_secret_manager_secret
-- Messaging: google_pubsub_topic, google_pubsub_subscription
-- Data: google_bigquery_dataset, google_bigquery_table
-NEVER use aws_ or azurerm_ prefixed resources`
-
-	case "azurerm":
-		return `Azure resource types ONLY. Examples:
-- Core: azurerm_resource_group (required for all Azure resources)
-- Networking: azurerm_virtual_network, azurerm_subnet, azurerm_network_security_group, azurerm_public_ip
-- Compute: azurerm_linux_virtual_machine, azurerm_kubernetes_cluster, azurerm_function_app, azurerm_linux_web_app
-- Storage: azurerm_storage_account, azurerm_storage_container
-- Database: azurerm_mssql_server, azurerm_mssql_database, azurerm_postgresql_flexible_server, azurerm_cosmosdb_account
-- Security: azurerm_key_vault, azurerm_user_assigned_identity
-ALWAYS create an azurerm_resource_group first. NEVER use aws_ or google_ prefixed resources`
-
-	default: // aws is default
-		return `AWS resource types ONLY. Examples:
-- Networking: aws_vpc, aws_subnet, aws_internet_gateway, aws_nat_gateway, aws_security_group, aws_route_table
-- Compute: aws_instance, aws_lambda_function, aws_ecs_cluster, aws_eks_cluster
-- Storage: aws_s3_bucket, aws_ebs_volume, aws_ecr_repository
-- Database: aws_db_instance, aws_dynamodb_table, aws_elasticache_cluster, aws_rds_cluster
-- Security: aws_iam_role, aws_iam_policy, aws_kms_key, aws_secretsmanager_secret
-- Load Balancing: aws_lb, aws_lb_target_group
-NEVER use google_ or azurerm_ prefixed resources`
-	}
+	return renderPrompt(id, nil)
 }
 
 func parseAIResponse(raw string) (string, []parser.Resource, error) {

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/iac-studio/iac-studio/internal/ai"
+	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/api"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/watcher"
@@ -65,7 +66,29 @@ func main() {
 	fw := watcher.New(hub)
 	defer fw.Close()
 
-	aiClient := ai.NewOllamaClient(*aiEndpoint, *aiModel)
+	aiClient := ai.NewClient(*aiEndpoint, *aiModel)
+	// Pick up cloud-provider credentials from the environment so users don't
+	// have to click through the settings modal on every start. Explicit
+	// selection via /api/ai/settings always overrides this.
+	if key := os.Getenv("ANTHROPIC_API_KEY"); key != "" {
+		model := os.Getenv("ANTHROPIC_MODEL")
+		if model == "" {
+			model = "claude-opus-4-7"
+		}
+		aiClient.UpdateConfigKind(providers.KindAnthropic, "", model, key)
+		log.Printf("ai: configured anthropic provider from ANTHROPIC_API_KEY (model=%s)", model)
+	} else if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+		endpoint := os.Getenv("OPENAI_ENDPOINT")
+		if endpoint == "" {
+			endpoint = "https://api.openai.com/v1"
+		}
+		model := os.Getenv("OPENAI_MODEL")
+		if model == "" {
+			model = "gpt-4o-mini"
+		}
+		aiClient.UpdateConfigKind(providers.KindOpenAI, endpoint, model, key)
+		log.Printf("ai: configured openai provider from OPENAI_API_KEY (model=%s)", model)
+	}
 	safeRun := runner.NewSafeRunner(runner.DefaultSafetyConfig())
 
 	// Build origin allowlist from actual bind address

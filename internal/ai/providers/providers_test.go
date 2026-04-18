@@ -1,0 +1,503 @@
+package providers
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+)
+
+// TestFactoryInfersKindFromCredentials covers the backwards-compatibility
+// behaviour expected by existing callers: a non-empty APIKey implies
+// OpenAI-compatible, an empty APIKey implies Ollama. Explicit Kind always
+// wins.
+func TestFactoryInfersKindFromCredentials(t *testing.T) {
+	cases := []struct {
+		name string
+		cfg  Config
+		want Kind
+		err  bool
+	}{
+		{"empty key defaults to ollama", Config{Endpoint: "http://x", Model: "m"}, KindOllama, false},
+		{"non-empty key infers openai", Config{Endpoint: "http://x", Model: "m", APIKey: "sk-1234"}, KindOpenAI, false},
+		{"explicit ollama wins over key", Config{Kind: KindOllama, APIKey: "sk-ignored", Endpoint: "http://x", Model: "m"}, KindOllama, false},
+		{"openai requires key", Config{Kind: KindOpenAI, Endpoint: "http://x", Model: "m"}, "", true},
+		{"anthropic with key", Config{Kind: KindAnthropic, APIKey: "sk-ant-123", Model: "claude-opus-4-7"}, KindAnthropic, false},
+		{"anthropic requires key", Config{Kind: KindAnthropic, Model: "claude-opus-4-7"}, "", true},
+		{"unknown kind rejected", Config{Kind: "palm", Model: "m"}, "", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p, err := New(tc.cfg)
+			if tc.err {
+				if err == nil {
+					t.Fatalf("expected error, got provider %T", p)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if p.Kind() != tc.want {
+				t.Errorf("Kind() = %q, want %q", p.Kind(), tc.want)
+			}
+		})
+	}
+}
+
+// TestOllamaProviderComplete drives the ollama provider against a stubbed
+// HTTP server so we can verify wire-format expectations (endpoint path, JSON
+// format flag, system+user concatenation) without a live Ollama.
+func TestOllamaProviderComplete(t *testing.T) {
+	var captured ollamaRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/generate" {
+			t.Errorf("ollama must POST to /api/generate, got %s", r.URL.Path)
+		}
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("bad request body: %v", err)
+		}
+		_ = json.NewEncoder(w).Encode(ollamaResponse{Response: `{"ok":true}`})
+	}))
+	defer srv.Close()
+
+	p := NewOllama(Config{Endpoint: srv.URL, Model: "llama3"})
+	got, err := p.Complete(context.Background(), Request{
+		System: "you are helpful", User: "hello", JSONMode: true,
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got != `{"ok":true}` {
+		t.Errorf("Complete() = %q", got)
+	}
+	if captured.Model != "llama3" {
+		t.Errorf("Model = %q, want llama3", captured.Model)
+	}
+	if captured.Format != "json" {
+		t.Errorf("JSONMode should set Format=json, got %q", captured.Format)
+	}
+	if !strings.Contains(captured.Prompt, "you are helpful") || !strings.Contains(captured.Prompt, "hello") {
+		t.Errorf("Prompt should concat system+user, got %q", captured.Prompt)
+	}
+}
+
+// TestOllamaProviderEmptyResponse ensures an empty body surfaces as
+// ErrEmptyResponse so callers can trigger their fallback path.
+func TestOllamaProviderEmptyResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(ollamaResponse{Response: ""})
+	}))
+	defer srv.Close()
+
+	p := NewOllama(Config{Endpoint: srv.URL, Model: "m"})
+	_, err := p.Complete(context.Background(), Request{System: "s", User: "u"})
+	if !errors.Is(err, ErrEmptyResponse) {
+		t.Fatalf("want ErrEmptyResponse, got %v", err)
+	}
+}
+
+// TestOpenAIProviderComplete verifies messages array, Bearer auth, and
+// endpoint normalisation against a stubbed OpenAI-compatible server.
+func TestOpenAIProviderComplete(t *testing.T) {
+	var captured openAIRequest
+	var authHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/chat/completions" {
+			t.Errorf("openai must POST to /chat/completions, got %s", r.URL.Path)
+		}
+		authHeader = r.Header.Get("Authorization")
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("bad request: %v", err)
+		}
+		resp := openAIResponse{}
+		resp.Choices = []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		}{{Message: struct {
+			Content string `json:"content"`
+		}{Content: "ok"}}}
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer srv.Close()
+
+	// Pass the bare base URL — normaliseOpenAIEndpoint should append the
+	// /chat/completions suffix.
+	p := NewOpenAI(Config{Endpoint: srv.URL, Model: "gpt-4", APIKey: "sk-test"})
+	got, err := p.Complete(context.Background(), Request{
+		System: "sys", User: "usr", Temperature: 0.5, MaxTokens: 128,
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if got != "ok" {
+		t.Errorf("Complete() = %q", got)
+	}
+	if authHeader != "Bearer sk-test" {
+		t.Errorf("Authorization = %q, want Bearer sk-test", authHeader)
+	}
+	if len(captured.Messages) != 2 {
+		t.Fatalf("Messages len = %d, want 2", len(captured.Messages))
+	}
+	if captured.Messages[0].Role != "system" || captured.Messages[0].Content != "sys" {
+		t.Errorf("system message wrong: %+v", captured.Messages[0])
+	}
+	if captured.Messages[1].Role != "user" || captured.Messages[1].Content != "usr" {
+		t.Errorf("user message wrong: %+v", captured.Messages[1])
+	}
+	if captured.Temperature != 0.5 || captured.MaxTokens != 128 {
+		t.Errorf("sampling knobs dropped: %+v", captured)
+	}
+}
+
+// TestOpenAIProviderError propagates the provider's structured error body so
+// users see the actual upstream message rather than a generic one.
+func TestOpenAIProviderError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"error":{"message":"rate limit exceeded"}}`))
+	}))
+	defer srv.Close()
+
+	p := NewOpenAI(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
+	_, err := p.Complete(context.Background(), Request{System: "s", User: "u"})
+	if err == nil || !strings.Contains(err.Error(), "rate limit exceeded") {
+		t.Fatalf("want upstream error message, got %v", err)
+	}
+}
+
+// TestAnthropicProviderComplete exercises the Messages API shape: top-level
+// system field (not a message), messages array with just user turn, required
+// max_tokens, and Anthropic's specific headers (x-api-key + anthropic-version).
+func TestAnthropicProviderComplete(t *testing.T) {
+	var captured anthropicRequest
+	var gotKey, gotVersion string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/v1/messages") {
+			t.Errorf("anthropic must POST to /v1/messages, got %s", r.URL.Path)
+		}
+		gotKey = r.Header.Get("x-api-key")
+		gotVersion = r.Header.Get("anthropic-version")
+		body, _ := io.ReadAll(r.Body)
+		if err := json.Unmarshal(body, &captured); err != nil {
+			t.Fatalf("bad request: %v", err)
+		}
+		_, _ = w.Write([]byte(`{
+			"content": [
+				{"type":"text","text":"hello "},
+				{"type":"text","text":"world"}
+			],
+			"usage": {"input_tokens": 10, "output_tokens": 2}
+		}`))
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "claude-opus-4-7", APIKey: "sk-ant-xyz"})
+	got, err := p.Complete(context.Background(), Request{
+		System: "you are helpful", User: "hi", MaxTokens: 256, Temperature: 0.2,
+	})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	// Multiple text blocks should be concatenated rather than dropped.
+	if got != "hello world" {
+		t.Errorf("Complete() = %q, want hello world", got)
+	}
+	if gotKey != "sk-ant-xyz" {
+		t.Errorf("x-api-key header = %q", gotKey)
+	}
+	if gotVersion != DefaultAnthropicVersion {
+		t.Errorf("anthropic-version header = %q, want %s", gotVersion, DefaultAnthropicVersion)
+	}
+	if captured.System != "you are helpful" {
+		t.Errorf("System should live at top level, got %q", captured.System)
+	}
+	if len(captured.Messages) != 1 || captured.Messages[0].Role != "user" {
+		t.Errorf("expected single user message, got %+v", captured.Messages)
+	}
+	if captured.MaxTokens != 256 {
+		t.Errorf("MaxTokens = %d, want 256", captured.MaxTokens)
+	}
+}
+
+// TestAnthropicProviderDefaultMaxTokens guarantees we never send max_tokens=0
+// (which the Messages API rejects) when the caller forgets to set it.
+func TestAnthropicProviderDefaultMaxTokens(t *testing.T) {
+	var captured anthropicRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
+	_, err := p.Complete(context.Background(), Request{System: "s", User: "u"})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	if captured.MaxTokens == 0 {
+		t.Error("MaxTokens must default to a non-zero value for the Messages API")
+	}
+}
+
+// TestAnthropicPromptCachingRequestShape verifies that when Cacheable=true
+// the system field is serialised as an array of blocks with cache_control,
+// and that it stays a plain string otherwise.
+func TestAnthropicPromptCachingRequestShape(t *testing.T) {
+	cases := []struct {
+		name      string
+		cacheable bool
+		checkBody func(t *testing.T, raw []byte)
+	}{
+		{
+			name:      "cacheable serialises system as blocks with cache_control",
+			cacheable: true,
+			checkBody: func(t *testing.T, raw []byte) {
+				// Probe the JSON loosely so the test doesn't break if Anthropic
+				// adds new top-level fields.
+				var body map[string]any
+				if err := json.Unmarshal(raw, &body); err != nil {
+					t.Fatalf("unmarshal request: %v", err)
+				}
+				arr, ok := body["system"].([]any)
+				if !ok {
+					t.Fatalf("system should be array when Cacheable=true, got %T", body["system"])
+				}
+				if len(arr) != 1 {
+					t.Fatalf("expected one system block, got %d", len(arr))
+				}
+				block := arr[0].(map[string]any)
+				if block["type"] != "text" || block["text"] != "the system prompt" {
+					t.Errorf("block content wrong: %+v", block)
+				}
+				cc, ok := block["cache_control"].(map[string]any)
+				if !ok || cc["type"] != "ephemeral" {
+					t.Errorf("missing ephemeral cache_control: %+v", block)
+				}
+			},
+		},
+		{
+			name:      "non-cacheable uses plain string",
+			cacheable: false,
+			checkBody: func(t *testing.T, raw []byte) {
+				var body map[string]any
+				if err := json.Unmarshal(raw, &body); err != nil {
+					t.Fatalf("unmarshal request: %v", err)
+				}
+				s, ok := body["system"].(string)
+				if !ok {
+					t.Fatalf("system should be string when Cacheable=false, got %T", body["system"])
+				}
+				if s != "the system prompt" {
+					t.Errorf("system = %q", s)
+				}
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				body, _ := io.ReadAll(r.Body)
+				tc.checkBody(t, body)
+				_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"ok"}]}`))
+			}))
+			defer srv.Close()
+			p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
+			_, err := p.Complete(context.Background(), Request{
+				System: "the system prompt", User: "u", Cacheable: tc.cacheable,
+			})
+			if err != nil {
+				t.Fatalf("Complete: %v", err)
+			}
+		})
+	}
+}
+
+// TestAnthropicLastUsageFromComplete ensures cache-hit telemetry flows through
+// to LastUsage() after a blocking call — callers can read it to verify the
+// 80% cache-hit target.
+func TestAnthropicLastUsageFromComplete(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"content": [{"type":"text","text":"ok"}],
+			"usage": {"input_tokens": 10, "output_tokens": 2, "cache_read_input_tokens": 8, "cache_creation_input_tokens": 0}
+		}`))
+	}))
+	defer srv.Close()
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"}).(*anthropicProvider)
+	if _, err := p.Complete(context.Background(), Request{System: "s", User: "u", Cacheable: true}); err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	usage := p.LastUsage()
+	if usage.InputTokens != 10 || usage.OutputTokens != 2 || usage.CacheReadInputTokens != 8 {
+		t.Errorf("LastUsage wrong: %+v", usage)
+	}
+}
+
+// TestAnthropicLastUsageFromStream ensures streaming also populates
+// LastUsage, merged across message_start + message_delta events.
+func TestAnthropicLastUsageFromStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte(`data: {"type":"message_start","message":{"usage":{"input_tokens":12,"output_tokens":0,"cache_read_input_tokens":10}}}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"type":"content_block_delta","delta":{"type":"text_delta","text":"hi"}}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"type":"message_delta","usage":{"output_tokens":5}}` + "\n\n"))
+		_, _ = w.Write([]byte(`data: {"type":"message_stop"}` + "\n\n"))
+	}))
+	defer srv.Close()
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"}).(*anthropicProvider)
+	_, err := p.Stream(context.Background(), Request{System: "s", User: "u", Cacheable: true}, func(string) {})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	usage := p.LastUsage()
+	if usage.InputTokens != 12 || usage.OutputTokens != 5 || usage.CacheReadInputTokens != 10 {
+		t.Errorf("LastUsage wrong: %+v", usage)
+	}
+}
+
+// TestOllamaIgnoresCacheableFlag proves Cacheable is a no-op for providers
+// that don't support it — no wire-format changes when the flag is set.
+func TestOllamaIgnoresCacheableFlag(t *testing.T) {
+	var captured ollamaRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &captured)
+		_ = json.NewEncoder(w).Encode(ollamaResponse{Response: "ok"})
+	}))
+	defer srv.Close()
+	p := NewOllama(Config{Endpoint: srv.URL, Model: "m"})
+	_, err := p.Complete(context.Background(), Request{System: "s", User: "u", Cacheable: true})
+	if err != nil {
+		t.Fatalf("Complete: %v", err)
+	}
+	// Wire format is unchanged regardless of the cacheable flag.
+	if captured.Model != "m" || !strings.Contains(captured.Prompt, "s") {
+		t.Errorf("ollama request shape changed unexpectedly: %+v", captured)
+	}
+}
+
+// TestOllamaProviderStream verifies NDJSON streaming: every non-empty
+// "response" line is delivered as a delta and the full text is returned
+// on completion.
+func TestOllamaProviderStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-ndjson")
+		// Three chunks then a done marker. Each line is one JSON object.
+		_, _ = w.Write([]byte(`{"response":"hel","done":false}` + "\n"))
+		_, _ = w.Write([]byte(`{"response":"lo ","done":false}` + "\n"))
+		_, _ = w.Write([]byte(`{"response":"world","done":false}` + "\n"))
+		_, _ = w.Write([]byte(`{"response":"","done":true}` + "\n"))
+	}))
+	defer srv.Close()
+
+	var deltas []string
+	p := NewOllama(Config{Endpoint: srv.URL, Model: "m"})
+	got, err := p.Stream(context.Background(), Request{System: "s", User: "u"}, func(d string) {
+		deltas = append(deltas, d)
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if got != "hello world" {
+		t.Errorf("final text = %q", got)
+	}
+	if len(deltas) != 3 {
+		t.Errorf("want 3 deltas, got %d: %v", len(deltas), deltas)
+	}
+}
+
+// TestOpenAIProviderStream exercises SSE parsing: "data: {...}" lines turned
+// into deltas, "data: [DONE]" terminates.
+func TestOpenAIProviderStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"he\"}}]}\n\n"))
+		_, _ = w.Write([]byte("data: {\"choices\":[{\"delta\":{\"content\":\"llo\"}}]}\n\n"))
+		// Unrelated event line must be ignored, not broken on.
+		_, _ = w.Write([]byte(": comment keep-alive\n\n"))
+		_, _ = w.Write([]byte("data: [DONE]\n\n"))
+	}))
+	defer srv.Close()
+
+	var accum string
+	p := NewOpenAI(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
+	got, err := p.Stream(context.Background(), Request{System: "s", User: "u"}, func(d string) {
+		accum += d
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if got != "hello" || accum != "hello" {
+		t.Errorf("final=%q accum=%q", got, accum)
+	}
+}
+
+// TestAnthropicProviderStream covers the Messages API event stream:
+// content_block_delta with text_delta → delta callback; message_stop ends.
+func TestAnthropicProviderStream(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		// Intersperse event types so we confirm we only react to the right ones.
+		_, _ = w.Write([]byte("data: {\"type\":\"message_start\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"he\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"text_delta\",\"text\":\"llo\"}}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_delta\"}\n\n"))
+		_, _ = w.Write([]byte("data: {\"type\":\"message_stop\"}\n\n"))
+	}))
+	defer srv.Close()
+
+	var deltas []string
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "claude-opus-4-7", APIKey: "sk-ant"})
+	got, err := p.Stream(context.Background(), Request{System: "s", User: "u"}, func(d string) {
+		deltas = append(deltas, d)
+	})
+	if err != nil {
+		t.Fatalf("Stream: %v", err)
+	}
+	if got != "hello" {
+		t.Errorf("final text = %q", got)
+	}
+	if len(deltas) != 2 {
+		t.Errorf("want 2 deltas, got %d: %v", len(deltas), deltas)
+	}
+}
+
+// TestAnthropicProviderError surfaces the typed error message from the API.
+func TestAnthropicProviderError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"error":{"type":"invalid_request_error","message":"bad model"}}`))
+	}))
+	defer srv.Close()
+
+	p := NewAnthropic(Config{Endpoint: srv.URL, Model: "m", APIKey: "sk"})
+	_, err := p.Complete(context.Background(), Request{System: "s", User: "u"})
+	if err == nil || !strings.Contains(err.Error(), "bad model") {
+		t.Fatalf("want upstream error message, got %v", err)
+	}
+}
+
+// TestOpenAIEndpointNormalisation confirms users can paste either form of URL.
+func TestOpenAIEndpointNormalisation(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"https://api.openai.com/v1", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com/v1/", "https://api.openai.com/v1/chat/completions"},
+		{"https://api.openai.com/v1/chat/completions", "https://api.openai.com/v1/chat/completions"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.in, func(t *testing.T) {
+			if got := normaliseOpenAIEndpoint(tc.in); got != tc.want {
+				t.Errorf("normaliseOpenAIEndpoint(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}

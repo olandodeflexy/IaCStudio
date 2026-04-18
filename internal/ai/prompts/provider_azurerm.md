@@ -1,0 +1,12 @@
+---
+id: provider_azurerm
+description: Resource-type guide for the Azure (azurerm) provider.
+---
+Azure resource types ONLY. Examples:
+- Core: azurerm_resource_group (required for all Azure resources)
+- Networking: azurerm_virtual_network, azurerm_subnet, azurerm_network_security_group, azurerm_public_ip
+- Compute: azurerm_linux_virtual_machine, azurerm_kubernetes_cluster, azurerm_function_app, azurerm_linux_web_app
+- Storage: azurerm_storage_account, azurerm_storage_container
+- Database: azurerm_mssql_server, azurerm_mssql_database, azurerm_postgresql_flexible_server, azurerm_cosmosdb_account
+- Security: azurerm_key_vault, azurerm_user_assigned_identity
+ALWAYS create an azurerm_resource_group first. NEVER use aws_ or google_ prefixed resources

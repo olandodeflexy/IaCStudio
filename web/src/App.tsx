@@ -480,23 +480,58 @@ export default function App() {
     api.suggest(tool, provider, canvas).then(setSuggestions).catch(() => {});
   }, [nodes, tool, detectProvider]);
 
+  const chatInFlightRef = useRef(false);
+
   const handleChat = async () => {
+    if (chatLoading || chatInFlightRef.current) return;
     if (!chatInput.trim() || !tool) return;
+
+    chatInFlightRef.current = true;
+    setChatLoading(true);
+
     const input = chatInput;
     setChatInput('');
-    setChatMessages(prev => [...prev, { role: 'user', text: input }]);
-    setChatLoading(true);
+    // Append the user turn and a placeholder AI bubble that will be filled in
+    // by the streaming deltas below. Track the assistant bubble by a stable id
+    // assigned before enqueueing state so later patches do not depend on
+    // updater side-effects or a mutable array index.
+    const aiMessageId = `ai-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let pendingAiText = '';
+    const updateAiMessageText = (text: string) => {
+      setChatMessages(prev => {
+        const nextAiIndex = prev.findIndex(message => (message as { id?: string }).id === aiMessageId);
+        if (nextAiIndex < 0) return prev;
+        const next = [...prev];
+        next[nextAiIndex] = { ...next[nextAiIndex], text };
+        return next;
+      });
+    };
+
+    setChatMessages(prev => [
+      ...prev,
+      { role: 'user' as const, text: input },
+      { role: 'ai' as const, text: pendingAiText, id: aiMessageId } as (typeof prev)[number],
+    ]);
 
     try {
       const provider = detectProvider();
-      const result = await api.chat({
-        message: input,
-        tool,
-        provider,
-        history: chatMessages.map(m => ({ role: m.role === 'ai' ? 'ai' : 'user', content: m.text })),
-        canvas: nodes.map(n => ({ type: n.type, name: n.name })),
-      });
-      setChatMessages(prev => [...prev, { role: 'ai', text: result.message }]);
+      const history = chatMessages.map(m => ({ role: m.role === 'ai' ? 'ai' : 'user', content: m.text }));
+      const canvas = nodes.map(n => ({ type: n.type, name: n.name }));
+
+      const result = await api.chatStream(
+        { message: input, tool, provider, history, canvas },
+        (delta: string) => {
+          // Append raw tokens to the live assistant bubble. The server parses
+          // the final JSON in the "complete" event, so we still get clean
+          // message + resources at the end — this just shows progress.
+          pendingAiText += delta;
+          updateAiMessageText(pendingAiText);
+        },
+      );
+
+      // Replace the streamed raw text with the parsed clean message.
+      pendingAiText = result.message;
+      updateAiMessageText(pendingAiText);
       if (result.suggestions) setSuggestions(result.suggestions);
       if (result.resources) {
         result.resources.forEach(r => {
@@ -510,9 +545,12 @@ export default function App() {
         });
       }
     } catch {
-      setChatMessages(prev => [...prev, { role: 'ai', text: 'AI is unavailable. Make sure Ollama is running.' }]);
+      pendingAiText = 'AI is unavailable. Make sure your provider is reachable.';
+      updateAiMessageText(pendingAiText);
+    } finally {
+      chatInFlightRef.current = false;
+      setChatLoading(false);
     }
-    setChatLoading(false);
   };
 
   const runCmd = (command: string) => {
@@ -921,12 +959,14 @@ export default function App() {
                 {[
                   { key: 'ollama', label: 'Ollama (Local)', desc: 'Free, private, runs on your machine' },
                   { key: 'openai', label: 'OpenAI API', desc: 'GPT-4o, GPT-4-turbo' },
+                  { key: 'anthropic', label: 'Anthropic', desc: 'Claude Opus, Claude Haiku' },
                   { key: 'custom', label: 'Custom API', desc: 'Any OpenAI-compatible endpoint' },
                 ].map(p => (
                   <button key={p.key} className={aiSettings.type === p.key ? 'ui-choice-card is-active' : 'ui-choice-card'}
                     onClick={() => {
                       if (p.key === 'ollama') setAiSettings(s => ({ ...s, type: 'ollama', endpoint: 'http://localhost:11434', api_key: '' }));
                       else if (p.key === 'openai') setAiSettings(s => ({ ...s, type: 'openai', endpoint: 'https://api.openai.com/v1', model: 'gpt-4o' }));
+                      else if (p.key === 'anthropic') setAiSettings(s => ({ ...s, type: 'anthropic', endpoint: '', model: 'claude-haiku-4-5', api_key: '' }));
                       else setAiSettings(s => ({ ...s, type: 'custom' }));
                     }}>
                     <div className="ui-choice-title">{p.label}</div>
@@ -939,13 +979,13 @@ export default function App() {
             <div style={{ marginBottom: 12 }}>
               <UILabel>Endpoint</UILabel>
               <UIInput value={aiSettings.endpoint} onChange={e => setAiSettings(s => ({ ...s, endpoint: e.target.value }))}
-                placeholder={aiSettings.type === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'} />
+                placeholder={aiSettings.type === 'ollama' ? 'http://localhost:11434' : aiSettings.type === 'anthropic' ? 'https://api.anthropic.com (optional)' : 'https://api.openai.com/v1'} />
             </div>
 
             <div style={{ marginBottom: 12 }}>
               <UILabel>Model</UILabel>
               <UIInput value={aiSettings.model} onChange={e => setAiSettings(s => ({ ...s, model: e.target.value }))}
-                placeholder={aiSettings.type === 'ollama' ? 'gemma4' : 'gpt-4o'} />
+                placeholder={aiSettings.type === 'ollama' ? 'gemma4' : aiSettings.type === 'anthropic' ? 'claude-haiku-4-5' : 'gpt-4o'} />
             </div>
 
             {aiSettings.type !== 'ollama' && (

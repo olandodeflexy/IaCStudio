@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/iac-studio/iac-studio/internal/ai"
+	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/catalog"
 	"github.com/iac-studio/iac-studio/internal/drift"
 	"github.com/iac-studio/iac-studio/internal/exporter"
@@ -92,7 +93,7 @@ func limitBody(w http.ResponseWriter, r *http.Request) {
 }
 
 // NewRouter creates the HTTP router with all endpoints.
-func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run *runner.SafeRunner, projectsDir string) *http.ServeMux {
+func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runner.SafeRunner, projectsDir string) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health
@@ -565,6 +566,92 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		})
 	})
 
+	// Streaming AI chat via Server-Sent Events.
+	// Event types emitted:
+	//   - "delta"     — {text: "..."}        for every incremental chunk
+	//   - "complete"  — {message, resources, suggestions}  on successful finish
+	//   - "error"     — {error: "..."}       when the provider call fails
+	// The non-streaming /api/ai/chat handler above is retained so older
+	// clients keep working; new clients should prefer this endpoint.
+	mux.HandleFunc("POST /api/ai/chat/stream", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var req ai.ChatRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming unsupported by this server", 500)
+			return
+		}
+		if err := http.NewResponseController(w).SetWriteDeadline(time.Time{}); err != nil && !errors.Is(err, http.ErrNotSupported) {
+			http.Error(w, "failed to enable streaming", 500)
+			return
+		}
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("X-Accel-Buffering", "no") // bypass nginx/proxy buffering
+		w.WriteHeader(http.StatusOK)
+
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+
+		writeEvent := func(event string, payload any) error {
+			data, err := json.Marshal(payload)
+			if err != nil {
+				return err
+			}
+			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data); err != nil {
+				return err
+			}
+			flusher.Flush()
+			return nil
+		}
+
+		var streamErr error
+		onDelta := func(chunk string) {
+			if streamErr != nil {
+				return
+			}
+			if err := writeEvent("delta", map[string]string{"text": chunk}); err != nil {
+				streamErr = err
+				cancel()
+			}
+		}
+
+		response, resources, err := aiClient.StreamChat(ctx, req, onDelta)
+		if streamErr != nil || errors.Is(ctx.Err(), context.Canceled) {
+			return
+		}
+		if err != nil {
+			// Notify clients that the provider stream failed using the
+			// standard non-terminal error event so they can continue waiting
+			// for the deterministic fallback completion below.
+			// A write failure here just means the client already disconnected,
+			// in which case the fallback below is wasted work but harmless.
+			log.Printf("AI stream failed, falling back to pattern match: %v", err)
+			_ = writeEvent("error", map[string]string{"error": err.Error()})
+
+			// Fall back to deterministic pattern matching so users aren't
+			// left hanging when the provider is unreachable, matching the
+			// non-streaming handler's behaviour.
+			response, resources = ai.PatternMatch(req.Message, req.Tool, req.Provider)
+		}
+		suggestions := ai.SuggestNext(req.Tool, req.Provider, req.Canvas)
+
+		if err := writeEvent("complete", map[string]interface{}{
+			"message":     response,
+			"resources":   resources,
+			"suggestions": suggestions,
+		}); err != nil {
+			cancel()
+			return
+		}
+	})
+
 	// Smart resource suggestions based on canvas state
 	mux.HandleFunc("POST /api/ai/suggest", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
@@ -700,7 +787,56 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 		_ = json.NewEncoder(w).Encode(aiClient.GetConfig())
 	})
 
-	// Update AI provider config (supports Ollama and OpenAI-compatible APIs)
+	isLikelyMaskedAPIKey := func(apiKey string) bool {
+		return apiKey != "" && (strings.Contains(apiKey, "*") || strings.Contains(apiKey, "•"))
+	}
+
+	// Update AI provider config (supports Ollama, OpenAI-compatible, and Anthropic).
+	// Type is validated explicitly so a user selecting "anthropic" in the UI
+	// isn't silently downgraded to the OpenAI path just because they supplied
+	// an API key.
+	getConfiguredProviderAPIKey := func(kind providers.Kind, cfg ai.ProviderConfig) string {
+		if apiKey := strings.TrimSpace(cfg.APIKey); apiKey != "" {
+			return apiKey
+		}
+		switch kind {
+		case providers.KindOpenAI:
+			return strings.TrimSpace(os.Getenv("OPENAI_API_KEY"))
+		case providers.KindAnthropic:
+			return strings.TrimSpace(os.Getenv("ANTHROPIC_API_KEY"))
+		default:
+			return ""
+		}
+	}
+
+	hasConfiguredProviderAPIKey := func(kind providers.Kind, cfg ai.ProviderConfig) bool {
+		return getConfiguredProviderAPIKey(kind, cfg) != ""
+	}
+
+	resolveRequestedAPIKey := func(kind providers.Kind, submitted string, cfg ai.ProviderConfig) (string, error) {
+		currentAPIKey := getConfiguredProviderAPIKey(kind, cfg)
+		hasExistingAPIKey := hasConfiguredProviderAPIKey(kind, cfg)
+
+		if submitted == "" {
+			if hasExistingAPIKey {
+				// Keep the existing configured key, regardless of whether it was
+				// persisted directly in config or supplied via environment.
+				return currentAPIKey, nil
+			}
+			return "", nil
+		}
+
+		if isLikelyMaskedAPIKey(submitted) {
+			if hasExistingAPIKey {
+				// Treat a masked placeholder as "no change".
+				return currentAPIKey, nil
+			}
+			return "", errors.New("api key placeholder submitted; provide a new api key instead of the masked value")
+		}
+
+		return submitted, nil
+	}
+
 	mux.HandleFunc("PUT /api/ai/settings", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
 		var req ai.ProviderConfig
@@ -708,11 +844,64 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.OllamaClient, run
 			http.Error(w, "invalid request", 400)
 			return
 		}
-		if req.Endpoint == "" || req.Model == "" {
-			http.Error(w, "endpoint and model are required", 400)
+		req.Type = strings.TrimSpace(req.Type)
+		if req.Type == "custom" {
+			req.Type = string(providers.KindOpenAI)
+		}
+		req.Model = strings.TrimSpace(req.Model)
+		req.Endpoint = strings.TrimSpace(req.Endpoint)
+		req.APIKey = strings.TrimSpace(req.APIKey)
+
+		currentCfg := aiClient.GetConfig()
+
+		if req.Model == "" {
+			http.Error(w, "model is required", 400)
 			return
 		}
-		aiClient.UpdateConfig(req.Endpoint, req.Model, req.APIKey)
+		// Only providers with a known built-in public default may omit an
+		// endpoint. Others must provide one explicitly.
+		kind := providers.Kind(req.Type)
+		if kind == "" {
+			currentKind := providers.Kind(strings.TrimSpace(currentCfg.Type))
+			if currentKind != "" {
+				kind = currentKind
+			} else if req.APIKey != "" {
+				kind = providers.KindOpenAI
+			} else {
+				kind = providers.KindOllama
+			}
+		}
+
+		resolvedAPIKey, err := resolveRequestedAPIKey(kind, req.APIKey, currentCfg)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		req.APIKey = resolvedAPIKey
+
+		switch kind {
+		case providers.KindOllama:
+			if req.Endpoint == "" {
+				http.Error(w, "endpoint is required for ollama", 400)
+				return
+			}
+		case providers.KindOpenAI:
+			if req.APIKey == "" && !hasConfiguredProviderAPIKey(kind, currentCfg) {
+				http.Error(w, "api key is required for openai", 400)
+				return
+			}
+			// endpoint optional — provider falls back to the public OpenAI default.
+		case providers.KindAnthropic:
+			if req.APIKey == "" && !hasConfiguredProviderAPIKey(kind, currentCfg) {
+				http.Error(w, "api key is required for anthropic", 400)
+				return
+			}
+			// endpoint optional — provider falls back to a public default.
+		default:
+			http.Error(w, "unsupported provider type: "+req.Type, 400)
+			return
+		}
+		aiClient.UpdateConfigKind(kind, req.Endpoint, req.Model, req.APIKey)
 		_ = json.NewEncoder(w).Encode(aiClient.GetConfig())
 	})
 
