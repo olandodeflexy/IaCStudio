@@ -466,6 +466,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			Tool     string `json:"tool"`
 			Command  string `json:"command"`  // init | plan | apply | check | playbook
 			Approved bool   `json:"approved"` // must be true for apply/destroy
+			// Acknowledged explicitly overrides the policy gate — the caller
+			// is telling us they've read the findings and still want to
+			// proceed. Logged server-side so the override is audit-trailable.
+			Acknowledged bool `json:"acknowledged"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -475,6 +479,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// Block apply/destroy unless:
 		// 1. A plan was run for this project within the last hour (server-verified)
 		// 2. The client explicitly confirms (approved:true)
+		// 3. No error-severity policy findings exist, OR the client sets
+		//    acknowledged:true after reading the findings.
 		if run.RequiresApproval(req.Command) {
 			if !hasPlan(projectPath) {
 				w.Header().Set("Content-Type", "application/json")
@@ -493,6 +499,25 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 					"detail": "plan exists — re-submit with approved:true to proceed",
 				})
 				return
+			}
+			if !req.Acknowledged {
+				// Walk every available engine against the project so we can
+				// surface blocking findings before the apply runs. On any
+				// error (engine crash, missing binary, malformed plan) we
+				// fall through to execution — apply should not be gated by
+				// a broken policy engine.
+				if findings, blocking := evaluateBlockingPolicies(r.Context(), projectPath, req.Tool); blocking {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"error":    "policy_blocked",
+						"detail":   "policy engine returned error-severity findings — re-submit with acknowledged:true to override",
+						"findings": findings,
+					})
+					return
+				}
+			} else {
+				log.Printf("apply gate: policy findings acknowledged by client for %s (command=%s)", name, req.Command)
 			}
 		}
 

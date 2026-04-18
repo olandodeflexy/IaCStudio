@@ -155,3 +155,47 @@ func filterEngines(engs []engines.PolicyEngine, filter []string) []engines.Polic
 // when the import list is trimmed by goimports. The handlers above use it
 // transitively through r.Context().
 var _ = context.Background
+
+// evaluateBlockingPolicies runs every registered engine against the project
+// and reports whether any error-severity findings exist. Returns the merged
+// finding list (blocking-first) so the caller can surface it verbatim to the
+// user, and a boolean for a quick gate check.
+//
+// Plan JSON is loaded from tfplan.json on disk when present — the layered-
+// terraform blueprint's plan.sh writes it there after every successful
+// terraform plan. When absent, plan-consuming engines (OPA, Conftest,
+// Sentinel) short-circuit quietly; the builtin still runs against parsed
+// resources so resource-walk findings are caught even without a plan.
+//
+// Any engine error is swallowed here — apply should not be gated by a
+// broken policy engine. The caller can still observe non-blocking findings
+// via POST /api/projects/{name}/policy/run if needed.
+func evaluateBlockingPolicies(ctx context.Context, projectPath, tool string) ([]engines.Finding, bool) {
+	if tool == "" {
+		tool = "terraform"
+	}
+	var resources []parser.Resource
+	if p := parser.ForTool(tool); p != nil {
+		if parsed, err := p.ParseDir(projectPath); err == nil {
+			resources = parsed
+		}
+	}
+
+	var planJSON []byte
+	if data, err := os.ReadFile(filepath.Join(projectPath, "tfplan.json")); err == nil {
+		planJSON = data
+	}
+
+	results := engines.RunAll(ctx, defaultPolicyEngines(), engines.EvalInput{
+		ProjectDir: projectPath,
+		Resources:  resources,
+		PlanJSON:   planJSON,
+	})
+	findings := engines.MergeFindings(results)
+	for _, f := range findings {
+		if f.Severity.IsBlocking() {
+			return findings, true
+		}
+	}
+	return findings, false
+}
