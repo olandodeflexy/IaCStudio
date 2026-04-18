@@ -114,6 +114,17 @@ func (p *ollamaProvider) Stream(ctx context.Context, req Request, onDelta DeltaF
 		return "", fmt.Errorf("ollama unavailable: %w", err)
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		body, readErr := io.ReadAll(resp.Body)
+		if readErr != nil {
+			return "", fmt.Errorf("ollama stream failed: status %s (failed to read error body: %w)", resp.Status, readErr)
+		}
+		msg := strings.TrimSpace(string(body))
+		if msg == "" {
+			return "", fmt.Errorf("ollama stream failed: status %s", resp.Status)
+		}
+		return "", fmt.Errorf("ollama stream failed: status %s: %s", resp.Status, msg)
+	}
 
 	scanner := bufio.NewScanner(resp.Body)
 	// Ollama responses can legitimately exceed the default 64KB scan buffer
