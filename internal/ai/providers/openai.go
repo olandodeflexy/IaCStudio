@@ -111,7 +111,7 @@ func (p *openAIProvider) Complete(ctx context.Context, req Request) (string, err
 	if err != nil {
 		return "", fmt.Errorf("openai-compatible API unavailable: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, err := io.ReadAll(resp.Body)
@@ -172,7 +172,7 @@ func (p *openAIProvider) Stream(ctx context.Context, req Request, onDelta DeltaF
 	if err != nil {
 		return "", fmt.Errorf("openai-compatible API unavailable: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, readErr := io.ReadAll(resp.Body)

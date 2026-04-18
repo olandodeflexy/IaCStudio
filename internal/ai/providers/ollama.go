@@ -113,7 +113,7 @@ func (p *ollamaProvider) Stream(ctx context.Context, req Request, onDelta DeltaF
 	if err != nil {
 		return "", fmt.Errorf("ollama unavailable: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
 		body, readErr := io.ReadAll(resp.Body)
 		if readErr != nil {
