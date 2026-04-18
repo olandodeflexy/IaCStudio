@@ -11,6 +11,7 @@
 package conftest
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -120,12 +121,19 @@ func (c *conftestEngine) Evaluate(ctx context.Context, in engines.EvalInput) (en
 		"--no-color",
 		tmp.Name(),
 	)
+	// Explicitly capture stderr to our own buffer so real Conftest errors
+	// (Rego compile failures, bad flags, missing subcommand) survive in
+	// res.Error. cmd.Output() would also populate ExitError.Stderr when
+	// cmd.Stderr is nil, but that path caps at a small excerpt and relies
+	// on a subtle documented behaviour — the explicit buffer is plainer.
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
 	stdout, err := cmd.Output()
 	// conftest exits with a non-zero code when findings exist. We only treat
 	// exec errors without any JSON output as real failures; findings-present
 	// is the expected success path.
 	if err != nil && len(stdout) == 0 {
-		res.Error = formatExecError(err)
+		res.Error = formatExecError(err, stderr.Bytes())
 		return res, err
 	}
 
@@ -162,9 +170,14 @@ func (c *conftestEngine) Evaluate(ctx context.Context, in engines.EvalInput) (en
 	return res, nil
 }
 
-// formatExecError unwraps *exec.ExitError to include stderr when available,
-// so the caller sees conftest's actual complaint instead of a bare exit code.
-func formatExecError(err error) string {
+// formatExecError surfaces the explicit stderr buffer when available so the
+// caller sees conftest's actual complaint rather than a bare exit code.
+// ExitError.Stderr is consulted as a fallback for the edge case where the
+// caller forgot to set cmd.Stderr before calling Output().
+func formatExecError(err error, stderr []byte) string {
+	if len(stderr) > 0 {
+		return fmt.Sprintf("conftest: %s", string(stderr))
+	}
 	if ee, ok := err.(*exec.ExitError); ok && len(ee.Stderr) > 0 {
 		return fmt.Sprintf("conftest: %s", string(ee.Stderr))
 	}
