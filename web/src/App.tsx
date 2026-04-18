@@ -552,11 +552,6 @@ export default function App() {
       setChatLoading(false);
     }
   };
-    } finally {
-      chatInFlightRef.current = false;
-      setChatLoading(false);
-    }
-  };
 
   const runCmd = (command: string) => {
     if (!tool) return;
