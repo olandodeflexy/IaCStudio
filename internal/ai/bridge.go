@@ -93,7 +93,9 @@ func (c *Client) applyConfig(cfg providers.Config) {
 	}
 }
 
-// GetConfig returns the current provider config with the API key masked.
+// GetConfig returns the current provider config without exposing or
+// serializing the current API key value. Callers must provide a new key
+// explicitly when they intend to update the credential.
 func (c *Client) GetConfig() ProviderConfig {
 	kind := c.cfg.Kind
 	if kind == "" {
@@ -103,20 +105,8 @@ func (c *Client) GetConfig() ProviderConfig {
 		Type:     string(kind),
 		Endpoint: c.cfg.Endpoint,
 		Model:    c.cfg.Model,
-		APIKey:   maskKey(c.cfg.APIKey),
+		APIKey:   "",
 	}
-}
-
-// maskKey keeps the first and last four characters of an API key so users can
-// verify which credential is live without exposing the full token.
-func maskKey(k string) string {
-	if k == "" {
-		return ""
-	}
-	if len(k) < 8 {
-		return "***"
-	}
-	return k[:4] + "..." + k[len(k)-4:]
 }
 
 // callLLM is the single internal chokepoint for every IaC-generation method
