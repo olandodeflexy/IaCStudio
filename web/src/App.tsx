@@ -492,15 +492,18 @@ export default function App() {
     const input = chatInput;
     setChatInput('');
     // Append the user turn and a placeholder AI bubble that will be filled in
-    // by the streaming deltas below. Tracking the assistant turn's index lets
-    // us patch just that one entry as tokens arrive without re-rendering the
-    // whole message list each time.
-    const nextAiIndex = chatMessages.length + 1;
-    setChatMessages(prev => [
-      ...prev,
-      { role: 'user' as const, text: input },
-      { role: 'ai' as const, text: '' },
-    ]);
+    // by the streaming deltas below. Compute the assistant index from the
+    // actual updater state so later patches always target the correct entry
+    // even if other code appends chat messages in between.
+    const aiMessageIndexRef = { current: -1 };
+    setChatMessages(prev => {
+      aiMessageIndexRef.current = prev.length + 1;
+      return [
+        ...prev,
+        { role: 'user' as const, text: input },
+        { role: 'ai' as const, text: '' },
+      ];
+    });
 
     try {
       const provider = detectProvider();
@@ -514,6 +517,7 @@ export default function App() {
           // the final JSON in the "complete" event, so we still get clean
           // message + resources at the end — this just shows progress.
           setChatMessages(prev => {
+            const nextAiIndex = aiMessageIndexRef.current;
             if (nextAiIndex < 0 || nextAiIndex >= prev.length) return prev;
             const next = [...prev];
             next[nextAiIndex] = { ...next[nextAiIndex], text: next[nextAiIndex].text + delta };
@@ -524,6 +528,7 @@ export default function App() {
 
       // Replace the streamed raw text with the parsed clean message.
       setChatMessages(prev => {
+        const nextAiIndex = aiMessageIndexRef.current;
         if (nextAiIndex < 0 || nextAiIndex >= prev.length) return prev;
         const next = [...prev];
         next[nextAiIndex] = { ...next[nextAiIndex], text: result.message };
@@ -543,6 +548,7 @@ export default function App() {
       }
     } catch {
       setChatMessages(prev => {
+        const nextAiIndex = aiMessageIndexRef.current;
         if (nextAiIndex < 0 || nextAiIndex >= prev.length) return prev;
         const next = [...prev];
         next[nextAiIndex] = { ...next[nextAiIndex], text: 'AI is unavailable. Make sure your provider is reachable.' };
