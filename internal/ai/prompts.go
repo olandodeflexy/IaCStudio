@@ -75,7 +75,7 @@ func loadPrompts() map[string]*promptEntry {
 // support `key: value` lines (no YAML lists or nested structures) because
 // the metadata is purely documentation.
 func parsePrompt(path string, raw []byte) (*promptEntry, error) {
-	content := string(raw)
+	content := strings.ReplaceAll(string(raw), "\r\n", "\n")
 	const delim = "---\n"
 	if !strings.HasPrefix(content, delim) {
 		return nil, fmt.Errorf("missing opening frontmatter")
