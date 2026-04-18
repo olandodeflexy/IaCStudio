@@ -79,10 +79,13 @@ func (o *opaEngine) Evaluate(ctx context.Context, in engines.EvalInput) (engines
 	for _, file := range files {
 		findings, err := evalFile(ctx, file, planDoc)
 		if err != nil {
-			// One bad policy file shouldn't blank the whole run — record the
-			// error and continue with the others. The first error is also
-			// returned so callers can log it.
-			res.Error = fmt.Sprintf("%s: %v", filepath.Base(file), err)
+			// One bad policy file shouldn't blank the whole run — preserve
+			// the FIRST error on the result (subsequent failures are kept
+			// quiet to avoid overwriting more actionable earlier ones) and
+			// continue evaluating the rest.
+			if res.Error == "" {
+				res.Error = fmt.Sprintf("%s: %v", filepath.Base(file), err)
+			}
 			continue
 		}
 		res.Findings = append(res.Findings, findings...)

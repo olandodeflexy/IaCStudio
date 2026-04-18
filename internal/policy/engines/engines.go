@@ -127,23 +127,35 @@ func RunAll(ctx context.Context, engs []PolicyEngine, in EvalInput) []Result {
 	return out
 }
 
-// MergeFindings flattens results into a single sorted finding slice. The sort
-// is stable: blocking findings first, then by engine, then by policy id —
-// makes the UI list deterministic across runs.
+// MergeFindings flattens results into a single fully-ordered finding slice.
+// The sort is stable and layered: severity → engine → policy id → policy file
+// → resource → message. The extra tie-breakers matter when, for example, the
+// same Rego rule fires on multiple resource_changes entries (same severity,
+// engine, and policy id) — without them the relative order would depend on
+// evaluation order and flip between runs.
 func MergeFindings(results []Result) []Finding {
 	var all []Finding
 	for _, r := range results {
 		all = append(all, r.Findings...)
 	}
 	sort.SliceStable(all, func(i, j int) bool {
-		if all[i].Severity != all[j].Severity {
-			// Errors before warnings before info.
-			return severityRank(all[i].Severity) < severityRank(all[j].Severity)
+		a, b := all[i], all[j]
+		if a.Severity != b.Severity {
+			return severityRank(a.Severity) < severityRank(b.Severity)
 		}
-		if all[i].Engine != all[j].Engine {
-			return all[i].Engine < all[j].Engine
+		if a.Engine != b.Engine {
+			return a.Engine < b.Engine
 		}
-		return all[i].PolicyID < all[j].PolicyID
+		if a.PolicyID != b.PolicyID {
+			return a.PolicyID < b.PolicyID
+		}
+		if a.PolicyFile != b.PolicyFile {
+			return a.PolicyFile < b.PolicyFile
+		}
+		if a.Resource != b.Resource {
+			return a.Resource < b.Resource
+		}
+		return a.Message < b.Message
 	})
 	return all
 }

@@ -72,8 +72,20 @@ func (c *conftestEngine) Evaluate(ctx context.Context, in engines.EvalInput) (en
 		return res, nil
 	}
 	policiesPath := filepath.Join(in.ProjectDir, PoliciesDir)
-	if info, err := os.Stat(policiesPath); err != nil || !info.IsDir() {
-		// No policies/opa directory → quiet no-op, same as the embedded OPA.
+	info, err := os.Stat(policiesPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			// No policies/opa directory → quiet no-op, same as the embedded OPA.
+			return res, nil
+		}
+		// Real IO/permission errors should surface rather than silently
+		// disable the engine — otherwise a missing read permission looks
+		// identical to a genuine "no policies" state.
+		res.Error = fmt.Sprintf("conftest: stat %s: %v", policiesPath, err)
+		return res, err
+	}
+	if !info.IsDir() {
+		res.Error = fmt.Sprintf("conftest: %s is not a directory", policiesPath)
 		return res, nil
 	}
 	if len(in.PlanJSON) == 0 {

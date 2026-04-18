@@ -20,7 +20,8 @@ func fakeBinary(t *testing.T, stdout string, exitCode int) string {
 	}
 	dir := t.TempDir()
 	path := filepath.Join(dir, "conftest")
-	// Escape single quotes in stdout so the JSON passes through heredoc.
+	// The 'IAC_EOF' delimiter is single-quoted, so the heredoc body is
+	// emitted verbatim — no shell expansion or quoting required on stdout.
 	script := "#!/usr/bin/env bash\ncat <<'IAC_EOF'\n" + stdout + "\nIAC_EOF\nexit " + itoa(exitCode) + "\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake: %v", err)

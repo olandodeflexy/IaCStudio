@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -84,8 +85,13 @@ func registerPolicyRoutes(mux *http.ServeMux, projectsDir string) {
 		}
 
 		var req policyRunRequest
-		// A missing body is fine — it means "use on-disk plan + all engines".
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		// A missing body (EOF) is fine — it means "use on-disk plan + all
+		// engines". Malformed JSON, however, is a client bug and should 400
+		// instead of silently falling back to defaults.
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && err != io.EOF {
+			http.Error(w, "invalid request body: "+err.Error(), 400)
+			return
+		}
 
 		planJSON := []byte(req.PlanJSON)
 		if len(planJSON) == 0 {
@@ -150,11 +156,6 @@ func filterEngines(engs []engines.PolicyEngine, filter []string) []engines.Polic
 	}
 	return out
 }
-
-// Keep a compile-time reference to context so the file builds cleanly even
-// when the import list is trimmed by goimports. The handlers above use it
-// transitively through r.Context().
-var _ = context.Background
 
 // evaluateBlockingPolicies runs every registered engine against the project
 // and reports whether any error-severity findings exist. Returns the merged
