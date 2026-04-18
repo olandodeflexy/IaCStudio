@@ -795,6 +795,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			return
 		}
 		req.Type = strings.TrimSpace(req.Type)
+		if req.Type == "custom" {
+			req.Type = string(providers.KindOpenAI)
+		}
 		req.Model = strings.TrimSpace(req.Model)
 		req.Endpoint = strings.TrimSpace(req.Endpoint)
 		req.APIKey = strings.TrimSpace(req.APIKey)
