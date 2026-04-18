@@ -972,12 +972,14 @@ export default function App() {
                 {[
                   { key: 'ollama', label: 'Ollama (Local)', desc: 'Free, private, runs on your machine' },
                   { key: 'openai', label: 'OpenAI API', desc: 'GPT-4o, GPT-4-turbo' },
+                  { key: 'anthropic', label: 'Anthropic', desc: 'Claude Opus, Claude Haiku' },
                   { key: 'custom', label: 'Custom API', desc: 'Any OpenAI-compatible endpoint' },
                 ].map(p => (
                   <button key={p.key} className={aiSettings.type === p.key ? 'ui-choice-card is-active' : 'ui-choice-card'}
                     onClick={() => {
                       if (p.key === 'ollama') setAiSettings(s => ({ ...s, type: 'ollama', endpoint: 'http://localhost:11434', api_key: '' }));
                       else if (p.key === 'openai') setAiSettings(s => ({ ...s, type: 'openai', endpoint: 'https://api.openai.com/v1', model: 'gpt-4o' }));
+                      else if (p.key === 'anthropic') setAiSettings(s => ({ ...s, type: 'anthropic', endpoint: '', model: 'claude-haiku-4-5', api_key: '' }));
                       else setAiSettings(s => ({ ...s, type: 'custom' }));
                     }}>
                     <div className="ui-choice-title">{p.label}</div>
@@ -990,13 +992,13 @@ export default function App() {
             <div style={{ marginBottom: 12 }}>
               <UILabel>Endpoint</UILabel>
               <UIInput value={aiSettings.endpoint} onChange={e => setAiSettings(s => ({ ...s, endpoint: e.target.value }))}
-                placeholder={aiSettings.type === 'ollama' ? 'http://localhost:11434' : 'https://api.openai.com/v1'} />
+                placeholder={aiSettings.type === 'ollama' ? 'http://localhost:11434' : aiSettings.type === 'anthropic' ? 'https://api.anthropic.com (optional)' : 'https://api.openai.com/v1'} />
             </div>
 
             <div style={{ marginBottom: 12 }}>
               <UILabel>Model</UILabel>
               <UIInput value={aiSettings.model} onChange={e => setAiSettings(s => ({ ...s, model: e.target.value }))}
-                placeholder={aiSettings.type === 'ollama' ? 'gemma4' : 'gpt-4o'} />
+                placeholder={aiSettings.type === 'ollama' ? 'gemma4' : aiSettings.type === 'anthropic' ? 'claude-haiku-4-5' : 'gpt-4o'} />
             </div>
 
             {aiSettings.type !== 'ollama' && (
