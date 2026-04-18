@@ -52,7 +52,10 @@ jobs:
           args: ./...
 
       - name: Go test
-        run: go test ./... -v -race -coverprofile=coverage.out
+        # Coverage profiling (covdata) is broken on the current hosted
+        # Go 1.24 runner images — tracked as a follow-up. Drop the
+        # -coverprofile flag for now so the suite can actually run.
+        run: go test ./... -v -race
 
       - name: Frontend deps
         run: cd web && npm install
@@ -64,10 +67,11 @@ jobs:
       - name: Frontend build
         run: cd web && npm run build
 
-      - name: Upload coverage
-        uses: codecov/codecov-action@v4
-        with:
-          file: coverage.out
+      # Coverage upload disabled until the covdata issue above is resolved.
+      # - name: Upload coverage
+      #   uses: codecov/codecov-action@v4
+      #   with:
+      #     file: coverage.out
 
   # ─── Build & Release ───
   release:
