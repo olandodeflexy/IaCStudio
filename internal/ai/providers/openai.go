@@ -11,10 +11,10 @@ import (
 	"strings"
 )
 
-// openAIProvider talks to any OpenAI-compatible /chat/completions endpoint —
-// OpenAI itself, Groq, Together, Azure OpenAI, and anything else that honours
-// the same schema. Auth is Bearer {apiKey}; the endpoint is allowed to include
-// or omit the /chat/completions suffix.
+// openAIProvider talks to OpenAI-compatible /chat/completions endpoints that
+// use the standard OpenAI path shape, such as OpenAI itself, Groq, Together,
+// and anything else that honours the same schema. Auth is Bearer {apiKey};
+// the endpoint is allowed to include or omit the /chat/completions suffix.
 type openAIProvider struct {
 	endpoint string
 	model    string
@@ -41,8 +41,8 @@ func NewOpenAI(cfg Config) Provider {
 func (p *openAIProvider) Kind() Kind { return KindOpenAI }
 
 // normaliseOpenAIEndpoint accepts either the bare base URL ("https://api.openai.com/v1")
-// or the full chat-completions URL, and returns the full completions URL. This
-// preserves the historical convenience of letting users paste either.
+// or the full chat-completions URL for providers that use the standard OpenAI
+// /chat/completions path shape, and returns the full completions URL.
 func normaliseOpenAIEndpoint(ep string) string {
 	ep = strings.TrimSuffix(ep, "/")
 	if !strings.HasSuffix(ep, "/chat/completions") {
