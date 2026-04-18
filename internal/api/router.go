@@ -50,14 +50,26 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 	// Resolve symlinks so a symlink at ~/iac-projects/evil -> /etc/ is caught
 	// (and so macOS's /var/folders -> /private/var/folders symlink doesn't
 	// cause httptest-based tests to trip the escape check below).
-	absProjects, _ := filepath.Abs(projectsDir)
+	//
+	// filepath.Abs errors surface explicitly — a failure would leave an
+	// empty absProjects, which would then let any resolved path pass the
+	// HasPrefix check and weaken the symlink-escape protection.
+	absProjects, err := filepath.Abs(projectsDir)
+	if err != nil {
+		return "", fmt.Errorf("resolve projects dir: %w", err)
+	}
 	if evalProjects, err := filepath.EvalSymlinks(absProjects); err == nil {
 		absProjects = evalProjects
 	}
-	absResolved, _ := filepath.Abs(resolved)
+	absResolved, err := filepath.Abs(resolved)
+	if err != nil {
+		return "", fmt.Errorf("resolve project path: %w", err)
+	}
 	// If the directory already exists, resolve symlinks in the actual path.
 	if evalResolved, err := filepath.EvalSymlinks(resolved); err == nil {
-		absResolved, _ = filepath.Abs(evalResolved)
+		if absEval, absErr := filepath.Abs(evalResolved); absErr == nil {
+			absResolved = absEval
+		}
 	}
 	if !strings.HasPrefix(absResolved, absProjects+string(filepath.Separator)) {
 		return "", fmt.Errorf("project path escapes root: %q", name)
