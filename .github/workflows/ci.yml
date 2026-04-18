@@ -12,7 +12,9 @@ permissions:
   packages: write
 
 env:
-  GO_VERSION: "1.22"
+  # Go 1.25 is the floor for the OPA dependency chain pulled in by the
+  # policy engines package. Bump in lockstep with go.mod.
+  GO_VERSION: "1.25"
   NODE_VERSION: "20"
 
 jobs:
@@ -31,7 +33,10 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
 
       - name: Go lint
-        uses: golangci/golangci-lint-action@v4
+        # v6+ ships golangci-lint v2.x, which is needed to lint code targeting
+        # Go 1.25. The earlier v4 action pinned to v1.64.x, built with Go 1.24,
+        # and refused to load configs targeting newer Go versions.
+        uses: golangci/golangci-lint-action@v6
         with:
           version: latest
 
