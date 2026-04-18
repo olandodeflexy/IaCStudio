@@ -505,12 +505,6 @@ export default function App() {
       ];
     });
 
-    // Set the placeholder AI message index synchronously before starting the
-    // streaming request. The pending state update appends the user message
-    // first and then the empty assistant placeholder, so the assistant entry
-    // will be at the next index after the new user message.
-    aiMessageIndexRef.current = chatMessages.length + 1;
-
     try {
       const provider = detectProvider();
       const history = chatMessages.map(m => ({ role: m.role === 'ai' ? 'ai' : 'user', content: m.text }));
