@@ -492,18 +492,26 @@ export default function App() {
     const input = chatInput;
     setChatInput('');
     // Append the user turn and a placeholder AI bubble that will be filled in
-    // by the streaming deltas below. Compute the assistant index from the
-    // actual updater state so later patches always target the correct entry
-    // even if other code appends chat messages in between.
-    const aiMessageIndexRef = { current: -1 };
-    setChatMessages(prev => {
-      aiMessageIndexRef.current = prev.length + 1;
-      return [
-        ...prev,
-        { role: 'user' as const, text: input },
-        { role: 'ai' as const, text: '' },
-      ];
-    });
+    // by the streaming deltas below. Track the assistant bubble by a stable id
+    // assigned before enqueueing state so later patches do not depend on
+    // updater side-effects or a mutable array index.
+    const aiMessageId = `ai-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    let pendingAiText = '';
+    const updateAiMessageText = (text: string) => {
+      setChatMessages(prev => {
+        const nextAiIndex = prev.findIndex(message => (message as { id?: string }).id === aiMessageId);
+        if (nextAiIndex < 0) return prev;
+        const next = [...prev];
+        next[nextAiIndex] = { ...next[nextAiIndex], text };
+        return next;
+      });
+    };
+
+    setChatMessages(prev => [
+      ...prev,
+      { role: 'user' as const, text: input },
+      { role: 'ai' as const, text: pendingAiText, id: aiMessageId } as (typeof prev)[number],
+    ]);
 
     try {
       const provider = detectProvider();
@@ -516,24 +524,14 @@ export default function App() {
           // Append raw tokens to the live assistant bubble. The server parses
           // the final JSON in the "complete" event, so we still get clean
           // message + resources at the end — this just shows progress.
-          setChatMessages(prev => {
-            const nextAiIndex = aiMessageIndexRef.current;
-            if (nextAiIndex < 0 || nextAiIndex >= prev.length) return prev;
-            const next = [...prev];
-            next[nextAiIndex] = { ...next[nextAiIndex], text: next[nextAiIndex].text + delta };
-            return next;
-          });
+          pendingAiText += delta;
+          updateAiMessageText(pendingAiText);
         },
       );
 
       // Replace the streamed raw text with the parsed clean message.
-      setChatMessages(prev => {
-        const nextAiIndex = aiMessageIndexRef.current;
-        if (nextAiIndex < 0 || nextAiIndex >= prev.length) return prev;
-        const next = [...prev];
-        next[nextAiIndex] = { ...next[nextAiIndex], text: result.message };
-        return next;
-      });
+      pendingAiText = result.message;
+      updateAiMessageText(pendingAiText);
       if (result.suggestions) setSuggestions(result.suggestions);
       if (result.resources) {
         result.resources.forEach(r => {
@@ -547,13 +545,13 @@ export default function App() {
         });
       }
     } catch {
-      setChatMessages(prev => {
-        const nextAiIndex = aiMessageIndexRef.current;
-        if (nextAiIndex < 0 || nextAiIndex >= prev.length) return prev;
-        const next = [...prev];
-        next[nextAiIndex] = { ...next[nextAiIndex], text: 'AI is unavailable. Make sure your provider is reachable.' };
-        return next;
-      });
+      pendingAiText = 'AI is unavailable. Make sure your provider is reachable.';
+      updateAiMessageText(pendingAiText);
+    } finally {
+      chatInFlightRef.current = false;
+      setChatLoading(false);
+    }
+  };
     } finally {
       chatInFlightRef.current = false;
       setChatLoading(false);
