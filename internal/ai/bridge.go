@@ -70,7 +70,12 @@ func (c *Client) UpdateConfig(endpoint, model, apiKey string) {
 // UpdateConfigKind is a typed variant of UpdateConfig for callers (the router)
 // that know the Kind explicitly — e.g. when the user picks "anthropic" in the
 // UI even though they have an OpenAI-compatible key string format.
+const maskedAPIKeyPlaceholder = "********"
+
 func (c *Client) UpdateConfigKind(kind providers.Kind, endpoint, model, apiKey string) {
+	if apiKey == maskedAPIKeyPlaceholder {
+		apiKey = c.cfg.APIKey
+	}
 	c.applyConfig(providers.Config{
 		Kind:     kind,
 		Endpoint: endpoint,
@@ -93,19 +98,24 @@ func (c *Client) applyConfig(cfg providers.Config) {
 	}
 }
 
-// GetConfig returns the current provider config without exposing or
-// serializing the current API key value. Callers must provide a new key
-// explicitly when they intend to update the credential.
+// GetConfig returns the current provider config without exposing the current
+// API key value. When a key is already configured, it returns a masked
+// placeholder so callers can round-trip settings without re-entering the
+// secret; UpdateConfigKind treats that placeholder as "keep existing key".
 func (c *Client) GetConfig() ProviderConfig {
 	kind := c.cfg.Kind
 	if kind == "" {
 		kind = providers.KindOllama
 	}
+	apiKey := ""
+	if c.cfg.APIKey != "" {
+		apiKey = maskedAPIKeyPlaceholder
+	}
 	return ProviderConfig{
 		Type:     string(kind),
 		Endpoint: c.cfg.Endpoint,
 		Model:    c.cfg.Model,
-		APIKey:   "",
+		APIKey:   apiKey,
 	}
 }
 
