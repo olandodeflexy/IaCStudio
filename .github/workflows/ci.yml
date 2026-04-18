@@ -12,9 +12,11 @@ permissions:
   packages: write
 
 env:
-  # Go 1.24 is the floor for the OPA dependency chain pulled in by the
-  # policy engines package. Bump in lockstep with go.mod.
-  GO_VERSION: "1.24"
+  # Go 1.25 is the floor for the OPA dependency chain pulled in by the
+  # policy engines package. Bump in lockstep with go.mod. (Earlier we
+  # pinned 1.24 to match the old golangci-lint v1.x; with v2.6.1 built
+  # on Go 1.26, 1.25 is now safe.)
+  GO_VERSION: "1.25"
   NODE_VERSION: "20"
 
 jobs:

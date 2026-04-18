@@ -48,9 +48,14 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 	}
 	resolved := filepath.Join(projectsDir, name)
 	// Resolve symlinks so a symlink at ~/iac-projects/evil -> /etc/ is caught
+	// (and so macOS's /var/folders -> /private/var/folders symlink doesn't
+	// cause httptest-based tests to trip the escape check below).
 	absProjects, _ := filepath.Abs(projectsDir)
+	if evalProjects, err := filepath.EvalSymlinks(absProjects); err == nil {
+		absProjects = evalProjects
+	}
 	absResolved, _ := filepath.Abs(resolved)
-	// If the directory already exists, resolve symlinks in the actual path
+	// If the directory already exists, resolve symlinks in the actual path.
 	if evalResolved, err := filepath.EvalSymlinks(resolved); err == nil {
 		absResolved, _ = filepath.Abs(evalResolved)
 	}
