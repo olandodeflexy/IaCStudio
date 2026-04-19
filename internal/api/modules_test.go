@@ -233,3 +233,72 @@ func TestRegistryGetProxyMapsNotFound(t *testing.T) {
 		t.Errorf("404 should map through, got %d", resp.StatusCode)
 	}
 }
+
+// TestPromoteToModuleEndpoint — end-to-end through the HTTP surface:
+// a project with two resources + a POST body naming both → new module
+// under modules/extracted/, root no longer contains those resources.
+func TestPromoteToModuleEndpoint(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "demo")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "main.tf"), []byte(`resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+}
+
+resource "aws_subnet" "s1" {
+  vpc_id     = aws_vpc.main.id
+  cidr_block = "10.0.1.0/24"
+}
+`), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	reg := registry.New(registry.Config{BaseURL: "http://unused"})
+	srv := httptest.NewServer(moduleMux(root, reg))
+	defer srv.Close()
+
+	body := strings.NewReader(`{"module_name":"networking","resource_ids":["aws_vpc.main","aws_subnet.s1"]}`)
+	resp, err := http.Post(srv.URL+"/api/projects/demo/promote-to-module", "application/json", body)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	// Sanity: the module dir now exists and the root no longer has the vpc.
+	if _, err := os.Stat(filepath.Join(proj, "modules", "networking", "main.tf")); err != nil {
+		t.Errorf("expected module main.tf, got: %v", err)
+	}
+	rootBody, _ := os.ReadFile(filepath.Join(proj, "main.tf"))
+	if strings.Contains(string(rootBody), `resource "aws_vpc" "main"`) {
+		t.Errorf("root should no longer contain aws_vpc.main, got:\n%s", rootBody)
+	}
+	if !strings.Contains(string(rootBody), `module "networking"`) {
+		t.Errorf("root should contain module call, got:\n%s", rootBody)
+	}
+}
+
+// TestPromoteToModuleEndpointBadInput — the handler 400s on a malformed
+// request (missing resource_ids, bad module name) instead of masking the
+// error as a generic 500.
+func TestPromoteToModuleEndpointBadInput(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "demo")
+	_ = os.MkdirAll(proj, 0o755)
+	_ = os.WriteFile(filepath.Join(proj, "main.tf"), []byte(`resource "aws_vpc" "main" { cidr_block = "10.0.0.0/16" }`), 0o644)
+
+	reg := registry.New(registry.Config{BaseURL: "http://unused"})
+	srv := httptest.NewServer(moduleMux(root, reg))
+	defer srv.Close()
+
+	// Hyphenated name — should be rejected with 400.
+	body := strings.NewReader(`{"module_name":"net-working","resource_ids":["aws_vpc.main"]}`)
+	resp, _ := http.Post(srv.URL+"/api/projects/demo/promote-to-module", "application/json", body)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 400 {
+		t.Errorf("bad module name should 400, got %d", resp.StatusCode)
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/iac-studio/iac-studio/internal/parser"
+	"github.com/iac-studio/iac-studio/internal/refactor"
 	"github.com/iac-studio/iac-studio/internal/registry"
 )
 
@@ -160,6 +161,41 @@ func registerModuleRoutes(mux *http.ServeMux, projectsDir string, reg *registry.
 		result, err := reg.Search(r.Context(), q, limit)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(result)
+	})
+
+	// POST /api/projects/{name}/promote-to-module
+	// Extract the selected resources into a new sibling module.
+	// Body: {"module_name": "networking", "resource_ids": ["aws_vpc.main", ...]}
+	mux.HandleFunc("POST /api/projects/{name}/promote-to-module", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		name := r.PathValue("name")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		var req struct {
+			ModuleName  string   `json:"module_name"`
+			ResourceIDs []string `json:"resource_ids"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), 400)
+			return
+		}
+		result, err := refactor.PromoteToModule(refactor.PromoteRequest{
+			ProjectDir:  projectPath,
+			ModuleName:  req.ModuleName,
+			ResourceIDs: req.ResourceIDs,
+		})
+		if err != nil {
+			// Validation failures (bad name, missing resources, existing
+			// target dir) are 400. I/O failures inside the refactor fall
+			// through here too; we don't bother distinguishing until the
+			// UI asks for finer-grained codes.
+			http.Error(w, err.Error(), 400)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(result)
