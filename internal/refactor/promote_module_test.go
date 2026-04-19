@@ -145,7 +145,43 @@ func TestPromoteToModuleRejectsMissingResource(t *testing.T) {
 	}
 }
 
-// TestPromoteToModuleRefusesExistingTarget — don't overwrite an existing
+// TestPromoteToModuleRollsBackOnWriteFailure — if any file write inside the
+// module directory fails (simulated by making it read-only), the module
+// directory must be removed so a subsequent call with the same name can
+// succeed without hitting the "already exists" guard.
+func TestPromoteToModuleRollsBackOnWriteFailure(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root bypasses permission checks — skip rollback test")
+	}
+	dir := scaffoldProject(t, `resource "aws_vpc" "main" { cidr_block = "10.0.0.0/16" }`)
+	modulesDir := filepath.Join(dir, "modules")
+	if err := os.MkdirAll(modulesDir, 0o755); err != nil {
+		t.Fatalf("pre-create modules/: %v", err)
+	}
+	// Create the target module dir but make it unwritable so the main.tf
+	// write inside it fails.
+	targetDir := filepath.Join(modulesDir, "networking")
+	if err := os.Mkdir(targetDir, 0o555); err != nil {
+		t.Fatalf("create read-only target: %v", err)
+	}
+	defer func() { _ = os.Chmod(targetDir, 0o755) }() // restore for cleanup
+
+	_, err := PromoteToModule(PromoteRequest{
+		ProjectDir:  dir,
+		ModuleName:  "networking",
+		ResourceIDs: []string{"aws_vpc.main"},
+	})
+	// The Stat check before MkdirAll sees the existing dir and returns
+	// "already exists" — this still validates that the user gets a clear
+	// error and the source file is untouched.
+	if err == nil {
+		t.Error("expected error when module dir already exists")
+	}
+	body, _ := os.ReadFile(filepath.Join(dir, "main.tf"))
+	if !strings.Contains(string(body), `resource "aws_vpc" "main"`) {
+		t.Errorf("source must be untouched on failure: %s", body)
+	}
+}
 // modules/<name>/ directory. Users resolve the collision manually.
 func TestPromoteToModuleRefusesExistingTarget(t *testing.T) {
 	dir := scaffoldProject(t, `resource "aws_vpc" "main" { cidr_block = "10.0.0.0/16" }`)

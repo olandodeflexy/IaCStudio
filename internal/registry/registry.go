@@ -202,8 +202,9 @@ func (c *Client) do(ctx context.Context, path string, out interface{}) error {
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		// Read the body as text so even HTML error pages (rare but
-		// possible on outages) surface in the error message.
-		body, _ := io.ReadAll(resp.Body)
+		// possible on outages) surface in the error message. Cap at 4 KiB
+		// so a pathological or hostile response can't exhaust memory.
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		return fmt.Errorf("registry: %s %s → %s: %s",
 			req.Method, req.URL.Path, resp.Status, strings.TrimSpace(string(body)))
 	}

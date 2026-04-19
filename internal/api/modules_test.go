@@ -209,9 +209,32 @@ func TestRegistrySearchProxy(t *testing.T) {
 	}
 }
 
-// TestRegistryGetProxy — follows the registry Get, including the
-// upstream-404 → client-404 mapping so users see a meaningful error
-// rather than a generic 502.
+// TestRegistrySearchLimitCapped — a caller cannot forward an arbitrarily large
+// limit to the upstream registry; the proxy caps it at 100.
+func TestRegistrySearchLimitCapped(t *testing.T) {
+	var seenLimit string
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenLimit = r.URL.Query().Get("limit")
+		_, _ = w.Write([]byte(`{"modules":[]}`))
+	}))
+	defer stub.Close()
+
+	reg := registry.New(registry.Config{BaseURL: stub.URL})
+	srv := httptest.NewServer(moduleMux(t.TempDir(), reg))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/registry/modules/search?q=vpc&limit=99999")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if seenLimit != "100" {
+		t.Errorf("oversized limit should be capped to 100, registry saw %q", seenLimit)
+	}
+}
 func TestRegistryGetProxyMapsNotFound(t *testing.T) {
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

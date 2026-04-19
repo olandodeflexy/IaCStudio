@@ -113,14 +113,20 @@ func PromoteToModule(req PromoteRequest) (*PromoteResult, error) {
 	if err := os.MkdirAll(modulePath, 0o755); err != nil {
 		return nil, fmt.Errorf("create module dir: %w", err)
 	}
+	// rollback removes the module directory on any error that occurs after
+	// it has been created, preventing a half-written directory from
+	// blocking a future retry with the same module name.
+	rollback := func() { _ = os.RemoveAll(modulePath) }
 
 	// Write the module's main.tf — the extracted resources verbatim.
 	gen := generator.ForTool("terraform")
 	mainBody, err := gen.Generate(toMove)
 	if err != nil {
+		rollback()
 		return nil, fmt.Errorf("generate module main.tf: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(modulePath, "main.tf"), []byte(mainBody), 0o644); err != nil {
+		rollback()
 		return nil, fmt.Errorf("write module main.tf: %w", err)
 	}
 
@@ -133,6 +139,7 @@ func PromoteToModule(req PromoteRequest) (*PromoteResult, error) {
 		fmt.Fprintf(&outBody, "output %q {\n  value = %s.%s\n}\n\n", outName, r.Type, r.Name)
 	}
 	if err := os.WriteFile(filepath.Join(modulePath, "outputs.tf"), []byte(outBody.String()), 0o644); err != nil {
+		rollback()
 		return nil, fmt.Errorf("write module outputs.tf: %w", err)
 	}
 
@@ -141,6 +148,7 @@ func PromoteToModule(req PromoteRequest) (*PromoteResult, error) {
 	// missing canonical file, while leaving room for the user to add
 	// real variables once they refine the module.
 	if err := os.WriteFile(filepath.Join(modulePath, "variables.tf"), []byte("# variables for module "+req.ModuleName+"\n"), 0o644); err != nil {
+		rollback()
 		return nil, fmt.Errorf("write module variables.tf: %w", err)
 	}
 
@@ -150,6 +158,7 @@ func PromoteToModule(req PromoteRequest) (*PromoteResult, error) {
 	// (preserved blocks etc.) — for v1 we emit a TODO in the root file
 	// and leave manual cleanup to the user.
 	if err := stripMovedResourcesFromSourceFiles(req.ProjectDir, toMove); err != nil {
+		rollback()
 		return nil, err
 	}
 
@@ -157,6 +166,7 @@ func PromoteToModule(req PromoteRequest) (*PromoteResult, error) {
 	rootMain := filepath.Join(req.ProjectDir, "main.tf")
 	call := buildModuleCall(req.ModuleName, toMove)
 	if err := appendToFile(rootMain, call); err != nil {
+		rollback()
 		return nil, fmt.Errorf("append module call: %w", err)
 	}
 

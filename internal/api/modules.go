@@ -108,15 +108,11 @@ func registerModuleRoutes(mux *http.ServeMux, projectsDir string, reg *registry.
 			return
 		}
 
-		// Walk every .tf file in the project root (ParseDir already does
-		// this and recurses) and collect the Modules slice from each.
+		// Walk every .tf file in the project root (excluding the modules/
+		// subtree so a local module's own .tf files don't shadow the root
+		// project's module list) and collect the Modules slice from each.
 		p := &parser.HCLParser{}
-		entries, err := filepath.Glob(filepath.Join(projectPath, "**/*.tf"))
-		// Glob doesn't support recursive "**" on all Go versions; fall
-		// back to a walk that mirrors HCLParser.ParseDir.
-		if err != nil || len(entries) == 0 {
-			entries, _ = listTFFiles(projectPath)
-		}
+		entries, _ := listTFFiles(projectPath)
 
 		var views []moduleView
 		for _, file := range entries {
@@ -150,13 +146,15 @@ func registerModuleRoutes(mux *http.ServeMux, projectsDir string, reg *registry.
 		q := r.URL.Query().Get("q")
 		limit := 20
 		if n := r.URL.Query().Get("limit"); n != "" {
-			// Don't validate beyond "positive int" — registry errors
-			// surface through anyway, and users get what they ask for.
 			var parsed int
 			_, _ = fmt.Sscanf(n, "%d", &parsed)
 			if parsed > 0 {
 				limit = parsed
 			}
+		}
+		// Cap to prevent outsized requests being forwarded to the registry.
+		if limit > 100 {
+			limit = 100
 		}
 		result, err := reg.Search(r.Context(), q, limit)
 		if err != nil {
