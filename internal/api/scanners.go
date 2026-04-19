@@ -1,7 +1,6 @@
 package api
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -147,10 +146,6 @@ func filterScanners(scans []scanners.Scanner, filter []string) []scanners.Scanne
 	}
 	return out
 }
-
-// Keep context referenced so goimports can't strip the import through the
-// indirect r.Context() usage above.
-var _ = context.Background
 
 // ciWorkflowYAML is the GitHub Actions workflow template emitted by
 // /api/security/scanners/ci-workflow. Runs each scanner independently with

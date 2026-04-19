@@ -119,7 +119,7 @@ func RunAll(ctx context.Context, scanners []Scanner, in ScanInput) []Result {
 
 // MergeFindings flattens results into a single fully-ordered finding slice.
 // The sort is layered so ties are broken deterministically across runs:
-// severity → scanner → id → title → resources.
+// severity → framework → id → title → resources.
 func MergeFindings(results []Result) []Finding {
 	var all []Finding
 	for _, r := range results {
@@ -129,6 +129,9 @@ func MergeFindings(results []Result) []Finding {
 		a, b := all[i], all[j]
 		if a.Severity != b.Severity {
 			return severityRank(a.Severity) < severityRank(b.Severity)
+		}
+		if a.Framework != b.Framework {
+			return a.Framework < b.Framework
 		}
 		if a.ID != b.ID {
 			return a.ID < b.ID

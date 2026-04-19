@@ -85,7 +85,7 @@ func TestMergeFindingsSortsBySeverity(t *testing.T) {
 }
 
 // TestMergeFindingsTieBreakersAreDeterministic — two findings with identical
-// severity + scanner + id + title should still sort deterministically via
+// severity + framework + id + title should still sort deterministically via
 // resource key, so CI output doesn't flap.
 func TestMergeFindingsTieBreakersAreDeterministic(t *testing.T) {
 	results := []Result{
@@ -97,6 +97,27 @@ func TestMergeFindingsTieBreakersAreDeterministic(t *testing.T) {
 	merged := MergeFindings(results)
 	if merged[0].Resources[0] != "a-res" {
 		t.Errorf("resource tie-breaker should sort a-res first, got %+v", merged)
+	}
+}
+
+// TestMergeFindingsSortsByFramework — within the same severity band, findings
+// from different frameworks are sorted by Framework alphabetically so that
+// the unified feed is stable across scanner ordering changes.
+func TestMergeFindingsSortsByFramework(t *testing.T) {
+	results := []Result{
+		{Scanner: "trivy", Findings: []Finding{
+			{ID: "X1", Severity: SeverityHigh, Framework: "Trivy", Title: "t"},
+		}},
+		{Scanner: "checkov", Findings: []Finding{
+			{ID: "X1", Severity: SeverityHigh, Framework: "Checkov", Title: "t"},
+		}},
+	}
+	merged := MergeFindings(results)
+	if len(merged) != 2 {
+		t.Fatalf("want 2 findings, got %d", len(merged))
+	}
+	if merged[0].Framework != "Checkov" || merged[1].Framework != "Trivy" {
+		t.Errorf("framework tie-breaker should sort Checkov before Trivy, got %+v", merged)
 	}
 }
 
