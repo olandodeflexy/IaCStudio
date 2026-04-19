@@ -182,6 +182,8 @@ func TestPromoteToModuleRollsBackOnWriteFailure(t *testing.T) {
 		t.Errorf("source must be untouched on failure: %s", body)
 	}
 }
+
+// TestPromoteToModuleRefusesExistingTarget — don't overwrite an existing
 // modules/<name>/ directory. Users resolve the collision manually.
 func TestPromoteToModuleRefusesExistingTarget(t *testing.T) {
 	dir := scaffoldProject(t, `resource "aws_vpc" "main" { cidr_block = "10.0.0.0/16" }`)
