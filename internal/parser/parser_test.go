@@ -258,3 +258,118 @@ func TestForTool_Parser(t *testing.T) {
 		}
 	}
 }
+
+// TestHCLParser_Module verifies module blocks parse into structured Module
+// entries: source + version pulled out explicitly, every other attribute
+// landing in Inputs, and the raw block NOT also appearing in PreservedBlocks
+// (modules should be structured-only when they parse cleanly).
+func TestHCLParser_ModuleStructured(t *testing.T) {
+	dir := t.TempDir()
+	tf := filepath.Join(dir, "main.tf")
+	body := `module "networking" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+
+  cidr = "10.0.0.0/16"
+  tags = {
+    Environment = "prod"
+  }
+}
+
+module "local_compute" {
+  source = "./modules/compute"
+
+  subnet_ids = module.networking.private_subnets
+  instance_count = 3
+}
+`
+	if err := os.WriteFile(tf, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	p := &HCLParser{}
+	result, err := p.ParseFileFull(tf)
+	if err != nil {
+		t.Fatalf("ParseFileFull: %v", err)
+	}
+
+	if len(result.Modules) != 2 {
+		t.Fatalf("want 2 modules, got %d: %+v", len(result.Modules), result.Modules)
+	}
+
+	// Find each by name so the test isn't order-sensitive.
+	byName := map[string]Module{}
+	for _, m := range result.Modules {
+		byName[m.Name] = m
+	}
+
+	vpc := byName["networking"]
+	if vpc.Source != "terraform-aws-modules/vpc/aws" {
+		t.Errorf("source wrong: %q", vpc.Source)
+	}
+	if vpc.Version != "~> 5.0" {
+		t.Errorf("version wrong: %q", vpc.Version)
+	}
+	if _, ok := vpc.Inputs["cidr"]; !ok {
+		t.Errorf("static input 'cidr' missing: %+v", vpc.Inputs)
+	}
+	if _, ok := vpc.Inputs["source"]; ok {
+		t.Errorf("source/version must not leak into Inputs: %+v", vpc.Inputs)
+	}
+	if vpc.ID != "module.networking" {
+		t.Errorf("ID = %q, want module.networking", vpc.ID)
+	}
+
+	local := byName["local_compute"]
+	if local.Source != "./modules/compute" {
+		t.Errorf("local source wrong: %q", local.Source)
+	}
+	if local.Version != "" {
+		t.Errorf("local modules have no version constraint, got %q", local.Version)
+	}
+	// subnet_ids is a reference — should round-trip as raw HCL text.
+	raw, ok := local.Inputs["subnet_ids"].(string)
+	if !ok || raw != "module.networking.private_subnets" {
+		t.Errorf("reference input should be raw HCL, got %#v", local.Inputs["subnet_ids"])
+	}
+
+	// Structured modules should NOT also appear as PreservedBlocks — that
+	// would cause the generator to emit each module twice on sync.
+	for _, pb := range result.PreservedBlocks {
+		if pb.Type == "module" {
+			t.Errorf("module block still in PreservedBlocks — structured parse should replace preservation: %+v", pb)
+		}
+	}
+}
+
+// TestHCLParser_ModuleMalformedFallsBack confirms that a malformed module
+// block (wrong number of labels) falls back to PreservedBlock so the
+// generator can round-trip even pathological input.
+func TestHCLParser_ModuleMalformedFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	tf := filepath.Join(dir, "bad.tf")
+	body := `module "extra" "labels" {
+  source = "./nope"
+}
+`
+	if err := os.WriteFile(tf, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	p := &HCLParser{}
+	result, err := p.ParseFileFull(tf)
+	if err != nil {
+		t.Fatalf("ParseFileFull: %v", err)
+	}
+	if len(result.Modules) != 0 {
+		t.Errorf("malformed module should not produce structured entry: %+v", result.Modules)
+	}
+	foundPreserved := false
+	for _, pb := range result.PreservedBlocks {
+		if pb.Type == "module" {
+			foundPreserved = true
+		}
+	}
+	if !foundPreserved {
+		t.Error("malformed module should fall back to PreservedBlock")
+	}
+}
