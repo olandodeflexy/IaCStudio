@@ -33,9 +33,34 @@ type PreservedBlock struct {
 	Line    int    `json:"line"`
 }
 
+// Module represents a Terraform module block — reusable composition, the
+// unit most estates are actually built from. Unlike PreservedBlock (opaque
+// raw text), Module carries structured metadata so the UI can render a
+// Module node, the registry can look up the source, and the "promote to
+// module" refactoring has something to read.
+//
+// Source and Version follow Terraform's module addressing:
+//   - local paths:      "./modules/networking"
+//   - registry modules: "terraform-aws-modules/vpc/aws" + Version constraint
+//   - git/https/s3/..:  "git::https://…", "s3::…", etc.
+//
+// Inputs captures every attribute inside the module block that isn't
+// source/version — those become the consumer's bindings to the module's
+// declared variables.
+type Module struct {
+	ID      string                 `json:"id"`              // "module.<name>"
+	Name    string                 `json:"name"`            // the block label
+	Source  string                 `json:"source"`
+	Version string                 `json:"version,omitempty"` // registry constraints only
+	Inputs  map[string]interface{} `json:"inputs"`            // every other attribute
+	File    string                 `json:"file"`
+	Line    int                    `json:"line"`
+}
+
 // ParseResult contains both parsed resources and preserved blocks.
 type ParseResult struct {
 	Resources       []Resource       `json:"resources"`
+	Modules         []Module         `json:"modules"`
 	PreservedBlocks []PreservedBlock `json:"preserved_blocks"`
 }
 
@@ -103,7 +128,6 @@ func (p *HCLParser) ParseFileFull(path string) (*ParseResult, error) {
 
 	for _, block := range body.Blocks {
 		startLine := block.DefRange().Start.Line
-		endLine := block.CloseBraceRange.Start.Line
 
 		switch block.Type {
 		case "resource":
@@ -157,22 +181,86 @@ func (p *HCLParser) ParseFileFull(path string) (*ParseResult, error) {
 				result.Resources = append(result.Resources, res)
 			}
 
-		default:
-			// Preserve variable, output, module, locals, provider, terraform blocks
-			// as raw text so the generator can write them back unchanged.
-			if endLine > 0 && endLine <= len(srcLines) && startLine > 0 {
-				rawBlock := strings.Join(srcLines[startLine-1:endLine], "\n")
-				result.PreservedBlocks = append(result.PreservedBlocks, PreservedBlock{
-					File:    path,
-					Content: rawBlock,
-					Type:    block.Type,
-					Line:    startLine,
-				})
+		case "module":
+			// Modules require a single label (the module name). Malformed
+			// blocks fall through to PreservedBlock so nothing is lost.
+			if len(block.Labels) != 1 {
+				preserveRawBlock(result, path, block, srcLines)
+				continue
 			}
+			mod := Module{
+				ID:     "module." + block.Labels[0],
+				Name:   block.Labels[0],
+				Inputs: make(map[string]interface{}),
+				File:   path,
+				Line:   startLine,
+			}
+			attrs, _ := block.Body.JustAttributes()
+			for name, attr := range attrs {
+				raw := extractRawExpression(srcLines, attr.Expr.Range())
+				val, valDiags := attr.Expr.Value(nil)
+				switch name {
+				case "source":
+					if !valDiags.HasErrors() {
+						if s, ok := ctyToInterface(val).(string); ok {
+							mod.Source = s
+							continue
+						}
+					}
+					mod.Source = raw
+				case "version":
+					if !valDiags.HasErrors() {
+						if s, ok := ctyToInterface(val).(string); ok {
+							mod.Version = s
+							continue
+						}
+					}
+					mod.Version = raw
+				default:
+					if !valDiags.HasErrors() {
+						mod.Inputs[name] = ctyToInterface(val)
+					} else {
+						// Most real module inputs are references
+						// (module.x.y, var.foo, etc.) that don't evaluate
+						// statically — keep them as raw HCL so the round-
+						// trip generator can reproduce them verbatim.
+						mod.Inputs[name] = raw
+					}
+				}
+			}
+			result.Modules = append(result.Modules, mod)
+
+		default:
+			// Preserve variable, output, locals, provider, terraform, and
+			// any other non-resource blocks as raw text so the generator
+			// can write them back unchanged. (Module blocks used to land
+			// here too; they now parse into structured Modules above and
+			// only fall back to raw preservation when malformed.)
+			preserveRawBlock(result, path, block, srcLines)
 		}
 	}
 
 	return result, nil
+}
+
+// preserveRawBlock appends the raw source text of block to result so the
+// generator can round-trip unchanged content that wasn't turned into a
+// structured Resource/Module. Handles the edge where a malformed block
+// has out-of-range start/end lines by silently dropping it — the caller
+// will surface the HCL parse error separately.
+func preserveRawBlock(result *ParseResult, path string, block *hclsyntax.Block, srcLines []string) {
+	startLine := block.DefRange().Start.Line
+	endLine := block.CloseBraceRange.Start.Line
+	if startLine <= 0 || endLine <= 0 || endLine > len(srcLines) {
+		return
+	}
+	rawBlock := strings.Join(srcLines[startLine-1:endLine], "\n")
+	result.PreservedBlocks = append(result.PreservedBlocks, PreservedBlock{
+		File:    path,
+		Content: rawBlock,
+		Type:    block.Type,
+		Line:    startLine,
+	})
 }
 
 // extractRawExpression pulls the original source text for an expression

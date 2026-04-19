@@ -24,6 +24,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/importer"
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/project"
+	"github.com/iac-studio/iac-studio/internal/registry"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/scaffold"
 	"github.com/iac-studio/iac-studio/internal/security"
@@ -1138,6 +1139,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 	// Security scanner plugins — graph + Checkov + Trivy + Terrascan + KICS.
 	registerScannerRoutes(mux, projectsDir)
+
+	// Terraform modules — introspect local modules + proxy the registry.
+	registerModuleRoutes(mux, projectsDir, registry.New(registry.Config{}))
 
 	return mux
 }

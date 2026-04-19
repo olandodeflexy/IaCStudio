@@ -258,3 +258,258 @@ func TestForTool_Parser(t *testing.T) {
 		}
 	}
 }
+
+// TestHCLParser_Module verifies module blocks parse into structured Module
+// entries: source + version pulled out explicitly, every other attribute
+// landing in Inputs, and the raw block NOT also appearing in PreservedBlocks
+// (modules should be structured-only when they parse cleanly).
+func TestHCLParser_ModuleStructured(t *testing.T) {
+	dir := t.TempDir()
+	tf := filepath.Join(dir, "main.tf")
+	body := `module "networking" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+
+  cidr = "10.0.0.0/16"
+  tags = {
+    Environment = "prod"
+  }
+}
+
+module "local_compute" {
+  source = "./modules/compute"
+
+  subnet_ids = module.networking.private_subnets
+  instance_count = 3
+}
+`
+	if err := os.WriteFile(tf, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	p := &HCLParser{}
+	result, err := p.ParseFileFull(tf)
+	if err != nil {
+		t.Fatalf("ParseFileFull: %v", err)
+	}
+
+	if len(result.Modules) != 2 {
+		t.Fatalf("want 2 modules, got %d: %+v", len(result.Modules), result.Modules)
+	}
+
+	// Find each by name so the test isn't order-sensitive.
+	byName := map[string]Module{}
+	for _, m := range result.Modules {
+		byName[m.Name] = m
+	}
+
+	vpc := byName["networking"]
+	if vpc.Source != "terraform-aws-modules/vpc/aws" {
+		t.Errorf("source wrong: %q", vpc.Source)
+	}
+	if vpc.Version != "~> 5.0" {
+		t.Errorf("version wrong: %q", vpc.Version)
+	}
+	if _, ok := vpc.Inputs["cidr"]; !ok {
+		t.Errorf("static input 'cidr' missing: %+v", vpc.Inputs)
+	}
+	if _, ok := vpc.Inputs["source"]; ok {
+		t.Errorf("source/version must not leak into Inputs: %+v", vpc.Inputs)
+	}
+	if vpc.ID != "module.networking" {
+		t.Errorf("ID = %q, want module.networking", vpc.ID)
+	}
+
+	local := byName["local_compute"]
+	if local.Source != "./modules/compute" {
+		t.Errorf("local source wrong: %q", local.Source)
+	}
+	if local.Version != "" {
+		t.Errorf("local modules have no version constraint, got %q", local.Version)
+	}
+	// subnet_ids is a reference — should round-trip as raw HCL text.
+	raw, ok := local.Inputs["subnet_ids"].(string)
+	if !ok || raw != "module.networking.private_subnets" {
+		t.Errorf("reference input should be raw HCL, got %#v", local.Inputs["subnet_ids"])
+	}
+
+	// Structured modules should NOT also appear as PreservedBlocks — that
+	// would cause the generator to emit each module twice on sync.
+	for _, pb := range result.PreservedBlocks {
+		if pb.Type == "module" {
+			t.Errorf("module block still in PreservedBlocks — structured parse should replace preservation: %+v", pb)
+		}
+	}
+}
+
+// TestHCLParser_ModuleMalformedFallsBack confirms that a malformed module
+// block (wrong number of labels) falls back to PreservedBlock so the
+// generator can round-trip even pathological input.
+func TestHCLParser_ModuleMalformedFallsBack(t *testing.T) {
+	dir := t.TempDir()
+	tf := filepath.Join(dir, "bad.tf")
+	body := `module "extra" "labels" {
+  source = "./nope"
+}
+`
+	if err := os.WriteFile(tf, []byte(body), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	p := &HCLParser{}
+	result, err := p.ParseFileFull(tf)
+	if err != nil {
+		t.Fatalf("ParseFileFull: %v", err)
+	}
+	if len(result.Modules) != 0 {
+		t.Errorf("malformed module should not produce structured entry: %+v", result.Modules)
+	}
+	foundPreserved := false
+	for _, pb := range result.PreservedBlocks {
+		if pb.Type == "module" {
+			foundPreserved = true
+		}
+	}
+	if !foundPreserved {
+		t.Error("malformed module should fall back to PreservedBlock")
+	}
+}
+
+// TestInspectLocalModuleBasic covers the golden path: a module with a mix
+// of typed-default, reference-default, and sensitive variables, plus
+// outputs that reference resources by expression.
+func TestInspectLocalModuleBasic(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "variables.tf"), []byte(`
+variable "cidr_block" {
+  description = "Primary VPC CIDR"
+  type        = string
+  default     = "10.0.0.0/16"
+}
+
+variable "availability_zones" {
+  type    = list(string)
+  default = ["us-east-1a", "us-east-1b"]
+}
+
+variable "env" {
+  description = "Environment name (dev | staging | prod)"
+  type        = string
+  # no default → required input
+}
+
+variable "secret_key" {
+  type      = string
+  sensitive = true
+}
+`), 0o644); err != nil {
+		t.Fatalf("seed variables.tf: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(dir, "outputs.tf"), []byte(`
+output "vpc_id" {
+  description = "The VPC's identifier"
+  value       = aws_vpc.this.id
+}
+
+output "connection_string" {
+  value     = "postgres://${aws_db_instance.primary.endpoint}/prod"
+  sensitive = true
+}
+`), 0o644); err != nil {
+		t.Fatalf("seed outputs.tf: %v", err)
+	}
+
+	iface, err := InspectLocalModule(dir)
+	if err != nil {
+		t.Fatalf("InspectLocalModule: %v", err)
+	}
+	if iface.SourceDir != dir {
+		t.Errorf("SourceDir = %q, want %q", iface.SourceDir, dir)
+	}
+	if len(iface.Variables) != 4 {
+		t.Fatalf("want 4 variables, got %d: %+v", len(iface.Variables), iface.Variables)
+	}
+	if len(iface.Outputs) != 2 {
+		t.Fatalf("want 2 outputs, got %d: %+v", len(iface.Outputs), iface.Outputs)
+	}
+
+	// Index by name for assertions independent of file walk order.
+	byVar := map[string]ModuleVariable{}
+	for _, v := range iface.Variables {
+		byVar[v.Name] = v
+	}
+	if byVar["cidr_block"].Default != "10.0.0.0/16" {
+		t.Errorf("cidr_block default wrong: %#v", byVar["cidr_block"].Default)
+	}
+	if !byVar["cidr_block"].HasDefault {
+		t.Errorf("cidr_block HasDefault should be true")
+	}
+	if byVar["env"].HasDefault {
+		t.Errorf("env has no default; HasDefault should be false: %+v", byVar["env"])
+	}
+	if !byVar["secret_key"].Sensitive {
+		t.Errorf("secret_key should be marked sensitive")
+	}
+	if byVar["availability_zones"].Type != "list(string)" {
+		t.Errorf("type expression should survive as raw HCL, got %q", byVar["availability_zones"].Type)
+	}
+
+	byOut := map[string]ModuleOutput{}
+	for _, o := range iface.Outputs {
+		byOut[o.Name] = o
+	}
+	if byOut["vpc_id"].Value != "aws_vpc.this.id" {
+		t.Errorf("vpc_id value should be raw HCL, got %q", byOut["vpc_id"].Value)
+	}
+	if !byOut["connection_string"].Sensitive {
+		t.Errorf("connection_string should be marked sensitive")
+	}
+}
+
+// TestInspectLocalModuleIgnoresNoise — non-.tf files, override files, and
+// subdirectories are all skipped.
+func TestInspectLocalModuleIgnoresNoise(t *testing.T) {
+	dir := t.TempDir()
+	// Valid declaration.
+	_ = os.WriteFile(filepath.Join(dir, "variables.tf"), []byte(`variable "x" {}`), 0o644)
+	// Override file — skipped.
+	_ = os.WriteFile(filepath.Join(dir, "variables_override.tf"), []byte(`variable "x" { default = "overridden" }`), 0o644)
+	// Non-HCL noise.
+	_ = os.WriteFile(filepath.Join(dir, "README.md"), []byte("# docs"), 0o644)
+	_ = os.WriteFile(filepath.Join(dir, "terraform.tfstate"), []byte("{}"), 0o644)
+	// Subdirectory with its own variables.tf — should NOT be recursed into.
+	sub := filepath.Join(dir, "nested")
+	_ = os.MkdirAll(sub, 0o755)
+	_ = os.WriteFile(filepath.Join(sub, "variables.tf"), []byte(`variable "nested" {}`), 0o644)
+
+	iface, err := InspectLocalModule(dir)
+	if err != nil {
+		t.Fatalf("InspectLocalModule: %v", err)
+	}
+	if len(iface.Variables) != 1 || iface.Variables[0].Name != "x" {
+		t.Errorf("only the top-level non-override variable 'x' should parse, got %+v", iface.Variables)
+	}
+}
+
+// TestInspectLocalModuleEmpty — a directory with no .tf files is a valid
+// minimal module (zero-interface). Returns an empty interface, no error.
+func TestInspectLocalModuleEmpty(t *testing.T) {
+	iface, err := InspectLocalModule(t.TempDir())
+	if err != nil {
+		t.Fatalf("empty module dir should not error: %v", err)
+	}
+	if len(iface.Variables) != 0 || len(iface.Outputs) != 0 {
+		t.Errorf("empty module should yield empty interface, got %+v", iface)
+	}
+}
+
+// TestInspectLocalModuleBadHCL surfaces parse errors instead of returning
+// partial data.
+func TestInspectLocalModuleBadHCL(t *testing.T) {
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, "variables.tf"), []byte(`variable { unbalanced = `), 0o644)
+	_, err := InspectLocalModule(dir)
+	if err == nil {
+		t.Error("malformed HCL should surface as an error")
+	}
+}

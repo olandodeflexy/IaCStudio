@@ -1,0 +1,327 @@
+package api
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/iac-studio/iac-studio/internal/registry"
+)
+
+// scaffoldModuleProject builds a tiny project with one root main.tf that
+// calls one local module and one registry module, plus the local module's
+// own variables.tf/outputs.tf.
+func scaffoldModuleProject(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	proj := filepath.Join(root, "demo")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	rootHCL := `module "networking" {
+  source = "./modules/networking"
+  cidr   = "10.0.0.0/16"
+}
+
+module "vpc" {
+  source  = "terraform-aws-modules/vpc/aws"
+  version = "~> 5.0"
+  name    = "prod-vpc"
+}
+`
+	if err := os.WriteFile(filepath.Join(proj, "main.tf"), []byte(rootHCL), 0o644); err != nil {
+		t.Fatalf("write main.tf: %v", err)
+	}
+	modDir := filepath.Join(proj, "modules", "networking")
+	if err := os.MkdirAll(modDir, 0o755); err != nil {
+		t.Fatalf("mkdir modules: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "variables.tf"), []byte(`
+variable "cidr" {
+  description = "VPC CIDR"
+  type        = string
+}
+`), 0o644); err != nil {
+		t.Fatalf("write vars: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(modDir, "outputs.tf"), []byte(`
+output "vpc_id" {
+  value = aws_vpc.this.id
+}
+`), 0o644); err != nil {
+		t.Fatalf("write outputs: %v", err)
+	}
+	return root
+}
+
+// moduleMux wires just the module routes against a registry pointed at a
+// stub server. Keeps endpoint tests hermetic.
+func moduleMux(projectsDir string, reg *registry.Client) *http.ServeMux {
+	mux := http.NewServeMux()
+	registerModuleRoutes(mux, projectsDir, reg)
+	return mux
+}
+
+// TestListProjectModulesReturnsLocalAndRegistry covers the main
+// classification + introspection flow: a project with one local module and
+// one registry module produces two ModuleView entries, the local one
+// carrying its introspected Interface and the registry one carrying
+// RegistryCoords for the UI to follow up on.
+func TestListProjectModulesReturnsLocalAndRegistry(t *testing.T) {
+	root := scaffoldModuleProject(t)
+	reg := registry.New(registry.Config{BaseURL: "http://unused"}) // unused in this test
+	srv := httptest.NewServer(moduleMux(root, reg))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/projects/demo/modules")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	var out projectModulesResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(out.Modules) != 2 {
+		t.Fatalf("want 2 modules, got %d: %+v", len(out.Modules), out.Modules)
+	}
+
+	byName := map[string]moduleView{}
+	for _, m := range out.Modules {
+		byName[m.Name] = m
+	}
+
+	local, ok := byName["networking"]
+	if !ok {
+		t.Fatalf("local module 'networking' missing")
+	}
+	if local.SourceKind != "local" {
+		t.Errorf("local module SourceKind wrong: %q", local.SourceKind)
+	}
+	if local.Interface == nil {
+		t.Fatalf("local module should have introspected Interface")
+	}
+	if len(local.Interface.Variables) != 1 || local.Interface.Variables[0].Name != "cidr" {
+		t.Errorf("local variables wrong: %+v", local.Interface.Variables)
+	}
+	if len(local.Interface.Outputs) != 1 || local.Interface.Outputs[0].Name != "vpc_id" {
+		t.Errorf("local outputs wrong: %+v", local.Interface.Outputs)
+	}
+	if local.RegistryCoords != nil {
+		t.Errorf("local modules shouldn't carry RegistryCoords: %+v", local.RegistryCoords)
+	}
+
+	vpc, ok := byName["vpc"]
+	if !ok {
+		t.Fatalf("registry module 'vpc' missing")
+	}
+	if vpc.SourceKind != "registry" {
+		t.Errorf("registry SourceKind wrong: %q", vpc.SourceKind)
+	}
+	if vpc.RegistryCoords == nil {
+		t.Fatalf("registry module should carry RegistryCoords")
+	}
+	if vpc.RegistryCoords.Namespace != "terraform-aws-modules" ||
+		vpc.RegistryCoords.Name != "vpc" ||
+		vpc.RegistryCoords.Provider != "aws" {
+		t.Errorf("coords wrong: %+v", vpc.RegistryCoords)
+	}
+	if vpc.Version != "~> 5.0" {
+		t.Errorf("version wrong: %q", vpc.Version)
+	}
+}
+
+// TestClassifyModuleSource covers the one tricky piece of logic in the
+// module API — deciding whether a source string is local, a registry
+// address, or something else.
+func TestClassifyModuleSource(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"./modules/networking", "local"},
+		{"../shared/compute", "local"},
+		{"/abs/path", "local"},
+		{"terraform-aws-modules/vpc/aws", "registry"},
+		{"terraform-aws-modules/vpc/aws//submodules/s3", "registry"},
+		{"git::https://example.com/foo.git", "other"},
+		{"https://example.com/mod.zip", "other"},
+		{"app.terraform.io/org/name/provider", "other"}, // hostname-prefixed = private registry, not shorthand
+		{"", "unknown"},
+	}
+	for _, tc := range cases {
+		kind, _ := classifyModuleSource(tc.in)
+		if kind != tc.want {
+			t.Errorf("classifyModuleSource(%q) = %q, want %q", tc.in, kind, tc.want)
+		}
+	}
+}
+
+// TestResolveLocalModulePathRejectsTraversal — a source string with enough
+// "../" to escape the project root must be refused.
+func TestResolveLocalModulePathRejectsTraversal(t *testing.T) {
+	abs, ok := resolveLocalModulePath("/projects/demo", "../../etc/passwd")
+	if ok {
+		t.Errorf("escape should be refused, got %q", abs)
+	}
+}
+
+// TestRegistrySearchProxy — the search endpoint forwards q/limit to the
+// registry and returns whatever the registry returns.
+func TestRegistrySearchProxy(t *testing.T) {
+	var seenQ, seenLimit string
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, "/modules/search") {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		seenQ = r.URL.Query().Get("q")
+		seenLimit = r.URL.Query().Get("limit")
+		_, _ = w.Write([]byte(`{"modules":[{"name":"vpc","namespace":"terraform-aws-modules","provider":"aws"}]}`))
+	}))
+	defer stub.Close()
+
+	reg := registry.New(registry.Config{BaseURL: stub.URL})
+	srv := httptest.NewServer(moduleMux(t.TempDir(), reg))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/registry/modules/search?q=vpc&limit=5")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if seenQ != "vpc" {
+		t.Errorf("q not forwarded: %q", seenQ)
+	}
+	if seenLimit != "5" {
+		t.Errorf("limit not forwarded: %q", seenLimit)
+	}
+}
+
+// TestRegistrySearchLimitCapped — a caller cannot forward an arbitrarily large
+// limit to the upstream registry; the proxy caps it at 100.
+func TestRegistrySearchLimitCapped(t *testing.T) {
+	var seenLimit string
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seenLimit = r.URL.Query().Get("limit")
+		_, _ = w.Write([]byte(`{"modules":[]}`))
+	}))
+	defer stub.Close()
+
+	reg := registry.New(registry.Config{BaseURL: stub.URL})
+	srv := httptest.NewServer(moduleMux(t.TempDir(), reg))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/registry/modules/search?q=vpc&limit=99999")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	if seenLimit != "100" {
+		t.Errorf("oversized limit should be capped to 100, registry saw %q", seenLimit)
+	}
+}
+func TestRegistryGetProxyMapsNotFound(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write([]byte(`{"errors":["not found"]}`))
+	}))
+	defer stub.Close()
+
+	reg := registry.New(registry.Config{BaseURL: stub.URL})
+	srv := httptest.NewServer(moduleMux(t.TempDir(), reg))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/registry/modules/nobody/wrong/aws")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("404 should map through, got %d", resp.StatusCode)
+	}
+}
+
+// TestPromoteToModuleEndpoint — end-to-end through the HTTP surface:
+// a project with two resources + a POST body naming both → new module
+// under modules/extracted/, root no longer contains those resources.
+func TestPromoteToModuleEndpoint(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "demo")
+	if err := os.MkdirAll(proj, 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(proj, "main.tf"), []byte(`resource "aws_vpc" "main" {
+  cidr_block = "10.0.0.0/16"
+}
+
+resource "aws_subnet" "s1" {
+  vpc_id     = aws_vpc.main.id
+  cidr_block = "10.0.1.0/24"
+}
+`), 0o644); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	reg := registry.New(registry.Config{BaseURL: "http://unused"})
+	srv := httptest.NewServer(moduleMux(root, reg))
+	defer srv.Close()
+
+	body := strings.NewReader(`{"module_name":"networking","resource_ids":["aws_vpc.main","aws_subnet.s1"]}`)
+	resp, err := http.Post(srv.URL+"/api/projects/demo/promote-to-module", "application/json", body)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != 200 {
+		t.Fatalf("status = %d", resp.StatusCode)
+	}
+	// Sanity: the module dir now exists and the root no longer has the vpc.
+	if _, err := os.Stat(filepath.Join(proj, "modules", "networking", "main.tf")); err != nil {
+		t.Errorf("expected module main.tf, got: %v", err)
+	}
+	rootBody, _ := os.ReadFile(filepath.Join(proj, "main.tf"))
+	if strings.Contains(string(rootBody), `resource "aws_vpc" "main"`) {
+		t.Errorf("root should no longer contain aws_vpc.main, got:\n%s", rootBody)
+	}
+	if !strings.Contains(string(rootBody), `module "networking"`) {
+		t.Errorf("root should contain module call, got:\n%s", rootBody)
+	}
+}
+
+// TestPromoteToModuleEndpointBadInput — the handler 400s on a malformed
+// request (missing resource_ids, bad module name) instead of masking the
+// error as a generic 500.
+func TestPromoteToModuleEndpointBadInput(t *testing.T) {
+	root := t.TempDir()
+	proj := filepath.Join(root, "demo")
+	_ = os.MkdirAll(proj, 0o755)
+	_ = os.WriteFile(filepath.Join(proj, "main.tf"), []byte(`resource "aws_vpc" "main" { cidr_block = "10.0.0.0/16" }`), 0o644)
+
+	reg := registry.New(registry.Config{BaseURL: "http://unused"})
+	srv := httptest.NewServer(moduleMux(root, reg))
+	defer srv.Close()
+
+	// Hyphenated name — should be rejected with 400.
+	body := strings.NewReader(`{"module_name":"net-working","resource_ids":["aws_vpc.main"]}`)
+	resp, _ := http.Post(srv.URL+"/api/projects/demo/promote-to-module", "application/json", body)
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != 400 {
+		t.Errorf("bad module name should 400, got %d", resp.StatusCode)
+	}
+}
