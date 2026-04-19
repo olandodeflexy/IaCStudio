@@ -1136,6 +1136,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// Policy engines — builtin + OPA (embedded) + Conftest + Sentinel (shell-out).
 	registerPolicyRoutes(mux, projectsDir)
 
+	// Security scanner plugins — graph + Checkov + Trivy + Terrascan + KICS.
+	registerScannerRoutes(mux, projectsDir)
+
 	return mux
 }
 
