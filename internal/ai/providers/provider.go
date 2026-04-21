@@ -79,6 +79,70 @@ type Provider interface {
 	Stream(ctx context.Context, req Request, onDelta DeltaFunc) (string, error)
 }
 
+// ToolDefinition is what a tool advertises to the model via the provider —
+// matches the shape of ai/tools.Definition. Kept in the providers package
+// so we avoid an import cycle (tools depends on parser/policy/scanners;
+// providers depends on neither).
+type ToolDefinition struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	// InputSchema is a JSON Schema object serialised as raw bytes.
+	InputSchema []byte `json:"input_schema"`
+}
+
+// ToolCall is the model's request to invoke a tool — the provider-neutral
+// shape the caller's tool runner consumes.
+type ToolCall struct {
+	ID   string
+	Name string
+	Args []byte // raw JSON the model emitted for the tool's arguments
+}
+
+// ToolResult is the caller's response to a ToolCall — becomes the next
+// tool_result message the provider sends back to the model.
+type ToolResult struct {
+	CallID  string
+	Content any  // JSON-serialisable; the provider marshals it
+	IsError bool
+}
+
+// ToolRunner executes a batch of ToolCalls and returns ToolResults. The
+// provider calls this between model turns. Implementations in the ai/tools
+// package plug their Runner in via a small adapter.
+type ToolRunner interface {
+	Run(ctx context.Context, calls []ToolCall) ([]ToolResult, error)
+}
+
+// ToolLoopRequest drives Provider.RunToolLoop. System and User are the same
+// as in Request; Tools is the catalogue advertised to the model each turn;
+// Runner handles the calls. MaxTurns caps how many tool-use iterations
+// run before the provider gives up and returns whatever text it has.
+type ToolLoopRequest struct {
+	System      string
+	User        string
+	Temperature float64
+	MaxTokens   int
+	Tools       []ToolDefinition
+	Runner      ToolRunner
+	// MaxTurns caps the number of model turns. Each tool-call round counts
+	// as one turn. A model that never stops calling tools is a common
+	// failure mode; this is the safety net. Zero → provider default (8).
+	MaxTurns int
+}
+
+// ToolUser is the optional interface providers implement when they support
+// function calling / tool use. The multi-agent orchestrator type-asserts
+// for this — providers that don't implement it fall back to plain Complete
+// and lose the agent feature gracefully.
+type ToolUser interface {
+	// RunToolLoop runs the model in a tool-use loop: call model → if the
+	// response requests tools, run them via req.Runner → feed results back
+	// → repeat until the model returns final text (or MaxTurns is hit).
+	// The returned string is the final assistant text; transcripts are
+	// optional and provider-specific.
+	RunToolLoop(ctx context.Context, req ToolLoopRequest) (string, error)
+}
+
 // ErrEmptyResponse is returned when a provider round-trips successfully but
 // the body contains no usable content — separated out so callers can fall
 // back to deterministic heuristics (pattern matching) instead of surfacing a
