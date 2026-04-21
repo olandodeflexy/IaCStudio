@@ -4,6 +4,7 @@ import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { UIButton, UIInput, UIKicker, UILabel, UIModal, UIPanel, UITextArea } from './ui';
+import { CodeEditor } from './components/CodeEditor';
 
 // ─── Tool Definitions (UI metadata only — resources loaded from backend catalog) ───
 const TOOLS: Record<string, { name: string; icon: string; color: string; ext: string }> = {
@@ -1381,7 +1382,13 @@ export default function App() {
               <button style={{ ...S.copyBtn, color: ct.color }}
                 onClick={() => navigator.clipboard?.writeText(syncCode)}>Copy</button>
             </div>
-            <pre style={S.codePre}>{syncCode || '# Add resources to see generated code\n'}</pre>
+            <div style={S.codePre}>
+              <CodeEditor
+                value={syncCode || '# Add resources to see generated code\n'}
+                filePath={`main${ct.ext}`}
+                readOnly
+              />
+            </div>
           </div>
         </aside>
       </div>
@@ -1683,7 +1690,7 @@ const S: Record<string, React.CSSProperties> = {
   codePanel: { flex: 1, display: 'flex', flexDirection: 'column' as const, minHeight: 0 },
   codeHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-soft)', fontFamily: 'JetBrains Mono' },
   copyBtn: { background: 'none', border: 'none', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono', fontWeight: 600 },
-  codePre: { flex: 1, margin: 0, padding: 16, fontSize: 11, lineHeight: 1.7, color: '#8888aa', fontFamily: 'JetBrains Mono', overflowY: 'auto' as const },
+  codePre: { flex: 1, minHeight: 0, display: 'flex' as const, padding: 12 },
 
   bottom: { display: 'flex', height: 220, borderTop: '1px solid var(--border-soft)', flexShrink: 0 },
   chat: { flex: 1, display: 'flex', flexDirection: 'column' as const, borderRight: '1px solid var(--border-soft)' },
