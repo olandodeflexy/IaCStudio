@@ -98,6 +98,16 @@ func (c *Client) applyConfig(cfg providers.Config) {
 	}
 }
 
+// Provider returns the active underlying provider, or nil if construction
+// failed. Callers that need provider-specific capabilities (tool-use loop,
+// streaming, etc.) type-assert on the returned value.
+func (c *Client) Provider() providers.Provider {
+	if c.providerErr != nil {
+		return nil
+	}
+	return c.provider
+}
+
 // GetConfig returns the current provider config without exposing the current
 // API key value. When a key is already configured, it returns a masked
 // placeholder so callers can round-trip settings without re-entering the

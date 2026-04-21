@@ -1141,7 +1141,12 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	registerScannerRoutes(mux, projectsDir)
 
 	// Terraform modules — introspect local modules + proxy the registry.
-	registerModuleRoutes(mux, projectsDir, registry.New(registry.Config{}))
+	regClient := registry.New(registry.Config{})
+	registerModuleRoutes(mux, projectsDir, regClient)
+
+	// AI agent — tool-use orchestrator that drives list_resources, run_policy,
+	// run_scan, write_hcl, etc. against the configured Anthropic provider.
+	registerAgentRoutes(mux, projectsDir, aiClient, regClient)
 
 	return mux
 }
