@@ -93,8 +93,9 @@ func newListResourcesTool(deps IaCToolDeps) Tool {
 				if args.Type != "" && r.Type != args.Type {
 					continue
 				}
+				scrubbed := scrubResource(r, deps.ProjectDir)
 				out.Resources = append(out.Resources, listedResource{
-					ID: r.ID, Type: r.Type, Name: r.Name, File: r.File,
+					ID: r.ID, Type: r.Type, Name: r.Name, File: scrubbed.File,
 				})
 			}
 			return out, nil
@@ -134,7 +135,7 @@ func newGetResourceTool(deps IaCToolDeps) Tool {
 			}
 			for _, r := range all {
 				if r.ID == args.ID {
-					return r, nil
+					return scrubResource(r, deps.ProjectDir), nil
 				}
 			}
 			return nil, fmt.Errorf("resource not found: %s", args.ID)
@@ -177,8 +178,10 @@ func newWriteHCLTool(deps IaCToolDeps) Tool {
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, fmt.Errorf("write_hcl: %w", err)
 			}
-			if args.RelPath == "" || args.Content == "" {
-				return nil, fmt.Errorf("write_hcl: rel_path and content are required")
+			// Empty content is a legitimate outcome (clearing a file /
+			// creating a placeholder), so only rel_path is required.
+			if args.RelPath == "" {
+				return nil, fmt.Errorf("write_hcl: rel_path is required")
 			}
 			full, err := scopePathWithinProject(deps.ProjectDir, args.RelPath)
 			if err != nil {
@@ -242,9 +245,13 @@ func newRunPolicyTool(deps IaCToolDeps) Tool {
 		`{"type": "object", "properties": {}}`,
 		func(ctx context.Context, raw json.RawMessage) (any, error) {
 			resources := parseResources(deps.ProjectDir)
-			var planJSON []byte
-			if data, err := os.ReadFile(filepath.Join(deps.ProjectDir, "tfplan.json")); err == nil {
-				planJSON = data
+			// Read tfplan.json only if it's a regular file — a symlink
+			// could be used to exfiltrate arbitrary host files via the
+			// next tool_result sent to the LLM. Missing file stays
+			// silent so plan-less engines like the builtin still run.
+			planJSON, err := readRegularFile(filepath.Join(deps.ProjectDir, "tfplan.json"))
+			if err != nil && !os.IsNotExist(err) {
+				return nil, err
 			}
 			results := engines.RunAll(ctx, deps.PolicyEngines, engines.EvalInput{
 				ProjectDir: deps.ProjectDir,
@@ -323,6 +330,12 @@ func newSearchRegistryTool(deps IaCToolDeps) Tool {
 			if err := json.Unmarshal(raw, &args); err != nil {
 				return nil, fmt.Errorf("search_registry: %w", err)
 			}
+			// Models occasionally forget required fields even when the
+			// schema marks them required — surface an explicit error
+			// rather than forwarding an empty query upstream.
+			if strings.TrimSpace(args.Query) == "" {
+				return nil, fmt.Errorf("search_registry: query is required")
+			}
 			if deps.RegistryClient == nil {
 				return nil, fmt.Errorf("search_registry: no registry client configured")
 			}
@@ -346,7 +359,7 @@ func newReadPlanTool(deps IaCToolDeps) Tool {
 		"Read the project's current tfplan.json (produced by `terraform show -json tfplan`). Returns the raw JSON so downstream tools or the model can reason about planned changes. Errors clearly when no plan has been run yet.",
 		`{"type": "object", "properties": {}}`,
 		func(ctx context.Context, raw json.RawMessage) (any, error) {
-			data, err := os.ReadFile(filepath.Join(deps.ProjectDir, "tfplan.json"))
+			data, err := readRegularFile(filepath.Join(deps.ProjectDir, "tfplan.json"))
 			if err != nil {
 				if os.IsNotExist(err) {
 					return nil, fmt.Errorf("no tfplan.json — run terraform plan + `terraform show -json tfplan > tfplan.json` first")
@@ -363,6 +376,42 @@ func newReadPlanTool(deps IaCToolDeps) Tool {
 }
 
 // ─── shared helpers ────────────────────────────────────────────────────
+
+// readRegularFile reads path only if it's a regular file — not a symlink,
+// not a device, not a fifo. Any of those could otherwise be used to
+// exfiltrate arbitrary host content through a tool_result; Lstat + mode
+// check is the cheapest runtime safeguard.
+func readRegularFile(path string) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return nil, fmt.Errorf("refusing to follow symlink: %s", path)
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("not a regular file: %s", path)
+	}
+	return os.ReadFile(path)
+}
+
+// scrubResource returns a copy of r with the File field rewritten to the
+// project-relative form, so tool_results sent to the LLM don't leak the
+// host's absolute filesystem layout.
+func scrubResource(r parser.Resource, projectDir string) parser.Resource {
+	out := r
+	if r.File == "" {
+		return out
+	}
+	if rel, err := filepath.Rel(projectDir, r.File); err == nil && !strings.HasPrefix(rel, "..") {
+		out.File = rel
+	} else {
+		// Couldn't relativize cleanly → drop the path entirely rather
+		// than leak the host layout.
+		out.File = filepath.Base(r.File)
+	}
+	return out
+}
 
 // parseResources is a best-effort parse used by tools that don't require
 // perfect fidelity — ignores errors and returns whatever parsed cleanly so

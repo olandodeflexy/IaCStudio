@@ -35,6 +35,9 @@ func Adapt(r *tools.Runner) providers.ToolRunner {
 }
 
 func (a *runnerAdapter) Run(ctx context.Context, calls []providers.ToolCall) ([]providers.ToolResult, error) {
+	if a == nil || a.inner == nil {
+		return nil, fmt.Errorf("agent: runner is not configured")
+	}
 	inCalls := make([]tools.ToolCall, len(calls))
 	for i, c := range calls {
 		inCalls[i] = tools.ToolCall{

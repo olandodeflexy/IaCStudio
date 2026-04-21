@@ -23,6 +23,9 @@ import (
 // The returned string is the assistant's final text — the concatenation
 // of every "text" content block in the last response.
 func (p *anthropicProvider) RunToolLoop(ctx context.Context, req ToolLoopRequest) (string, error) {
+	if req.Runner == nil {
+		return "", fmt.Errorf("tool loop: Runner is nil")
+	}
 	maxTurns := req.MaxTurns
 	if maxTurns <= 0 {
 		maxTurns = 8
