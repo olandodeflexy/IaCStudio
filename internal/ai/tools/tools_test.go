@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 )
 
@@ -141,10 +142,51 @@ func TestRunnerErrAbortTerminatesLoop(t *testing.T) {
 		{ID: "2", Name: "stop"},
 		{ID: "3", Name: "ok"}, // should NOT run
 	})
-	if err != ErrAbort {
+	if !errors.Is(err, ErrAbort) {
 		t.Fatalf("want ErrAbort, got %v", err)
 	}
 	if len(results) != 1 {
 		t.Errorf("only the pre-abort result should be collected, got %+v", results)
+	}
+}
+
+// TestRunnerWrappedErrAbortTerminatesLoop — a handler that wraps ErrAbort
+// with %w must still stop the loop; errors.Is must be used, not ==.
+func TestRunnerWrappedErrAbortTerminatesLoop(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(New("wrap-stop", "wraps ErrAbort", `{}`,
+		func(ctx context.Context, args json.RawMessage) (any, error) {
+			return nil, fmt.Errorf("safe shutdown: %w", ErrAbort)
+		}))
+
+	runner := &Runner{Registry: reg, MaxIterations: 10}
+	_, err := runner.Run(context.Background(), []ToolCall{{ID: "1", Name: "wrap-stop"}})
+	if !errors.Is(err, ErrAbort) {
+		t.Fatalf("wrapped ErrAbort must still abort the loop, got %v", err)
+	}
+}
+
+// TestRunnerMaxIterationsTruncatesBatch — when a batch exceeds MaxIterations,
+// only the first MaxIterations calls are executed; the rest are dropped.
+func TestRunnerMaxIterationsTruncatesBatch(t *testing.T) {
+	reg := NewRegistry()
+	count := 0
+	reg.Register(New("tick", "counts calls", `{}`,
+		func(ctx context.Context, args json.RawMessage) (any, error) { count++; return count, nil }))
+
+	runner := &Runner{Registry: reg, MaxIterations: 2}
+	results, err := runner.Run(context.Background(), []ToolCall{
+		{ID: "1", Name: "tick"},
+		{ID: "2", Name: "tick"},
+		{ID: "3", Name: "tick"}, // truncated
+	})
+	if err != nil {
+		t.Fatalf("truncation must not error: %v", err)
+	}
+	if len(results) != 2 {
+		t.Errorf("want 2 results (MaxIterations=2), got %d", len(results))
+	}
+	if count != 2 {
+		t.Errorf("want handler called 2 times, got %d", count)
 	}
 }

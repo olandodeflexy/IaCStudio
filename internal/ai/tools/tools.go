@@ -15,8 +15,10 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
+	"sync"
 )
 
 // Definition is how a tool advertises itself to the LLM. Schema is a
@@ -66,6 +68,7 @@ func New(name, description string, schema string, handler Handler) Tool {
 // rather than an interface because we need reflective access to the whole
 // set (Definitions() for the model, Lookup() for the runner).
 type Registry struct {
+	mu    sync.RWMutex
 	tools map[string]Tool
 }
 
@@ -77,6 +80,8 @@ func NewRegistry() *Registry {
 // Register adds a tool. A later registration with the same name replaces
 // the earlier one — useful for tests that swap a real handler for a stub.
 func (r *Registry) Register(t Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.tools[t.Def.Name] = t
 }
 
@@ -84,6 +89,8 @@ func (r *Registry) Register(t Tool) {
 // hallucinates a tool name; the Runner surfaces that as a tool_result with
 // "unknown tool" so the model can correct itself instead of looping forever.
 func (r *Registry) Lookup(name string) (Tool, bool) {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	t, ok := r.tools[name]
 	return t, ok
 }
@@ -92,6 +99,8 @@ func (r *Registry) Lookup(name string) (Tool, bool) {
 // deterministic output. Providers call this to build the tools array sent
 // with each model turn.
 func (r *Registry) Definitions() []Definition {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	defs := make([]Definition, 0, len(r.tools))
 	for _, t := range r.tools {
 		defs = append(defs, t.Def)
@@ -103,6 +112,8 @@ func (r *Registry) Definitions() []Definition {
 // Names returns every registered tool name, sorted — handy for logs and
 // routing decisions that don't need the full schema.
 func (r *Registry) Names() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	names := make([]string, 0, len(r.tools))
 	for n := range r.tools {
 		names = append(names, n)
@@ -134,7 +145,7 @@ type ToolResult struct {
 // whole loop rather than feed the error back to the model. Use this when
 // continuing would be unsafe (e.g. the project directory disappeared under
 // us, the user revoked permission).
-var ErrAbort = fmt.Errorf("tool loop aborted")
+var ErrAbort = errors.New("tool loop aborted")
 
 // Runner executes a batch of ToolCalls against the Registry. It's the
 // generic piece of the agent loop — provider-specific code only decides
@@ -151,8 +162,13 @@ type Runner struct {
 // Run executes every call in sequence (models typically emit one per turn,
 // but Anthropic can batch), returning the resulting ToolResults in the same
 // order. An ErrAbort from any handler stops immediately and is returned
-// alongside whatever results accumulated.
+// alongside whatever results accumulated. If MaxIterations is non-zero and
+// the batch exceeds it, the surplus calls are silently dropped — providers
+// should never send a batch larger than the declared limit.
 func (r *Runner) Run(ctx context.Context, calls []ToolCall) ([]ToolResult, error) {
+	if r.MaxIterations > 0 && len(calls) > r.MaxIterations {
+		calls = calls[:r.MaxIterations]
+	}
 	out := make([]ToolResult, 0, len(calls))
 	for _, call := range calls {
 		result := ToolResult{CallID: call.ID}
@@ -169,7 +185,7 @@ func (r *Runner) Run(ctx context.Context, calls []ToolCall) ([]ToolResult, error
 		}
 		value, err := tool.Handler(ctx, call.Args)
 		if err != nil {
-			if err == ErrAbort {
+			if errors.Is(err, ErrAbort) {
 				return out, ErrAbort
 			}
 			// Any other error becomes a visible tool_result so the model
