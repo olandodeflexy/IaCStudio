@@ -190,13 +190,38 @@ func newWriteHCLTool(deps IaCToolDeps) Tool {
 			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 				return nil, err
 			}
-			// Atomic write: temp file in the same dir + rename.
-			tmp := full + ".tmp"
-			if err := os.WriteFile(tmp, []byte(args.Content), 0o644); err != nil {
+			// Before touching disk, walk each existing path component and
+			// refuse if any is a symlink. Containment via scopePathWithinProject
+			// is lexical; this is the runtime check that keeps a pre-existing
+			// in-project symlink from redirecting the write outside the root.
+			if err := refuseSymlinkOnPath(deps.ProjectDir, full); err != nil {
+				return nil, err
+			}
+			// Atomic write: CreateTemp in the same dir → write → rename.
+			// A unique temp filename lets concurrent writes to the same
+			// target coexist without clobbering each other's .tmp file.
+			dir := filepath.Dir(full)
+			base := filepath.Base(full)
+			tmpFile, err := os.CreateTemp(dir, base+".*.tmp")
+			if err != nil {
+				return nil, err
+			}
+			tmp := tmpFile.Name()
+			// Remove the temp file unconditionally on exit — a successful
+			// Rename makes the Remove a no-op (file no longer at tmp path).
+			defer func() { _ = os.Remove(tmp) }()
+			if _, err := tmpFile.Write([]byte(args.Content)); err != nil {
+				_ = tmpFile.Close()
+				return nil, err
+			}
+			if err := tmpFile.Chmod(0o644); err != nil {
+				_ = tmpFile.Close()
+				return nil, err
+			}
+			if err := tmpFile.Close(); err != nil {
 				return nil, err
 			}
 			if err := os.Rename(tmp, full); err != nil {
-				_ = os.Remove(tmp)
 				return nil, err
 			}
 			return writeHCLResult{
@@ -346,6 +371,49 @@ func parseResources(projectDir string) []parser.Resource {
 	p := &parser.HCLParser{}
 	resources, _ := p.ParseDir(projectDir)
 	return resources
+}
+
+// refuseSymlinkOnPath walks each existing path component from projectDir
+// toward full and returns an error if any of them is a symlink. Used as
+// a runtime complement to scopePathWithinProject's lexical check — a
+// malicious or accidental symlink placed inside the project directory
+// would otherwise redirect a follow-up Write through it.
+//
+// Non-existing components (the target file and any unmaterialised parent
+// dirs created by MkdirAll) aren't checked — os.Lstat returns IsNotExist
+// for them and we stop. The parents that DO exist at the time of write
+// are the only ones that can redirect the write.
+func refuseSymlinkOnPath(projectDir, full string) error {
+	// Canonicalize the project root so the walk stays inside it — macOS's
+	// /var → /private/var symlink would otherwise trigger on the very
+	// first segment when full was itself built under the canonical form
+	// by scopePathWithinProject.
+	canon, err := filepath.EvalSymlinks(projectDir)
+	if err != nil {
+		canon = projectDir
+	}
+	rel, err := filepath.Rel(canon, full)
+	if err != nil {
+		return err
+	}
+	segments := strings.Split(rel, string(filepath.Separator))
+	cur := canon
+	// Walk intermediate dirs only — the final element is the file we're
+	// about to write and it may not exist yet.
+	for _, seg := range segments[:len(segments)-1] {
+		cur = filepath.Join(cur, seg)
+		info, err := os.Lstat(cur)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return fmt.Errorf("lstat %s: %w", cur, err)
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to follow symlink: %s", cur)
+		}
+	}
+	return nil
 }
 
 // scopePathWithinProject rejects absolute paths and any relative path that

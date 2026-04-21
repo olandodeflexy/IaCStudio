@@ -12,6 +12,7 @@ package providers
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -83,19 +84,24 @@ type Provider interface {
 // matches the shape of ai/tools.Definition. Kept in the providers package
 // so we avoid an import cycle (tools depends on parser/policy/scanners;
 // providers depends on neither).
+//
+// InputSchema is json.RawMessage rather than []byte because this struct
+// gets marshalled by several providers (and surfaced in audit logs) —
+// []byte would base64-encode under encoding/json, which is NOT what any
+// consumer expects for a JSON Schema. RawMessage keeps the bytes raw.
 type ToolDefinition struct {
-	Name        string `json:"name"`
-	Description string `json:"description"`
-	// InputSchema is a JSON Schema object serialised as raw bytes.
-	InputSchema []byte `json:"input_schema"`
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	InputSchema json.RawMessage `json:"input_schema"`
 }
 
 // ToolCall is the model's request to invoke a tool — the provider-neutral
-// shape the caller's tool runner consumes.
+// shape the caller's tool runner consumes. Args is json.RawMessage for the
+// same "don't base64-encode our JSON" reason as ToolDefinition.InputSchema.
 type ToolCall struct {
 	ID   string
 	Name string
-	Args []byte // raw JSON the model emitted for the tool's arguments
+	Args json.RawMessage
 }
 
 // ToolResult is the caller's response to a ToolCall — becomes the next

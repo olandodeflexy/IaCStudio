@@ -35,7 +35,7 @@ func (p *anthropicProvider) RunToolLoop(ctx context.Context, req ToolLoopRequest
 	// Build the tools array once — it's identical every turn.
 	tools := make([]anthropicToolDef, 0, len(req.Tools))
 	for _, t := range req.Tools {
-		var schema json.RawMessage = t.InputSchema
+		schema := t.InputSchema
 		if len(schema) == 0 {
 			schema = json.RawMessage(`{"type":"object"}`)
 		}
@@ -97,12 +97,24 @@ func (p *anthropicProvider) RunToolLoop(ctx context.Context, req ToolLoopRequest
 		}
 		resultContent := make([]anthropicContent, 0, len(results))
 		for _, r := range results {
-			body, _ := json.Marshal(r.Content)
+			// A tool that accidentally returns a non-JSON-serialisable
+			// value (channels, functions, cycles) would otherwise send a
+			// silent "null" back to the model and hide the real failure.
+			// Surface it as an explicit error tool_result instead so the
+			// model can react.
+			body, marshalErr := json.Marshal(r.Content)
+			isError := r.IsError
+			if marshalErr != nil {
+				body, _ = json.Marshal(map[string]string{
+					"error": fmt.Sprintf("failed to marshal tool result: %v", marshalErr),
+				})
+				isError = true
+			}
 			resultContent = append(resultContent, anthropicContent{
 				Type:      "tool_result",
 				ToolUseID: r.CallID,
 				Content:   string(body),
-				IsError:   r.IsError,
+				IsError:   isError,
 			})
 		}
 		messages = append(messages, anthropicTurn{Role: "user", Content: resultContent})

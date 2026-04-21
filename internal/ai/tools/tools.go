@@ -166,6 +166,12 @@ type Runner struct {
 // the batch exceeds it, the surplus calls are silently dropped — providers
 // should never send a batch larger than the declared limit.
 func (r *Runner) Run(ctx context.Context, calls []ToolCall) ([]ToolResult, error) {
+	if r.Registry == nil {
+		// Panicking on a misconfigured Runner pushed the blast radius all
+		// the way up to the HTTP handler. Return an error instead so the
+		// caller can respond cleanly and log the misconfiguration.
+		return nil, fmt.Errorf("tools.Runner: Registry is nil")
+	}
 	if r.MaxIterations > 0 && len(calls) > r.MaxIterations {
 		calls = calls[:r.MaxIterations]
 	}

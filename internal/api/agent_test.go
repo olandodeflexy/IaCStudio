@@ -32,8 +32,10 @@ func scaffoldAgentProject(t *testing.T) string {
 	if err := os.MkdirAll(proj, 0o755); err != nil {
 		t.Fatalf("mkdir: %v", err)
 	}
-	_ = os.WriteFile(filepath.Join(proj, "main.tf"),
-		[]byte(`resource "aws_vpc" "main" { cidr_block = "10.0.0.0/16" }`), 0o644)
+	if err := os.WriteFile(filepath.Join(proj, "main.tf"),
+		[]byte(`resource "aws_vpc" "main" { cidr_block = "10.0.0.0/16" }`), 0o644); err != nil {
+		t.Fatalf("write main.tf: %v", err)
+	}
 	return root
 }
 

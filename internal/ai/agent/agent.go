@@ -234,8 +234,13 @@ func Run(ctx context.Context, cfg Config, userPrompt string) (*Result, error) {
 		return nil, fmt.Errorf("agent: provider %q does not support tool use — switch to Anthropic to enable the agent", cfg.Provider.Kind())
 	}
 
-	// Narrow the tool catalogue to the specialist's allow-list, if any.
+	// Narrow the tool catalogue to the specialist's allow-list AND build
+	// a filtered registry for the Runner to execute against. Advertising
+	// fewer tools isn't enough: a model can guess the name of a
+	// registered-but-hidden tool and call it anyway. Enforcing the
+	// allow-list at execution time keeps the specialist inside its lane.
 	allDefs := cfg.ToolRegistry.Definitions()
+	execRegistry := cfg.ToolRegistry
 	var defs []tools.Definition
 	if len(spec.ToolAllowList) == 0 {
 		defs = allDefs
@@ -244,14 +249,22 @@ func Run(ctx context.Context, cfg Config, userPrompt string) (*Result, error) {
 		for _, n := range spec.ToolAllowList {
 			allow[n] = struct{}{}
 		}
+		execRegistry = tools.NewRegistry()
 		for _, d := range allDefs {
-			if _, ok := allow[d.Name]; ok {
+			if _, ok := allow[d.Name]; !ok {
+				continue
+			}
+			// The registry has no "copy one tool" accessor on purpose —
+			// Lookup returns the full Tool struct which is all Register
+			// needs.
+			if t, ok := cfg.ToolRegistry.Lookup(d.Name); ok {
+				execRegistry.Register(t)
 				defs = append(defs, d)
 			}
 		}
 	}
 
-	runner := &tools.Runner{Registry: cfg.ToolRegistry, MaxIterations: 50}
+	runner := &tools.Runner{Registry: execRegistry, MaxIterations: 50}
 	reply, err := tu.RunToolLoop(ctx, providers.ToolLoopRequest{
 		System:   spec.System,
 		User:     userPrompt,
