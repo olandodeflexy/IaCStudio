@@ -301,17 +301,13 @@ type anthropicStreamEvent struct {
 // Stream consumes Anthropic's Messages SSE stream. Each token arrives as a
 // content_block_delta event whose delta.text carries the increment.
 func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta DeltaFunc) (string, error) {
-	maxTokens := req.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 4096
-	}
 	reqBody := anthropicRequest{
 		Model:  p.model,
 		System: buildSystemField(req.System, req.Cacheable),
 		Messages: []anthropicMessage{
 			{Role: "user", Content: req.User},
 		},
-		MaxTokens:   maxTokens,
+		MaxTokens:   clampMaxTokens(req.MaxTokens),
 		Temperature: req.Temperature,
 		Stream:      true,
 	}

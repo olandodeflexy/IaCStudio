@@ -83,6 +83,13 @@ func registerVisionRoutes(mux *http.ServeMux, aiClient *ai.Client) {
 			return
 		}
 		if err := r.ParseMultipartForm(multipartMaxMemory); err != nil {
+			// MaxBytesReader surfaces its cap as "http: request body too
+			// large" — clients should see a 413 so they can distinguish
+			// a malformed body from one that merely blew the size budget.
+			if strings.Contains(err.Error(), "request body too large") {
+				http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "invalid multipart body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
@@ -115,11 +122,12 @@ func registerVisionRoutes(mux *http.ServeMux, aiClient *ai.Client) {
 			Provider:    strings.TrimSpace(r.FormValue("provider")),
 		}, images)
 		if err != nil {
+			// isClientError covers missing-API-key, unknown-provider,
+			// wrong-provider-for-vision, and other config mistakes the
+			// user can fix. Shared with the agent handler so the 400-vs-
+			// 502 decision stays consistent across endpoints.
 			status := http.StatusBadGateway
-			// The bridge surfaces a descriptive error when the provider
-			// isn't vision-capable — that's a 400 (client picked the
-			// wrong provider), not a 502.
-			if strings.Contains(err.Error(), "does not support vision") {
+			if isClientError(err) {
 				status = http.StatusBadRequest
 			}
 			http.Error(w, err.Error(), status)

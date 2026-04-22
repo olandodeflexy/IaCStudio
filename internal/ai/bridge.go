@@ -441,12 +441,16 @@ func (c *Client) GenerateFromDiagram(ctx context.Context, req TopologyRequest, i
 	if c.providerErr != nil {
 		return "", nil, c.providerErr
 	}
+	// Validate input before checking provider capability. A caller that
+	// forgot to attach images should see "no images provided" regardless
+	// of which provider happens to be configured — the error should be
+	// deterministic on the inputs, not the environment.
+	if len(images) == 0 {
+		return "", nil, fmt.Errorf("no images provided — use GenerateTopology for text-only requests")
+	}
 	vu, ok := c.provider.(providers.VisionUser)
 	if !ok {
 		return "", nil, fmt.Errorf("provider %q does not support vision — switch to Anthropic to enable diagram-to-project", c.provider.Kind())
-	}
-	if len(images) == 0 {
-		return "", nil, fmt.Errorf("no images provided — use GenerateTopology for text-only requests")
 	}
 
 	providerGuide := buildProviderGuide(req.Tool, req.Provider)
