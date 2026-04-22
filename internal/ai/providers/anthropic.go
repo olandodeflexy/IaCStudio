@@ -210,7 +210,14 @@ func clampMaxTokens(n int) int {
 // extracted text. Keeping both paths on one code path means future
 // header tweaks (e.g. a new anthropic-beta flag) land once.
 func (p *anthropicProvider) postMessagesAndExtractText(ctx context.Context, reqBody any) (string, error) {
-	raw, _ := json.Marshal(reqBody)
+	raw, err := json.Marshal(reqBody)
+	if err != nil {
+		// Defensive — the known request shapes are all marshalable, but
+		// a future caller could accidentally embed a non-marshalable
+		// value. Returning the marshal error up front beats silently
+		// issuing an empty POST and masking the real cause.
+		return "", fmt.Errorf("marshal anthropic request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(raw))
 	if err != nil {
