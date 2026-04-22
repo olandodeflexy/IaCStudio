@@ -1,5 +1,2 @@
-// Chat panel — AI conversation + agent invocations. Stub for the
-// App.tsx split commit; lives here so imports stay stable.
-export function ChatPanel() {
-  return null;
-}
+export { ChatPanel } from './ChatPanel';
+export type { ChatPanelProps, ChatMessage } from './ChatPanel';

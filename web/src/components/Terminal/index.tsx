@@ -1,5 +1,2 @@
-// Terminal panel — streams plan/apply/destroy output via the existing
-// WebSocket channel. Stub until the split commit.
-export function TerminalPanel() {
-  return null;
-}
+export { TerminalPanel } from './TerminalPanel';
+export type { TerminalPanelProps } from './TerminalPanel';

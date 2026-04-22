@@ -5,44 +5,18 @@ import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { UIButton, UIInput, UIKicker, UILabel, UIModal, UIPanel, UITextArea } from './ui';
 import { CodeEditor } from './components/CodeEditor';
-
-// ─── Tool Definitions (UI metadata only — resources loaded from backend catalog) ───
-const TOOLS: Record<string, { name: string; icon: string; color: string; ext: string }> = {
-  terraform: { name: 'Terraform', icon: 'TF', color: '#2FB5A8', ext: '.tf' },
-  opentofu: { name: 'OpenTofu', icon: 'TO', color: '#F2B447', ext: '.tf' },
-  ansible: { name: 'Ansible', icon: 'AN', color: '#D95757', ext: '.yml' },
-};
-
-// Fallback resources when backend is unreachable (small subset)
-const FALLBACK_RESOURCES: CatalogResource[] = [
-  { type: 'aws_vpc', label: 'VPC', icon: '🌐', category: 'Networking' },
-  { type: 'aws_subnet', label: 'Subnet', icon: '📡', category: 'Networking' },
-  { type: 'aws_instance', label: 'EC2 Instance', icon: '🖥️', category: 'Compute' },
-  { type: 'aws_s3_bucket', label: 'S3 Bucket', icon: '🪣', category: 'Storage' },
-  { type: 'aws_security_group', label: 'Security Group', icon: '🛡️', category: 'Security' },
-];
-
-// Connection edge between two resource nodes
-interface Edge {
-  id: string;
-  from: string;     // source node id
-  to: string;       // target node id
-  fromType: string; // source resource type
-  toType: string;   // target resource type
-  field: string;    // the field that creates this connection (e.g., "vpc_id")
-  label: string;    // human-readable label for the connection
-}
-
-let _id = 0;
-const uid = () => `node_${++_id}_${Date.now()}`;
-const edgeId = (from: string, to: string, field: string) => `${from}->${to}:${field}`;
-
-function fileGlyph(entry: FileEntry): string {
-  if (entry.is_dir) return 'DIR';
-  if (entry.ext === '.tf') return 'TF';
-  if (entry.ext === '.yml' || entry.ext === '.yaml') return 'YML';
-  return 'FILE';
-}
+import { ChatPanel } from './components/Chat';
+import { TerminalPanel } from './components/Terminal';
+import { S } from './styles';
+import {
+  TOOLS,
+  FALLBACK_RESOURCES,
+  uid,
+  edgeId,
+  fileGlyph,
+  generateLocalCode,
+  type Edge,
+} from './legacy';
 
 export default function App() {
   // Restore active project from localStorage on mount
@@ -1400,112 +1374,68 @@ export default function App() {
         onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = 'var(--border-main)'; }}
         onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
       <div style={{ ...S.bottom, height: bottomHeight }}>
-        <div style={S.chat}>
-          <div style={S.chatHead}>
-            <span style={{ fontSize: 14, color: 'var(--accent-action)' }}>✦</span>
-            <span>AI Assistant</span>
-            <span style={S.chatBadge}>Ollama</span>
-          </div>
-          <div style={S.chatMsgs}>
-            {chatMessages.length === 0 && (
-              <div style={{ padding: '8px 0', color: '#888', fontSize: 13 }}>
-                <p style={{ margin: 0 }}>Ask me to create infrastructure:</p>
-                <p style={{ margin: '4px 0 0', color: '#555', fontSize: 12 }}>"Add a VPC" · "Create an RDS database" · "I need an S3 bucket"</p>
-              </div>
-            )}
-            {chatMessages.map((m, i) => (
-              <div key={i} style={{ padding: '6px 0', fontSize: 13, display: 'flex', gap: 8, color: m.role === 'ai' ? '#999' : '#ccc' }}>
-                {m.role === 'ai' && <span style={{ color: ct.color, fontWeight: 700, flexShrink: 0 }}>✦</span>}
-                <span>{m.text}</span>
-              </div>
-            ))}
-            {chatLoading && <div style={{ padding: '6px 0', fontSize: 13, color: '#666' }}>✦ Thinking...</div>}
-            <div ref={chatEndRef} />
-          </div>
-          <div style={S.chatInputRow}>
-            <input style={S.chatInput} value={chatInput} onChange={e => setChatInput(e.target.value)}
-              placeholder="Describe infrastructure you need..."
-              onKeyDown={e => e.key === 'Enter' && handleChat()} disabled={chatLoading} />
-            <button style={{ ...S.chatSend, background: ct.color }} onClick={handleChat} disabled={chatLoading}>↑</button>
-          </div>
-        </div>
-
-        <div style={S.term}>
-          <div style={S.termHead}>
-            <span>Terminal</span>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-              {lastCmdError && (
-                <button style={{ background: '#ef444422', border: '1px solid #ef444444', borderRadius: 6, padding: '3px 10px', color: '#ef4444', fontSize: 10, cursor: 'pointer', fontFamily: 'JetBrains Mono', fontWeight: 600 }}
-                  disabled={fixLoading}
-                  onClick={async () => {
-                    setFixLoading(true);
-                    try {
-                      const provider = detectProvider();
-                      const result = await api.analyzePlan({
-                        tool: tool!,
-                        provider,
-                        command: lastCmdError.command,
-                        output: lastCmdError.output,
-                        exit_code: 1,
-                        canvas: nodes.map(n => ({ type: n.type, name: n.name })),
-                      });
-                      // Show AI diagnosis in terminal
-                      setTerminalOutput(prev => [...prev, '', `✦ AI Diagnosis: ${result.message}`]);
-                      // Apply property fixes to existing nodes
-                      if (result.fixes?.length > 0) {
-                        setTerminalOutput(prev => [...prev, `✦ Suggested fixes:`]);
-                        result.fixes.forEach(fix => {
-                          setTerminalOutput(prev => [...prev, `  → ${fix.resource_type}.${fix.resource_name}: ${fix.field} = "${fix.new_value}" (${fix.reason})`]);
-                          // Auto-apply the fix to the matching node
-                          setNodes(prev => prev.map(n => {
-                            if (n.type === fix.resource_type && n.name === fix.resource_name) {
-                              return { ...n, properties: { ...n.properties, [fix.field]: fix.new_value } };
-                            }
-                            return n;
-                          }));
-                        });
-                        setTerminalOutput(prev => [...prev, `✦ Fixes applied to canvas. Run plan again to verify.`]);
-                      }
-                      // Add new resources the AI says are missing
-                      if (result.new_resources?.length > 0) {
-                        setTerminalOutput(prev => [...prev, `✦ Adding missing resources:`]);
-                        result.new_resources.forEach(r => {
-                          setTerminalOutput(prev => [...prev, `  + ${r.type}.${r.name}`]);
-                          const meta = catalogResources.find(c => c.type === r.type);
-                          addNode({
-                            type: r.type,
-                            label: meta?.label ?? r.type,
-                            icon: meta?.icon ?? '📦',
-                            defaults: r.properties,
-                          });
-                        });
-                      }
-                      // Also show in chat for reference
-                      setChatMessages(prev => [...prev, { role: 'ai', text: `Plan fix: ${result.message}` }]);
-                      setLastCmdError(null);
-                    } catch {
-                      setTerminalOutput(prev => [...prev, '✦ AI fix analysis failed. Check that Ollama is running.']);
+        <ChatPanel
+          messages={chatMessages}
+          input={chatInput}
+          onInputChange={setChatInput}
+          onSubmit={handleChat}
+          loading={chatLoading}
+          toolColor={ct.color}
+          scrollAnchorRef={chatEndRef}
+        />
+        <TerminalPanel
+          lines={terminalOutput}
+          onClear={() => { setTerminalOutput([]); setLastCmdError(null); }}
+          lastError={lastCmdError}
+          fixLoading={fixLoading}
+          toolColor={ct.color}
+          onFix={lastCmdError ? async () => {
+            setFixLoading(true);
+            try {
+              const provider = detectProvider();
+              const result = await api.analyzePlan({
+                tool: tool!,
+                provider,
+                command: lastCmdError.command,
+                output: lastCmdError.output,
+                exit_code: 1,
+                canvas: nodes.map(n => ({ type: n.type, name: n.name })),
+              });
+              setTerminalOutput(prev => [...prev, '', `✦ AI Diagnosis: ${result.message}`]);
+              if (result.fixes?.length > 0) {
+                setTerminalOutput(prev => [...prev, `✦ Suggested fixes:`]);
+                result.fixes.forEach(fix => {
+                  setTerminalOutput(prev => [...prev, `  → ${fix.resource_type}.${fix.resource_name}: ${fix.field} = "${fix.new_value}" (${fix.reason})`]);
+                  setNodes(prev => prev.map(n => {
+                    if (n.type === fix.resource_type && n.name === fix.resource_name) {
+                      return { ...n, properties: { ...n.properties, [fix.field]: fix.new_value } };
                     }
-                    setFixLoading(false);
-                  }}>
-                  {fixLoading ? '✦ Analyzing...' : '✦ Fix with AI'}
-                </button>
-              )}
-              <button style={S.termClear} onClick={() => { setTerminalOutput([]); setLastCmdError(null); }}>Clear</button>
-            </div>
-          </div>
-          <div style={S.termContent}>
-            {terminalOutput.length === 0 && <span style={{ color: '#444' }}>Run init, plan, or apply to see output...</span>}
-            {terminalOutput.map((line, i) => (
-              <div key={i} style={{ color: line.startsWith('✓') || line.includes('Apply complete') ? '#4ade80' :
-                line.startsWith('$') ? ct.color : line.startsWith('  +') ? '#60a5fa' :
-                line.startsWith('✦') ? '#a78bfa' :
-                line.startsWith('Error') || line.startsWith('ERROR') ? '#ef4444' : '#999' }}>
-                {line || '\u00A0'}
-              </div>
-            ))}
-          </div>
-        </div>
+                    return n;
+                  }));
+                });
+                setTerminalOutput(prev => [...prev, `✦ Fixes applied to canvas. Run plan again to verify.`]);
+              }
+              if (result.new_resources?.length > 0) {
+                setTerminalOutput(prev => [...prev, `✦ Adding missing resources:`]);
+                result.new_resources.forEach(r => {
+                  setTerminalOutput(prev => [...prev, `  + ${r.type}.${r.name}`]);
+                  const meta = catalogResources.find(c => c.type === r.type);
+                  addNode({
+                    type: r.type,
+                    label: meta?.label ?? r.type,
+                    icon: meta?.icon ?? '📦',
+                    defaults: r.properties,
+                  });
+                });
+              }
+              setChatMessages(prev => [...prev, { role: 'ai', text: `Plan fix: ${result.message}` }]);
+              setLastCmdError(null);
+            } catch {
+              setTerminalOutput(prev => [...prev, '✦ AI fix analysis failed. Check that Ollama is running.']);
+            }
+            setFixLoading(false);
+          } : undefined}
+        />
       </div>
 
       {/* Resource hover tooltip */}
@@ -1569,140 +1499,3 @@ export default function App() {
     </div>
   );
 }
-
-// Local code generation (mirrors the Go backend for instant preview)
-function generateLocalCode(tool: string, nodes: any[], edges: Edge[]): string {
-  if (tool === 'ansible') {
-    let c = '---\n- name: IaC Studio Playbook\n  hosts: all\n  become: true\n  tasks:\n';
-    nodes.forEach(n => {
-      c += `    - name: ${n.name || n.type}\n      ${n.type}:\n`;
-      Object.entries(n.properties).forEach(([k, v]) => {
-        if (typeof v === 'boolean') c += `        ${k}: ${v ? 'yes' : 'no'}\n`;
-        else if (typeof v === 'number') c += `        ${k}: ${v}\n`;
-        else c += `        ${k}: "${v}"\n`;
-      });
-      c += '\n';
-    });
-    return c;
-  }
-
-  // Determine provider from resource types
-  const hasGCP = nodes.some(n => n.type.startsWith('google_'));
-  const hasAzure = nodes.some(n => n.type.startsWith('azurerm_'));
-  const hasAWS = nodes.some(n => n.type.startsWith('aws_'));
-
-  let c = '';
-  if (hasAWS) c += 'provider "aws" {\n  region = "us-east-1"\n}\n\n';
-  if (hasGCP) c += 'provider "google" {\n  project = "my-project"\n  region  = "us-central1"\n}\n\n';
-  if (hasAzure) c += 'provider "azurerm" {\n  features {}\n}\n\n';
-
-  // Build edge lookup: nodeId -> outgoing edges
-  const edgesByFrom = new Map<string, Edge[]>();
-  edges.forEach(e => {
-    const list = edgesByFrom.get(e.from) || [];
-    list.push(e);
-    edgesByFrom.set(e.from, list);
-  });
-
-  // Build node lookup by id
-  const nodeById = new Map(nodes.map(n => [n.id, n]));
-
-  nodes.forEach(n => {
-    const name = n.name || n.type.replace(/^(aws_|google_|azurerm_|google_compute_|google_container_)/, '');
-    c += `resource "${n.type}" "${name}" {\n`;
-
-    // Emit connection references first (e.g., vpc_id = aws_vpc.main.id)
-    const nodeEdges = edgesByFrom.get(n.id) || [];
-    const emittedFields = new Set<string>();
-    nodeEdges.forEach(edge => {
-      const target = nodeById.get(edge.to);
-      if (target && edge.field !== 'depends_on') {
-        const targetName = target.name || target.type.replace(/^(aws_|google_|azurerm_|google_compute_|google_container_)/, '');
-        c += `  ${edge.field} = ${target.type}.${targetName}.id\n`;
-        emittedFields.add(edge.field);
-      }
-    });
-
-    // Emit regular properties (skip fields already emitted as references)
-    Object.entries(n.properties).forEach(([k, v]) => {
-      if (emittedFields.has(k)) return;
-      if (typeof v === 'boolean') c += `  ${k} = ${v}\n`;
-      else if (typeof v === 'number') c += `  ${k} = ${v}\n`;
-      else if (Array.isArray(v)) c += `  ${k} = ${JSON.stringify(v)}\n`;
-      else c += `  ${k} = "${v}"\n`;
-    });
-
-    c += '}\n\n';
-  });
-  return c;
-}
-
-// ─── Styles ───
-const S: Record<string, React.CSSProperties> = {
-  selectScreen: { width: '100vw', height: '100vh', display: 'flex', alignItems: 'flex-start', justifyContent: 'center', background: 'var(--bg-app)', position: 'relative', overflowY: 'auto' as const },
-  selectBg: {
-    position: 'fixed',
-    inset: 0,
-    background: 'var(--bg-app)',
-    pointerEvents: 'none' as const,
-  },
-  selectContent: { position: 'relative', zIndex: 1, textAlign: 'center', padding: '40px 40px 60px', marginTop: 40 },
-  logo: { display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, marginBottom: 32 },
-  logoText: { fontSize: 22, fontWeight: 700, color: 'var(--text-main)', fontFamily: 'JetBrains Mono', letterSpacing: 1 },
-  title: { fontSize: 38, fontWeight: 700, color: 'var(--text-main)', margin: '0 0 12px', letterSpacing: -0.4, fontFamily: 'Space Grotesk' },
-  subtitle: { fontSize: 16, color: 'var(--text-muted)', margin: '0 0 40px' },
-  cardGrid: { display: 'flex', gap: 20, justifyContent: 'center', marginBottom: 48 },
-  card: { display: 'flex', flexDirection: 'column' as const, alignItems: 'center', gap: 12, padding: '32px 40px', background: 'var(--bg-elev-1)', border: '1.5px solid', borderRadius: 16, cursor: 'pointer', transition: 'all 0.3s', fontFamily: 'DM Sans' },
-  features: { display: 'flex', gap: 24, justifyContent: 'center', flexWrap: 'wrap' as const },
-
-  app: { width: '100vw', height: '100vh', display: 'flex', flexDirection: 'column' as const, background: 'var(--bg-app)', overflow: 'hidden', position: 'relative' as const },
-  notification: { position: 'absolute' as const, top: 60, left: '50%', transform: 'translateX(-50%)', zIndex: 100, background: 'var(--bg-elev-2)', border: '1px solid var(--border-main)', borderRadius: 8, padding: '8px 20px', fontSize: 12, color: 'var(--text-main)', fontFamily: 'JetBrains Mono' },
-  header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0 16px', height: 52, borderBottom: '1px solid', flexShrink: 0, background: 'rgba(21, 25, 24, 0.8)' },
-  hLeft: { display: 'flex', alignItems: 'center', gap: 12 },
-  hRight: { display: 'flex', alignItems: 'center', gap: 8 },
-  backBtn: { background: 'none', border: '1px solid var(--border-main)', color: 'var(--text-muted)', borderRadius: 8, padding: '4px 10px', cursor: 'pointer', fontSize: 16, fontFamily: 'DM Sans' },
-  badge: { padding: '4px 12px', borderRadius: 20, fontSize: 13, fontWeight: 600, fontFamily: 'JetBrains Mono' },
-  projInput: { background: 'transparent', border: 'none', color: 'var(--text-main)', fontSize: 14, fontFamily: 'JetBrains Mono', fontWeight: 500, outline: 'none', width: 180 },
-  count: { fontSize: 12, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', marginRight: 8 },
-  cmd: { border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 12, fontWeight: 600, fontFamily: 'JetBrains Mono', transition: 'all 0.2s' },
-
-  main: { display: 'flex', flex: 1, minHeight: 0 },
-  sidebar: { width: 240, borderRight: '1px solid var(--border-soft)', display: 'flex', flexDirection: 'column' as const, background: 'var(--bg-elev-1)', flexShrink: 0 },
-  tabs: { display: 'flex', borderBottom: '1px solid var(--border-soft)' },
-  tab: { flex: 1, padding: '10px 0', background: 'none', border: 'none', borderBottom: '2px solid transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 12, fontWeight: 600, letterSpacing: 0.5, textTransform: 'uppercase' as const, transition: 'all 0.2s', fontFamily: 'DM Sans' },
-  palScroll: { flex: 1, overflowY: 'auto' as const, padding: '8px 0' },
-  catTitle: { fontSize: 10, fontWeight: 700, color: '#444', textTransform: 'uppercase' as const, letterSpacing: 1.2, padding: '8px 16px 4px', fontFamily: 'JetBrains Mono' },
-  palItem: { display: 'flex', alignItems: 'center', gap: 10, width: '100%', padding: '8px 16px', background: 'transparent', border: 'none', color: '#bbb', cursor: 'pointer', fontSize: 13, fontFamily: 'DM Sans', textAlign: 'left' as const, transition: 'background 0.15s' },
-
-  canvas: { flex: 1, position: 'relative' as const, overflow: 'hidden', cursor: 'default' },
-  grid: { position: 'absolute' as const, inset: 0, backgroundImage: 'radial-gradient(circle, rgba(217, 226, 220, 0.03) 1px, transparent 1px)', backgroundSize: '24px 24px', opacity: 0.5 },
-  empty: { position: 'absolute' as const, top: '50%', left: '50%', transform: 'translate(-50%, -50%)', textAlign: 'center' as const, color: '#555' },
-  node: { position: 'absolute' as const, width: 180, background: 'var(--bg-elev-2)', border: '1.5px solid', borderRadius: 12, cursor: 'grab', userSelect: 'none' as const, transition: 'border-color 0.2s, box-shadow 0.2s' },
-  nodeHead: { display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px 4px' },
-  nodeDel: { background: 'none', border: 'none', color: '#555', fontSize: 18, cursor: 'pointer', padding: 0, lineHeight: 1 },
-
-  right: { width: 300, borderLeft: '1px solid var(--border-soft)', display: 'flex', flexDirection: 'column' as const, background: 'var(--bg-elev-1)', flexShrink: 0 },
-  props: { borderBottom: '1px solid var(--border-soft)', padding: 16, maxHeight: '40%', overflowY: 'auto' as const },
-  field: { marginBottom: 10 },
-  flabel: { fontSize: 10, color: 'var(--text-muted)', display: 'block', marginBottom: 4, fontFamily: 'JetBrains Mono', textTransform: 'uppercase' as const, letterSpacing: 0.5 },
-  finput: { width: '100%', padding: '6px 10px', background: 'var(--bg-elev-2)', border: '1px solid var(--border-main)', borderRadius: 6, color: 'var(--text-main)', fontSize: 12, fontFamily: 'JetBrains Mono', outline: 'none', boxSizing: 'border-box' as const },
-  ftoggle: { padding: '5px 12px', borderRadius: 6, border: '1px solid var(--border-main)', cursor: 'pointer', fontSize: 12, fontFamily: 'JetBrains Mono', fontWeight: 500, width: '100%' },
-  codePanel: { flex: 1, display: 'flex', flexDirection: 'column' as const, minHeight: 0 },
-  codeHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-soft)', fontFamily: 'JetBrains Mono' },
-  copyBtn: { background: 'none', border: 'none', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono', fontWeight: 600 },
-  codePre: { flex: 1, minHeight: 0, display: 'flex' as const, padding: 12 },
-
-  bottom: { display: 'flex', height: 220, borderTop: '1px solid var(--border-soft)', flexShrink: 0 },
-  chat: { flex: 1, display: 'flex', flexDirection: 'column' as const, borderRight: '1px solid var(--border-soft)' },
-  chatHead: { display: 'flex', alignItems: 'center', gap: 8, padding: '8px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text-main)', borderBottom: '1px solid var(--border-soft)', background: 'var(--bg-elev-1)' },
-  chatBadge: { fontSize: 9, background: 'var(--bg-elev-3)', padding: '2px 8px', borderRadius: 10, color: 'var(--text-muted)', marginLeft: 'auto', fontFamily: 'JetBrains Mono' },
-  chatMsgs: { flex: 1, overflowY: 'auto' as const, padding: '8px 16px' },
-  chatInputRow: { display: 'flex', gap: 8, padding: '8px 16px', borderTop: '1px solid var(--border-soft)', background: 'var(--bg-elev-1)' },
-  chatInput: { flex: 1, padding: '8px 12px', background: 'var(--bg-elev-2)', border: '1px solid var(--border-main)', borderRadius: 8, color: 'var(--text-main)', fontSize: 13, fontFamily: 'DM Sans', outline: 'none' },
-  chatSend: { width: 36, height: 36, borderRadius: 8, border: 'none', color: '#000', fontSize: 16, fontWeight: 700, cursor: 'pointer' },
-
-  term: { width: 380, display: 'flex', flexDirection: 'column' as const, background: '#09090f', flexShrink: 0 },
-  termHead: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 16px', fontSize: 12, fontWeight: 600, color: 'var(--text-muted)', borderBottom: '1px solid var(--border-soft)' },
-  termClear: { background: 'none', border: 'none', color: '#444', fontSize: 11, cursor: 'pointer', fontFamily: 'JetBrains Mono' },
-  termContent: { flex: 1, padding: '8px 16px', fontSize: 11, fontFamily: 'JetBrains Mono', lineHeight: 1.8, overflowY: 'auto' as const },
-};
