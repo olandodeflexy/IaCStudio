@@ -197,6 +197,84 @@ func TestTsPropValue_HandlesAllScalarTypes(t *testing.T) {
 	}
 }
 
+func TestRenderProgram_SanitizesHyphenatedProjectNames(t *testing.T) {
+	// Resource names derived from hyphenated project names used to
+	// produce `const acme-infraSeed = ...` which is a TS parse error.
+	// Every identifier we emit must pass through sanitizeTSIdent.
+	prog := renderProgram(ProjectConfig{
+		Name: "acme-infra",
+		Resources: []parser.Resource{{
+			ID: "aws_s3_bucket.seed", Type: "aws_s3_bucket",
+			Name:       "acme-infra_seed",
+			Properties: map[string]any{"bucket": "x"},
+		}},
+	})
+	// Hyphen replaced with underscore after camelCase; the identifier
+	// is legal TS. We don't pin the exact form, just that no hyphen
+	// appears in a `const` or `export const` identifier.
+	for _, line := range strings.Split(prog, "\n") {
+		if strings.HasPrefix(line, "const ") || strings.HasPrefix(line, "export const ") {
+			// Everything between the keyword and "=" is the identifier
+			// (with any type annotation); strip to that window.
+			trimmed := strings.TrimPrefix(strings.TrimPrefix(line, "export "), "const ")
+			if idx := strings.IndexByte(trimmed, '='); idx > 0 {
+				trimmed = trimmed[:idx]
+			}
+			if strings.Contains(trimmed, "-") {
+				t.Errorf("emitted hyphenated identifier: %q", line)
+			}
+		}
+	}
+}
+
+func TestSanitizeTSIdent(t *testing.T) {
+	cases := map[string]string{
+		"webServer":      "webServer",
+		"acme-infraSeed": "acme_infraSeed",
+		"1_starts_digit": "_1_starts_digit",
+		"name with space": "name_with_space",
+		"":                "_",
+	}
+	for in, want := range cases {
+		if got := sanitizeTSIdent(in); got != want {
+			t.Errorf("sanitizeTSIdent(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRenderStackYaml_PerProviderDefaults(t *testing.T) {
+	// AWS + GCP resources with empty cfg.Region — each provider must
+	// pick up its own default, not share the first one applied.
+	y := renderStackYaml(ProjectConfig{
+		Name: "mix",
+		Resources: []parser.Resource{
+			{ID: "aws_s3_bucket.a", Type: "aws_s3_bucket", Name: "a"},
+			{ID: "google_storage_bucket.b", Type: "google_storage_bucket", Name: "b"},
+		},
+	}, "dev")
+	mustContain(t, y, "aws:region: us-east-1")
+	mustContain(t, y, "gcp:region: us-central1")
+}
+
+func TestRenderStackYaml_AzureHonorsCfgRegion(t *testing.T) {
+	y := renderStackYaml(ProjectConfig{
+		Name:   "x",
+		Region: "EastUS2",
+		Resources: []parser.Resource{
+			{ID: "azurerm_resource_group.a", Type: "azurerm_resource_group", Name: "a"},
+		},
+	}, "dev")
+	mustContain(t, y, "azure-native:location: EastUS2")
+	// Azure default kicks in only when Region is empty.
+	yDefault := renderStackYaml(ProjectConfig{
+		Name: "x",
+		Resources: []parser.Resource{
+			{ID: "azurerm_resource_group.a", Type: "azurerm_resource_group", Name: "a"},
+		},
+	}, "dev")
+	mustContain(t, yDefault, "azure-native:location: WestUS2")
+}
+
 func TestToCamelCase(t *testing.T) {
 	cases := map[string]string{
 		"web_server":      "webServer",

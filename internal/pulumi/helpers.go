@@ -2,6 +2,7 @@ package pulumi
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -184,6 +185,33 @@ func toCamelCase(s string) string {
 	return out
 }
 
+// sanitizeTSIdent turns an arbitrary resource name into a valid
+// TypeScript identifier. camelCase on resource names like
+// "<project>_seed" is fine when the project is a valid identifier,
+// but project names are allowed to contain hyphens ("acme-infra"),
+// which would produce `const acme-infraSeed = …` — parse error. We
+// replace any non-[A-Za-z0-9_] with "_" and prefix a "_" when the
+// first rune is a digit so the result is always a legal identifier.
+func sanitizeTSIdent(s string) string {
+	if s == "" {
+		return "_"
+	}
+	var b strings.Builder
+	for _, r := range s {
+		switch {
+		case unicode.IsLetter(r), unicode.IsDigit(r), r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := b.String()
+	if unicode.IsDigit(rune(out[0])) {
+		out = "_" + out
+	}
+	return out
+}
+
 // tsPropValue renders a resource property as TypeScript source. Maps
 // and slices recurse; primitive scalars emit their literal form. The
 // output is deterministic (sorted map keys) so two runs with the same
@@ -210,13 +238,7 @@ func tsPropValue(v any) string {
 			keys = append(keys, k)
 		}
 		// Sort for deterministic output (Go maps iterate randomly).
-		for i := 0; i < len(keys); i++ {
-			for j := i + 1; j < len(keys); j++ {
-				if keys[j] < keys[i] {
-					keys[i], keys[j] = keys[j], keys[i]
-				}
-			}
-		}
+		sort.Strings(keys)
 		items := make([]string, 0, len(keys))
 		for _, k := range keys {
 			items = append(items, fmt.Sprintf("%q: %s", k, tsPropValue(x[k])))

@@ -280,14 +280,18 @@ func (sr *SafeRunner) ExecutePlanJSON(ctx context.Context, projectDir, tool stri
 
 // RequiresApproval returns true if the command needs plan review first.
 // Covers both the Terraform/Ansible vocabulary ("apply", "destroy")
-// and Pulumi's native verbs ("up") so every destructive action lands
-// on the approval gate regardless of which tool the user picked.
+// and Pulumi's native verbs ("up", "refresh") so every state-mutating
+// action lands on the approval gate regardless of which tool the user
+// picked. refresh is gated because Pulumi's refresh re-reads and
+// overwrites the stack state file with whatever it observes in the
+// cloud — a surprise refresh can hide drift an operator wanted to
+// investigate.
 func (sr *SafeRunner) RequiresApproval(command string) bool {
 	if !sr.defaults.RequireApproval {
 		return false
 	}
 	switch command {
-	case "apply", "up", "destroy":
+	case "apply", "up", "destroy", "refresh":
 		return true
 	}
 	return false

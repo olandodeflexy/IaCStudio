@@ -158,7 +158,7 @@ func TestRequiresApproval_CoversPulumiUp(t *testing.T) {
 		"apply":   true,
 		"up":      true,
 		"destroy": true,
-		"refresh": false,
+		"refresh": true, // state-mutating — gated alongside apply/destroy
 	}
 	for cmd, want := range cases {
 		if got := sr.RequiresApproval(cmd); got != want {

@@ -113,26 +113,37 @@ runtime:
 // projects will layer in secrets (Config.requireSecret) and stack
 // references; we stop at region today and let the scaffold composer
 // add environment-specific blocks.
+//
+// Region handling keeps a separate default per provider so a project
+// mixing AWS + GCP resources with an empty cfg.Region gets both
+// us-east-1 for AWS and us-central1 for GCP, instead of AWS's value
+// leaking into GCP's config. Azure honours cfg.Region too (treating
+// it as a location name) and falls back to WestUS2.
 func renderStackYaml(cfg ProjectConfig, env string) string {
 	hasAWS, hasGCP, hasAzure := detectProviders(cfg.Resources)
-	region := cfg.Region
+	awsRegion := cfg.Region
+	gcpRegion := cfg.Region
+	azureLocation := cfg.Region
 
 	var lines []string
 	lines = append(lines, "config:")
 	if hasAWS {
-		if region == "" {
-			region = "us-east-1"
+		if awsRegion == "" {
+			awsRegion = "us-east-1"
 		}
-		lines = append(lines, "  aws:region: "+region)
+		lines = append(lines, "  aws:region: "+awsRegion)
 	}
 	if hasGCP {
-		if region == "" {
-			region = "us-central1"
+		if gcpRegion == "" {
+			gcpRegion = "us-central1"
 		}
-		lines = append(lines, "  gcp:region: "+region)
+		lines = append(lines, "  gcp:region: "+gcpRegion)
 	}
 	if hasAzure {
-		lines = append(lines, "  azure-native:location: WestUS2")
+		if azureLocation == "" {
+			azureLocation = "WestUS2"
+		}
+		lines = append(lines, "  azure-native:location: "+azureLocation)
 	}
 	lines = append(lines, fmt.Sprintf("  %s:environment: %s", cfg.Name, env))
 	return strings.Join(lines, "\n") + "\n"
@@ -227,7 +238,10 @@ func renderProgram(cfg ProjectConfig) string {
 	b.WriteString("const environment = config.get(\"environment\") ?? \"dev\";\n\n")
 
 	for _, r := range cfg.Resources {
-		varName := toCamelCase(r.Name)
+		// Sanitize before camel-casing because project names can
+		// contain hyphens ("acme-infra") which would otherwise produce
+		// invalid TypeScript identifiers like `acme-infraSeed`.
+		varName := sanitizeTSIdent(toCamelCase(r.Name))
 		pType := terraformToPulumi(r.Type)
 		b.WriteString(fmt.Sprintf("const %s = new %s(%q, {\n", varName, pType, r.Name))
 
@@ -255,7 +269,7 @@ func renderProgram(cfg ProjectConfig) string {
 
 	b.WriteString("// Exports — consumed by stack references + CI assertions.\n")
 	for _, r := range cfg.Resources {
-		varName := toCamelCase(r.Name)
+		varName := sanitizeTSIdent(toCamelCase(r.Name))
 		b.WriteString(fmt.Sprintf("export const %sId = %s.id;\n", varName, varName))
 	}
 	return b.String()

@@ -13,17 +13,18 @@ import (
 //
 //	environments/{env}/{index.ts, Pulumi.yaml, Pulumi.<env>.yaml,
 //	                    package.json, tsconfig.json, .gitignore}
-//	modules/{module}/README.md            (stub — TS modules ship as
-//	                                       ComponentResources in a later
-//	                                       commit)
 //	scripts/{init,plan,apply,destroy}.sh
-//	README.md, .iac-studio.json
+//	README.md, .iac-studio.json, .gitignore
 //
 // Each environment is a self-contained Pulumi project — same pattern as
 // Terraform's per-env root directory. True dual-stack (some envs on
 // Terraform, others on Pulumi in the same project) is a follow-up that
 // extends this blueprint with a per-env tool selector. For now the
 // user picks Pulumi OR Terraform at project creation time.
+//
+// Reusable modules aren't emitted today: in Pulumi those are
+// ComponentResources rather than separate directory scaffolds, so
+// they belong in a later commit that ships a component helper library.
 type LayeredPulumiBlueprint struct{}
 
 func (b *LayeredPulumiBlueprint) ID() string          { return "layered-pulumi" }
@@ -40,8 +41,8 @@ func (b *LayeredPulumiBlueprint) Inputs() []Input {
 			Options: []string{"aws", "gcp", "azure"}, Default: "aws", Required: true},
 		{Key: "environments", Label: "Environments", Type: "multiselect",
 			Options: []string{"dev", "staging", "prod"}, Default: []string{"dev", "prod"}},
-		{Key: "region", Label: "Primary region", Type: "string", Default: "us-east-1",
-			Description: "Baked into each Pulumi.<env>.yaml as <provider>:region."},
+		{Key: "region", Label: "Primary region / location", Type: "string", Default: "us-east-1",
+			Description: "Baked into each Pulumi.<env>.yaml using the cloud-specific config key: aws:region / gcp:region / azure-native:location."},
 		{Key: "owner_tag", Label: "Owner tag", Type: "string", Default: "platform"},
 	}
 }
@@ -72,8 +73,10 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 	// A minimal seed resource per cloud so the generated program isn't
 	// empty. Users replace/extend via the canvas; the seed exists so
 	// `pulumi preview` succeeds immediately after scaffolding without
-	// requiring the user to edit index.ts by hand.
-	seed := seedResourcesFor(cloud, name)
+	// requiring the user to edit index.ts by hand. owner_tag flows
+	// onto the seed's tags so the configured value round-trips to
+	// real infrastructure instead of being a decorative input.
+	seed := seedResourcesFor(cloud, name, owner)
 
 	var files []File
 	for _, env := range envs {
@@ -129,7 +132,12 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 // replaces these as the user designs real infrastructure; without a
 // seed, `pulumi preview` would succeed with zero resources which
 // looks like an empty project and misleads new users.
-func seedResourcesFor(cloud, projectName string) []parser.Resource {
+//
+// owner is stamped onto the resource's tags so the scaffold's
+// owner_tag input isn't a decorative no-op — it round-trips through
+// the generator into real infrastructure metadata.
+func seedResourcesFor(cloud, projectName, owner string) []parser.Resource {
+	tags := map[string]any{"Owner": owner, "ManagedBy": "iac-studio"}
 	switch cloud {
 	case "aws":
 		return []parser.Resource{{
@@ -138,6 +146,7 @@ func seedResourcesFor(cloud, projectName string) []parser.Resource {
 			Name: projectName + "_seed",
 			Properties: map[string]any{
 				"bucket": projectName + "-seed",
+				"tags":   tags,
 			},
 		}}
 	case "gcp":
@@ -148,6 +157,7 @@ func seedResourcesFor(cloud, projectName string) []parser.Resource {
 			Properties: map[string]any{
 				"name":     projectName + "-seed",
 				"location": "US",
+				"labels":   tags, // GCP uses "labels", not "tags"
 			},
 		}}
 	case "azure":
@@ -158,6 +168,7 @@ func seedResourcesFor(cloud, projectName string) []parser.Resource {
 			Properties: map[string]any{
 				"name":     projectName + "-rg",
 				"location": "WestUS2",
+				"tags":     tags,
 			},
 		}}
 	}
