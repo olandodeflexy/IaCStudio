@@ -129,6 +129,14 @@ func (r *Runner) terraformArgs(command, binary string) []string {
 // Every destructive verb carries --yes because the SafeRunner's
 // approval gate fronts them — we rely on the server-side plan review
 // rather than Pulumi's own interactive confirmation.
+//
+// Layout note: these args run in the caller's workdir. A single-env
+// Pulumi project (Pulumi.yaml at the root) works as-is. Layered-
+// pulumi projects (Pulumi.yaml under environments/<env>/) need the
+// runner to cd into the env subdir first — that plumbing is a
+// follow-up; for now, layered-pulumi users run through the scaffold's
+// scripts/{init,plan,apply,destroy}.sh wrappers which handle the cd
+// per-env themselves.
 func (r *Runner) pulumiArgs(command string) []string {
 	switch command {
 	case "init":

@@ -168,25 +168,28 @@ func renderStackYaml(cfg ProjectConfig, env string) string {
 
 	var lines []string
 	lines = append(lines, "config:")
+	// Route every user-supplied value through yamlScalar so a Region
+	// containing colons or whitespace (legal for some Azure location
+	// names) can't break the manifest.
 	if hasAWS {
 		if awsRegion == "" {
 			awsRegion = "us-east-1"
 		}
-		lines = append(lines, "  aws:region: "+awsRegion)
+		lines = append(lines, "  aws:region: "+yamlScalar(awsRegion))
 	}
 	if hasGCP {
 		if gcpRegion == "" {
 			gcpRegion = "us-central1"
 		}
-		lines = append(lines, "  gcp:region: "+gcpRegion)
+		lines = append(lines, "  gcp:region: "+yamlScalar(gcpRegion))
 	}
 	if hasAzure {
 		if azureLocation == "" {
 			azureLocation = "WestUS2"
 		}
-		lines = append(lines, "  azure-native:location: "+azureLocation)
+		lines = append(lines, "  azure-native:location: "+yamlScalar(azureLocation))
 	}
-	lines = append(lines, fmt.Sprintf("  %s:environment: %s", cfg.Name, env))
+	lines = append(lines, fmt.Sprintf("  %s:environment: %s", cfg.Name, yamlScalar(env)))
 	return strings.Join(lines, "\n") + "\n"
 }
 

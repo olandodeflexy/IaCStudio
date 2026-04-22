@@ -314,9 +314,13 @@ func (sr *SafeRunner) timeoutFor(command string) time.Duration {
 	switch command {
 	case "init":
 		return sr.defaults.InitTimeout
-	case "plan":
+	case "plan", "preview":
 		return sr.defaults.PlanTimeout
-	case "apply", "destroy":
+	case "apply", "up", "destroy", "refresh":
+		// Pulumi's "up" and "refresh" mutate state the same way
+		// terraform's "apply" / "destroy" do — give them the long
+		// apply-timeout bucket so real stacks don't hit the 5-minute
+		// DefaultTimeout prematurely.
 		return sr.defaults.ApplyTimeout
 	default:
 		return sr.defaults.DefaultTimeout

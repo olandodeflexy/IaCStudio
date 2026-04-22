@@ -234,7 +234,11 @@ func sanitizeTSIdent(s string) string {
 		}
 	}
 	out := b.String()
-	if unicode.IsDigit(rune(out[0])) {
+	// Use []rune so a multibyte UTF-8 leading character isn't
+	// misidentified by a naive byte check. IsDigit on the first rune
+	// decides the underscore prefix.
+	runes := []rune(out)
+	if len(runes) > 0 && unicode.IsDigit(runes[0]) {
 		out = "_" + out
 	}
 	return out

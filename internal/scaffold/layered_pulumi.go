@@ -3,11 +3,61 @@ package scaffold
 import (
 	"encoding/json"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/pulumi"
 )
+
+// tagValueRE is a tool-agnostic accept pattern for free-form tag/
+// label values. Allows letters, digits, spaces, _.:/=+-@ — the
+// Terraform HCL-safe set without emphasising HCL in the error
+// message. Kept separate from validateHCLSafeValue (which exists in
+// the terraform blueprint with terraform-specific wording) so Pulumi
+// users don't see "generated HCL" hints when a value fails.
+var tagValueRE = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+\-@]{1,128}$`)
+
+// gcpLabelRE tightens tag validation for GCP labels: values must be
+// [a-z0-9_-], ≤63 chars, non-empty. The Pulumi blueprint normalises
+// to this subset via sanitizeGCPLabel so a user-entered "Team A"
+// doesn't reach the provider as an invalid label.
+var gcpLabelRE = regexp.MustCompile(`^[a-z0-9_-]{0,63}$`)
+
+func validateTagValue(key, value string) error {
+	if value == "" {
+		return fmt.Errorf("%s must not be empty", key)
+	}
+	if !tagValueRE.MatchString(value) {
+		return fmt.Errorf("%s %q is invalid: use letters, digits, spaces, and _.:/=+-@ (≤128 chars)", key, value)
+	}
+	return nil
+}
+
+// sanitizeGCPLabel coerces an arbitrary value to the GCP label
+// charset. Lowercases, replaces anything outside [a-z0-9_-] with "_",
+// and clamps to 63 chars. Empty input returns "_" so the provider
+// accepts it (GCP rejects empty label values).
+func sanitizeGCPLabel(v string) string {
+	v = strings.ToLower(v)
+	var b strings.Builder
+	for _, r := range v {
+		switch {
+		case (r >= 'a' && r <= 'z'), (r >= '0' && r <= '9'), r == '-', r == '_':
+			b.WriteRune(r)
+		default:
+			b.WriteRune('_')
+		}
+	}
+	out := b.String()
+	if out == "" {
+		return "_"
+	}
+	if len(out) > 63 {
+		out = out[:63]
+	}
+	return out
+}
 
 // LayeredPulumiBlueprint renders a multi-environment Pulumi
 // TypeScript project mirroring the layered-terraform structure:
@@ -67,7 +117,7 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 	}
 	region := stringInput(values, "region", "us-east-1")
 	owner := stringInput(values, "owner_tag", "platform")
-	if err := validateHCLSafeValue("owner_tag", owner); err != nil {
+	if err := validateTagValue("owner_tag", owner); err != nil {
 		return nil, err
 	}
 
@@ -76,8 +126,10 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 	// `pulumi preview` succeeds immediately after scaffolding without
 	// requiring the user to edit index.ts by hand. owner_tag flows
 	// onto the seed's tags so the configured value round-trips to
-	// real infrastructure instead of being a decorative input.
-	seed := seedResourcesFor(cloud, name, owner)
+	// real infrastructure instead of being a decorative input. region
+	// is threaded through so the seed's location matches the stack
+	// config (previously hardcoded to US / WestUS2 regardless).
+	seed := seedResourcesFor(cloud, name, owner, region)
 
 	var files []File
 	for _, env := range envs {
@@ -138,15 +190,20 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 // looks like an empty project and misleads new users.
 //
 // owner is stamped onto the resource's tags (or GCP-native labels) so
-// the scaffold's owner_tag input isn't a decorative no-op — it round-
-// trips through the generator into real infrastructure metadata.
-func seedResourcesFor(cloud, projectName, owner string) []parser.Resource {
+// the scaffold's owner_tag input isn't a decorative no-op. region
+// drives the seed's location value too — the stack config already
+// carries it, and forcing a hardcoded "US" / "WestUS2" would create a
+// confusing mismatch between stack yaml and resource location.
+func seedResourcesFor(cloud, projectName, owner, region string) []parser.Resource {
 	// AWS/Azure accept PascalCase tag keys; GCP labels must be
-	// lowercase and typically snake_case (`[a-z0-9_-]`). Build both
-	// shapes and pick per cloud rather than reusing one map across
-	// all three.
+	// lowercase [a-z0-9_-] so values get sanitised rather than just
+	// lowercased — "Team A" → "team_a" so the provider doesn't reject
+	// at apply time.
 	awsAzureTags := map[string]any{"Owner": owner, "ManagedBy": "iac-studio"}
-	gcpLabels := map[string]any{"owner": strings.ToLower(owner), "managed_by": "iac-studio"}
+	gcpLabels := map[string]any{
+		"owner":      sanitizeGCPLabel(owner),
+		"managed_by": "iac-studio",
+	}
 	switch cloud {
 	case "aws":
 		return []parser.Resource{{
@@ -159,24 +216,36 @@ func seedResourcesFor(cloud, projectName, owner string) []parser.Resource {
 			},
 		}}
 	case "gcp":
+		// GCS bucket locations use short names (US, EU, ASIA) or
+		// specific multi-regions. If the user provided a canonical
+		// region like us-central1 we fall back to US so the seed
+		// doesn't reject; hand-editable after scaffold.
+		loc := "US"
+		if region != "" && !strings.Contains(region, "-") {
+			loc = strings.ToUpper(region)
+		}
 		return []parser.Resource{{
 			ID:   "google_storage_bucket.seed",
 			Type: "google_storage_bucket",
 			Name: projectName + "_seed",
 			Properties: map[string]any{
 				"name":     projectName + "-seed",
-				"location": "US",
+				"location": loc,
 				"labels":   gcpLabels,
 			},
 		}}
 	case "azure":
+		loc := region
+		if loc == "" {
+			loc = "WestUS2"
+		}
 		return []parser.Resource{{
 			ID:   "azurerm_resource_group.seed",
 			Type: "azurerm_resource_group",
 			Name: projectName + "_seed",
 			Properties: map[string]any{
 				"name":     projectName + "-rg",
-				"location": "WestUS2",
+				"location": loc,
 				"tags":     awsAzureTags,
 			},
 		}}
