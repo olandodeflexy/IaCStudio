@@ -1,0 +1,40 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* CSS variables for shadcn/ui components. Hues chosen to match the
+ * existing dark palette in theme.css so both layers (legacy CSS and
+ * new Tailwind utilities) render coherently during the migration. */
+@layer base {
+  :root {
+    --background: 172 12% 7%;
+    --foreground: 140 14% 88%;
+
+    --card: 170 13% 10%;
+    --card-foreground: 140 14% 88%;
+
+    --popover: 170 13% 12%;
+    --popover-foreground: 140 14% 92%;
+
+    --primary: 172 43% 52%;
+    --primary-foreground: 172 50% 10%;
+
+    --secondary: 170 13% 16%;
+    --secondary-foreground: 140 14% 88%;
+
+    --muted: 170 13% 14%;
+    --muted-foreground: 150 10% 62%;
+
+    --accent: 172 43% 28%;
+    --accent-foreground: 140 14% 92%;
+
+    --destructive: 0 52% 60%;
+    --destructive-foreground: 0 0% 98%;
+
+    --border: 170 10% 22%;
+    --input: 170 10% 22%;
+    --ring: 172 43% 52%;
+
+    --radius: 10px;
+  }
+}
