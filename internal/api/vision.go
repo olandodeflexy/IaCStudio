@@ -42,7 +42,12 @@ func registerVisionRoutes(mux *http.ServeMux, aiClient *ai.Client) {
 	//   description string (optional, extra context for the model)
 	//   image       file(s) (required; repeatable up to maxImagesPerRequest)
 	//
-	// Response: same JSON shape as /api/ai/topology
+	// Response is synchronous — the model call blocks until the topology
+	// comes back, then the handler writes the same {message, resources}
+	// payload the text-topology WebSocket event carries. (Text topology
+	// runs async with a 202 + WS result; vision runs sync because the
+	// request itself is already a multipart upload and a second round-
+	// trip to deliver the result adds no value.)
 	//   { "message": "...", "resources": [...] }
 	mux.HandleFunc("POST /api/ai/topology/image", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxVisionReqBytes)
@@ -56,6 +61,11 @@ func registerVisionRoutes(mux *http.ServeMux, aiClient *ai.Client) {
 			http.Error(w, "invalid multipart body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		// ParseMultipartForm spills to tmp files above its 32MB default
+		// in-memory cap. RemoveAll cleans those up when the handler
+		// returns — without it, aborted uploads would leave temp files
+		// behind for the lifetime of the process.
+		defer func() { _ = r.MultipartForm.RemoveAll() }()
 
 		tool := strings.TrimSpace(r.FormValue("tool"))
 		if tool == "" {

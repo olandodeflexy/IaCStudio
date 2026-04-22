@@ -60,16 +60,18 @@ type Request struct {
 	Cacheable bool
 }
 
-// Image is one visual attachment appended to a Request when the caller
-// wants the model to reason over a diagram. Providers that support
-// vision (Anthropic Opus/Sonnet, OpenAI GPT-4o, Google Gemini)
-// base64-encode Data and include MediaType in the API call; providers
-// without vision ignore the field.
+// Image is one visual attachment passed to VisionUser.CompleteWithImages
+// when the caller wants the model to reason over a diagram. Vision-
+// capable providers (Anthropic Opus/Sonnet, OpenAI GPT-4o, Google
+// Gemini) base64-encode Data and include MediaType in the API call.
+// Providers that don't support vision simply don't implement
+// VisionUser — callers type-assert on it before reaching for this
+// type, so there's no branch to take on the Image itself.
 //
 // MediaType follows the MIME form ("image/png", "image/jpeg",
 // "image/webp", "image/gif"). Validation happens at the HTTP boundary
-// — a caller that hands a Request with an unsupported MediaType to a
-// vision-capable provider gets a provider-specific error back.
+// — a caller that hands an unsupported MediaType to a vision-capable
+// provider gets a provider-specific error back.
 type Image struct {
 	MediaType string
 	Data      []byte
