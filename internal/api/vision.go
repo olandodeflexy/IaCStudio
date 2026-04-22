@@ -189,6 +189,14 @@ func readUploadedImages(r *http.Request) ([]ai.DiagramImage, error) {
 		if int64(len(data)) > maxImageBytes {
 			return nil, fmt.Errorf("image %q exceeds %dMB limit", fh.Filename, maxImageBytes/1024/1024)
 		}
+		if len(data) == 0 {
+			// Empty uploads would pass our len(images)>0 gate but get
+			// silently dropped by the provider's MediaType/Data filter,
+			// so the model runs text-only without warning the user.
+			// Reject at the boundary so the endpoint reliably requires
+			// a real image payload.
+			return nil, fmt.Errorf("image %q is empty — upload must contain image data", fh.Filename)
+		}
 		out = append(out, ai.DiagramImage{MediaType: mediaType, Data: data})
 	}
 	return out, nil

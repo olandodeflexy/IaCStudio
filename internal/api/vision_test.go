@@ -213,6 +213,33 @@ func TestVision_AcceptsContentTypeWithParametersAndCase(t *testing.T) {
 	}
 }
 
+func TestVision_RejectsEmptyImageUpload(t *testing.T) {
+	// A zero-byte image with a valid Content-Type used to pass the
+	// handler's len(images)>0 gate but then get silently dropped by
+	// the provider's MediaType/Data filter, running the model text-
+	// only. The boundary check now rejects empty payloads explicitly.
+	srv := httptest.NewServer(visionMux(t, ai.NewClient("http://127.0.0.1:1", "x")))
+	defer srv.Close()
+
+	body, ct := buildVisionBody(t, "terraform", []struct {
+		name      string
+		mediaType string
+		data      []byte
+	}{{"empty.png", "image/png", []byte{}}})
+	resp, err := http.Post(srv.URL+"/api/ai/topology/image", ct, body)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("want 400 for empty upload, got %d", resp.StatusCode)
+	}
+	msg, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(msg), "empty") {
+		t.Errorf("want 'empty' hint, got %q", msg)
+	}
+}
+
 func TestVision_RejectsOversizedImage(t *testing.T) {
 	srv := httptest.NewServer(visionMux(t, ai.NewClient("http://127.0.0.1:1", "x")))
 	defer srv.Close()
