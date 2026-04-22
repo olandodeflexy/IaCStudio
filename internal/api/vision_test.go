@@ -183,6 +183,31 @@ func TestVision_RejectsTooManyImages(t *testing.T) {
 	}
 }
 
+func TestVision_AcceptsContentTypeWithParametersAndCase(t *testing.T) {
+	// "Image/JPEG; charset=binary" must be accepted — parseMediaType
+	// strips the parameter and lowercases the type. The underlying
+	// provider still rejects (non-vision Ollama), so we expect the
+	// 400 to carry the vision-provider hint, not an unsupported-type
+	// error.
+	srv := httptest.NewServer(visionMux(t, ai.NewClient("http://127.0.0.1:1", "x")))
+	defer srv.Close()
+
+	body, ct := buildVisionBody(t, "terraform", []struct {
+		name      string
+		mediaType string
+		data      []byte
+	}{{"diag.jpeg", "Image/JPEG; charset=binary", []byte{0xFF, 0xD8, 0xFF}}})
+	resp, err := http.Post(srv.URL+"/api/ai/topology/image", ct, body)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	msg, _ := io.ReadAll(resp.Body)
+	if strings.Contains(string(msg), "unsupported image type") {
+		t.Errorf("Content-Type with parameters/case should be accepted, got: %s", msg)
+	}
+}
+
 func TestVision_RejectsOversizedImage(t *testing.T) {
 	srv := httptest.NewServer(visionMux(t, ai.NewClient("http://127.0.0.1:1", "x")))
 	defer srv.Close()

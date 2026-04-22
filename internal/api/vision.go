@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"strings"
 
@@ -14,10 +15,18 @@ import (
 // payload at 20MB — matches Anthropic's documented limits (8MB per
 // image, 20MB per request) so we reject oversize uploads before
 // burning a round-trip.
+//
+// multipartMaxMemory is the small in-memory buffer ParseMultipartForm
+// keeps before spilling to tmp files. 1MB is enough for the form
+// fields (tool / provider / description) + part headers, which is all
+// we want in RAM — uploaded images should spool to disk so we don't
+// double-buffer (once by ParseMultipartForm, once by readUploadedImages
+// into a new []byte per file).
 const (
-	maxImageBytes      int64 = 8 * 1024 * 1024
-	maxVisionReqBytes  int64 = 20 * 1024 * 1024
-	maxImagesPerRequest      = 5
+	maxImageBytes       int64 = 8 * 1024 * 1024
+	maxVisionReqBytes   int64 = 20 * 1024 * 1024
+	multipartMaxMemory  int64 = 1 * 1024 * 1024
+	maxImagesPerRequest       = 5
 )
 
 // allowedImageMediaTypes mirrors the formats Anthropic's vision
@@ -29,6 +38,22 @@ var allowedImageMediaTypes = map[string]struct{}{
 	"image/jpg":  {},
 	"image/webp": {},
 	"image/gif":  {},
+}
+
+// parseMediaType normalises a multipart part's Content-Type header:
+// strips parameters (e.g. "image/jpeg; charset=binary" → "image/jpeg")
+// and lowercases the result so the allow-list check is insensitive to
+// casing and per-client variations. Returns the stripped+lowered
+// media type, or an error when the header can't be parsed at all.
+func parseMediaType(raw string) (string, error) {
+	if raw == "" {
+		return "", fmt.Errorf("missing content-type")
+	}
+	mt, _, err := mime.ParseMediaType(raw)
+	if err != nil {
+		return "", err
+	}
+	return strings.ToLower(mt), nil
 }
 
 // registerVisionRoutes wires the diagram-to-topology endpoint. Isolated
@@ -57,14 +82,15 @@ func registerVisionRoutes(mux *http.ServeMux, aiClient *ai.Client) {
 			http.Error(w, "expected multipart/form-data", http.StatusUnsupportedMediaType)
 			return
 		}
-		if err := r.ParseMultipartForm(maxVisionReqBytes); err != nil {
+		if err := r.ParseMultipartForm(multipartMaxMemory); err != nil {
 			http.Error(w, "invalid multipart body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
-		// ParseMultipartForm spills to tmp files above its 32MB default
-		// in-memory cap. RemoveAll cleans those up when the handler
-		// returns — without it, aborted uploads would leave temp files
-		// behind for the lifetime of the process.
+		// ParseMultipartForm may create temporary files for file parts
+		// that don't fit in multipartMaxMemory (and at 1MB we expect
+		// every image to spool to disk). RemoveAll cleans those up when
+		// the handler returns — without it, temp files would linger
+		// until process exit.
 		defer func() { _ = r.MultipartForm.RemoveAll() }()
 
 		tool := strings.TrimSpace(r.FormValue("tool"))
@@ -114,9 +140,9 @@ func registerVisionRoutes(mux *http.ServeMux, aiClient *ai.Client) {
 //   - individual images over maxImageBytes
 //   - more than maxImagesPerRequest uploads
 //
-// The file reader is bounded with io.LimitReader so a client claiming
-// a small Content-Length can't sneak past by streaming more bytes than
-// declared.
+// Each multipart file is read through io.LimitReader(maxImageBytes+1)
+// so we enforce the per-image size cap while reading and can detect
+// uploads that exceed maxImageBytes.
 func readUploadedImages(r *http.Request) ([]ai.DiagramImage, error) {
 	files := r.MultipartForm.File["image"]
 	if len(files) > maxImagesPerRequest {
@@ -124,7 +150,10 @@ func readUploadedImages(r *http.Request) ([]ai.DiagramImage, error) {
 	}
 	out := make([]ai.DiagramImage, 0, len(files))
 	for _, fh := range files {
-		mediaType := fh.Header.Get("Content-Type")
+		mediaType, err := parseMediaType(fh.Header.Get("Content-Type"))
+		if err != nil {
+			return nil, fmt.Errorf("unsupported image type %q — use png, jpeg, webp, or gif", fh.Header.Get("Content-Type"))
+		}
 		if _, ok := allowedImageMediaTypes[mediaType]; !ok {
 			return nil, fmt.Errorf("unsupported image type %q — use png, jpeg, webp, or gif", mediaType)
 		}

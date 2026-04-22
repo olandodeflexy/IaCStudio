@@ -1,13 +1,9 @@
 package providers
 
 import (
-	"bytes"
 	"context"
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"strings"
 )
 
@@ -23,11 +19,6 @@ import (
 func (p *anthropicProvider) CompleteWithImages(ctx context.Context, req Request, images []Image) (string, error) {
 	if len(images) == 0 {
 		return p.Complete(ctx, req)
-	}
-
-	maxTokens := req.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 4096
 	}
 
 	// Build a content-block array: images first (the model attends more
@@ -59,62 +50,12 @@ func (p *anthropicProvider) CompleteWithImages(ctx context.Context, req Request,
 		Model:       p.model,
 		System:      buildSystemField(req.System, req.Cacheable),
 		Messages:    []anthropicVisionMessage{{Role: "user", Content: content}},
-		MaxTokens:   maxTokens,
+		MaxTokens:   clampMaxTokens(req.MaxTokens),
 		Temperature: req.Temperature,
 	}
-	raw, _ := json.Marshal(reqBody)
-
-	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(raw))
-	if err != nil {
-		return "", err
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("x-api-key", p.apiKey)
-	httpReq.Header.Set("anthropic-version", p.apiVersion)
-
-	resp, err := p.client.Do(httpReq)
-	if err != nil {
-		return "", fmt.Errorf("anthropic API unavailable: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("read anthropic response: %w", err)
-	}
-
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		var apiErr anthropicResponse
-		if err := json.Unmarshal(body, &apiErr); err == nil && apiErr.Error != nil && apiErr.Error.Message != "" {
-			return "", fmt.Errorf("anthropic API error (status %d): %s", resp.StatusCode, apiErr.Error.Message)
-		}
-		if msg := strings.TrimSpace(string(body)); msg != "" {
-			return "", fmt.Errorf("anthropic API error (status %d): %s", resp.StatusCode, msg)
-		}
-		return "", fmt.Errorf("anthropic API error (status %d)", resp.StatusCode)
-	}
-
-	var decoded anthropicResponse
-	if err := json.Unmarshal(body, &decoded); err != nil {
-		return "", fmt.Errorf("decode anthropic response: %w", err)
-	}
-	if decoded.Error != nil {
-		return "", fmt.Errorf("anthropic API error: %s", decoded.Error.Message)
-	}
-	p.recordUsage(decoded.Usage)
-	if len(decoded.Content) == 0 {
-		return "", ErrEmptyResponse
-	}
-	var out strings.Builder
-	for _, block := range decoded.Content {
-		if block.Type == "text" {
-			out.WriteString(block.Text)
-		}
-	}
-	if out.Len() == 0 {
-		return "", ErrEmptyResponse
-	}
-	return out.String(), nil
+	// Shared round-trip: same headers, error handling, usage
+	// bookkeeping, and content-block concatenation as Complete.
+	return p.postMessagesAndExtractText(ctx, reqBody)
 }
 
 // ─── Vision wire structs ─────────────────────────────────────────
