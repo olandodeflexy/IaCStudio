@@ -318,7 +318,14 @@ func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta Del
 		Temperature: req.Temperature,
 		Stream:      true,
 	}
-	raw, _ := json.Marshal(reqBody)
+	raw, err := json.Marshal(reqBody)
+	if err != nil {
+		// Same defensive handling as postMessagesAndExtractText — known
+		// request shapes marshal cleanly, but a future caller could
+		// embed a non-marshalable value. Surface the encoding failure
+		// instead of silently POSTing an empty body.
+		return "", fmt.Errorf("marshal anthropic stream request: %w", err)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return "", err

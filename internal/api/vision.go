@@ -30,13 +30,16 @@ const (
 	maxImagesPerRequest       = 5
 )
 
-// allowedImageMediaTypes mirrors the formats Anthropic's vision
-// models accept. Kept as a set for O(1) membership; expand if/when a
-// new provider adds support for something else.
+// allowedImageMediaTypes is the handler-side accept list. Anthropic's
+// wire format only accepts image/{png,jpeg,webp,gif}; image/jpg is a
+// common client-side alias that we accept here and normalize to
+// image/jpeg before calling the provider (see readUploadedImages).
+// Kept as a set for O(1) membership; expand if/when a new provider
+// adds support for something else.
 var allowedImageMediaTypes = map[string]struct{}{
 	"image/png":  {},
 	"image/jpeg": {},
-	"image/jpg":  {},
+	"image/jpg":  {}, // alias — normalized to image/jpeg below
 	"image/webp": {},
 	"image/gif":  {},
 }
