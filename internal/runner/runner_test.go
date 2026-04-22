@@ -8,8 +8,8 @@ func TestDetectTools(t *testing.T) {
 	r := New()
 	tools := r.DetectTools()
 
-	if len(tools) != 3 {
-		t.Errorf("DetectTools returned %d tools, want 3", len(tools))
+	if len(tools) != 4 {
+		t.Errorf("DetectTools returned %d tools, want 4", len(tools))
 	}
 
 	names := map[string]bool{}
@@ -23,7 +23,7 @@ func TestDetectTools(t *testing.T) {
 		}
 	}
 
-	for _, expected := range []string{"Terraform", "OpenTofu", "Ansible"} {
+	for _, expected := range []string{"Terraform", "OpenTofu", "Ansible", "Pulumi"} {
 		if !names[expected] {
 			t.Errorf("Missing tool: %s", expected)
 		}
@@ -87,6 +87,50 @@ func TestBuildArgs_Ansible(t *testing.T) {
 	}
 }
 
+func TestBuildArgs_Pulumi(t *testing.T) {
+	r := New()
+
+	cases := []struct {
+		command    string
+		wantBinary string
+		// wantHasYes asserts destructive commands carry --yes so the
+		// CLI doesn't hang on its own interactive confirmation (the
+		// server-side approval gate handles that instead).
+		wantHasYes bool
+	}{
+		{"init", "npm", false},     // npm install, not pulumi stack init
+		{"plan", "pulumi", false},  // preview
+		{"preview", "pulumi", false},
+		{"apply", "pulumi", true},
+		{"up", "pulumi", true},
+		{"destroy", "pulumi", true},
+		{"refresh", "pulumi", true},
+		{"validate", "npx", false}, // tsc --noEmit
+	}
+	for _, tc := range cases {
+		args := r.buildArgs("pulumi", tc.command)
+		if len(args) == 0 {
+			t.Errorf("buildArgs(pulumi, %s) returned empty", tc.command)
+			continue
+		}
+		if args[0] != tc.wantBinary {
+			t.Errorf("buildArgs(pulumi, %s)[0] = %s, want %s", tc.command, args[0], tc.wantBinary)
+		}
+		if tc.wantHasYes {
+			found := false
+			for _, a := range args {
+				if a == "--yes" {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("buildArgs(pulumi, %s) missing --yes flag: %v", tc.command, args)
+			}
+		}
+	}
+}
+
 func TestBuildArgs_Unknown(t *testing.T) {
 	r := New()
 	args := r.buildArgs("unknown_tool", "init")
@@ -100,5 +144,25 @@ func TestBuildArgs_UnknownCommand(t *testing.T) {
 	args := r.buildArgs("terraform", "unknown_command")
 	if args != nil {
 		t.Errorf("Unknown command should return nil, got %v", args)
+	}
+}
+
+// TestRequiresApproval_CoversPulumiUp ensures Pulumi's native 'up'
+// verb lands on the approval gate just like terraform/ansible's
+// 'apply'. A regression here would let pulumi up skip plan review.
+func TestRequiresApproval_CoversPulumiUp(t *testing.T) {
+	sr := NewSafeRunner(DefaultSafetyConfig())
+	cases := map[string]bool{
+		"plan":    false,
+		"preview": false,
+		"apply":   true,
+		"up":      true,
+		"destroy": true,
+		"refresh": false,
+	}
+	for cmd, want := range cases {
+		if got := sr.RequiresApproval(cmd); got != want {
+			t.Errorf("RequiresApproval(%q) = %v, want %v", cmd, got, want)
+		}
 	}
 }

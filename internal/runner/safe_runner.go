@@ -279,11 +279,18 @@ func (sr *SafeRunner) ExecutePlanJSON(ctx context.Context, projectDir, tool stri
 }
 
 // RequiresApproval returns true if the command needs plan review first.
+// Covers both the Terraform/Ansible vocabulary ("apply", "destroy")
+// and Pulumi's native verbs ("up") so every destructive action lands
+// on the approval gate regardless of which tool the user picked.
 func (sr *SafeRunner) RequiresApproval(command string) bool {
 	if !sr.defaults.RequireApproval {
 		return false
 	}
-	return command == "apply" || command == "destroy"
+	switch command {
+	case "apply", "up", "destroy":
+		return true
+	}
+	return false
 }
 
 // ParsePlanSummary extracts the summary line from terraform plan output.

@@ -32,6 +32,7 @@ func (r *Runner) DetectTools() []ToolInfo {
 		{"Terraform", "terraform", []string{"version"}},
 		{"OpenTofu", "tofu", []string{"version"}},
 		{"Ansible", "ansible", []string{"--version"}},
+		{"Pulumi", "pulumi", []string{"version"}},
 	}
 
 	var results []ToolInfo
@@ -88,6 +89,8 @@ func (r *Runner) buildArgs(tool, command string) []string {
 		return r.terraformArgs(command, "tofu")
 	case "ansible":
 		return r.ansibleArgs(command)
+	case "pulumi":
+		return r.pulumiArgs(command)
 	}
 	return nil
 }
@@ -106,6 +109,47 @@ func (r *Runner) terraformArgs(command, binary string) []string {
 		return []string{binary, "validate", "-no-color"}
 	case "fmt":
 		return []string{binary, "fmt"}
+	}
+	return nil
+}
+
+// pulumiArgs maps the canvas's logical command names ("plan" / "apply"
+// / "destroy") onto the Pulumi CLI's native verbs. We keep the same
+// vocabulary the Terraform path uses so the UI doesn't need a per-tool
+// branch — the translation happens here.
+//
+// "init" resolves to `npm install` rather than `pulumi stack init`
+// because the scaffolded project has no stack state yet and stack
+// creation requires an auth backend selection (local vs. Pulumi
+// Cloud) that's outside the runner's scope. Users still run
+// `pulumi login` + `pulumi stack init <env>` once per machine; the
+// safe-runner path below only drives preview/up/destroy/refresh
+// after that bootstrap is done.
+//
+// Every destructive verb carries --yes because the SafeRunner's
+// approval gate fronts them — we rely on the server-side plan review
+// rather than Pulumi's own interactive confirmation.
+func (r *Runner) pulumiArgs(command string) []string {
+	switch command {
+	case "init":
+		// Prime the project: install node_modules so the TS program
+		// compiles. Pulumi itself doesn't need this step, but without
+		// it `pulumi preview` fails immediately on the missing
+		// @pulumi/* SDKs.
+		return []string{"npm", "install"}
+	case "plan", "preview":
+		return []string{"pulumi", "preview", "--non-interactive", "--color=never"}
+	case "apply", "up":
+		return []string{"pulumi", "up", "--yes", "--non-interactive", "--color=never"}
+	case "destroy":
+		return []string{"pulumi", "destroy", "--yes", "--non-interactive", "--color=never"}
+	case "refresh":
+		return []string{"pulumi", "refresh", "--yes", "--non-interactive", "--color=never"}
+	case "validate":
+		// The closest Pulumi equivalent of `terraform validate` is a
+		// TypeScript compile with no emit — catches type errors
+		// without invoking the engine.
+		return []string{"npx", "tsc", "--noEmit"}
 	}
 	return nil
 }
