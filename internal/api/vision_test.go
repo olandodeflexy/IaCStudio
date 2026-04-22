@@ -182,3 +182,29 @@ func TestVision_RejectsTooManyImages(t *testing.T) {
 		t.Errorf("want 400 for >%d images, got %d", maxImagesPerRequest, resp.StatusCode)
 	}
 }
+
+func TestVision_RejectsOversizedImage(t *testing.T) {
+	srv := httptest.NewServer(visionMux(t, ai.NewClient("http://127.0.0.1:1", "x")))
+	defer srv.Close()
+
+	// Build a payload whose single image is one byte over the per-image limit.
+	oversized := make([]byte, maxImageBytes+1)
+	body, ct := buildVisionBody(t, "terraform", []struct {
+		name      string
+		mediaType string
+		data      []byte
+	}{{"big.png", "image/png", oversized}})
+
+	resp, err := http.Post(srv.URL+"/api/ai/topology/image", ct, body)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("want 400 for oversized image, got %d", resp.StatusCode)
+	}
+	msg, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(msg), "exceeds") {
+		t.Errorf("want 'exceeds' in error message, got %q", string(msg))
+	}
+}

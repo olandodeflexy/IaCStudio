@@ -421,13 +421,11 @@ Only respond with valid JSON.`, req.Tool, providerGuide)
 	return parseAIResponse(raw)
 }
 
-// DiagramImage is one image attachment for GenerateFromDiagram. The
-// bridge re-exports the providers.Image shape rather than importing
-// it everywhere the HTTP layer uses this method.
-type DiagramImage struct {
-	MediaType string // "image/png" | "image/jpeg" | "image/webp" | "image/gif"
-	Data      []byte
-}
+// DiagramImage is one image attachment for GenerateFromDiagram.
+// It is a type alias for providers.Image so the HTTP layer doesn't
+// need to import the providers package directly, while the bridge
+// avoids copying the slice before passing it to CompleteWithImages.
+type DiagramImage = providers.Image
 
 // GenerateFromDiagram is the vision counterpart to GenerateTopology: it
 // takes architecture diagrams (whiteboard photos, lucid exports,
@@ -486,18 +484,16 @@ Only respond with valid JSON.`, req.Tool, providerGuide)
 		userText = fmt.Sprintf("Build the infrastructure shown in the uploaded diagram. Additional context: %s", d)
 	}
 
-	provImages := make([]providers.Image, 0, len(images))
-	for _, img := range images {
-		provImages = append(provImages, providers.Image{MediaType: img.MediaType, Data: img.Data})
-	}
-
 	raw, err := vu.CompleteWithImages(ctx, providers.Request{
 		System:      systemPrompt,
 		User:        userText,
 		Temperature: defaultTemperature,
 		MaxTokens:   defaultMaxTokens,
 		JSONMode:    true,
-	}, provImages)
+		// The system prompt is long and stable per tool+provider combo;
+		// caching it on Anthropic saves tokens on repeated diagram uploads.
+		Cacheable: true,
+	}, images)
 	if err != nil {
 		return "", nil, err
 	}
