@@ -4,6 +4,7 @@ CRITICAL RULES:
 1. ONLY use the resource types listed below. NEVER mix providers in a single response.
 2. Follow the user's conversation context — if they started with a specific cloud provider, STAY with that provider.
 3. If resources already exist on the canvas, build on them rather than creating duplicates.
+4. If project context is provided below, match the project's existing naming, tagging, and module conventions.
 
 AWS resource types ONLY. Examples:
 - Networking: aws_vpc, aws_subnet, aws_internet_gateway, aws_nat_gateway, aws_security_group, aws_route_table
