@@ -158,7 +158,7 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest, onDelta provid
 	if c.providerErr != nil {
 		return "", nil, c.providerErr
 	}
-	systemPrompt := buildSystemPrompt(req.Tool, req.Provider, req.Canvas)
+	systemPrompt := buildSystemPromptWithContext(req.Tool, req.Provider, req.Canvas, req.ProjectContext)
 	userPrompt := buildChatUserPrompt(req)
 
 	raw, err := c.provider.Stream(ctx, providers.Request{
@@ -189,6 +189,15 @@ type ChatRequest struct {
 	Provider string            `json:"provider"` // aws | google | azurerm (auto-detected)
 	History  []ChatMessage     `json:"history"`  // conversation history for context
 	Canvas   []CanvasResource  `json:"canvas"`   // what's currently on the canvas
+	// Project, when set, names the active project. The HTTP layer uses it
+	// to look up the project's RAG index and populate ProjectContext
+	// before calling the bridge.
+	Project string `json:"project,omitempty"`
+	// ProjectContext, when set, is prepended to the system prompt as
+	// retrieved RAG context. The HTTP layer runs the retrieval and fills
+	// this in; the bridge is RAG-unaware so tests can exercise the
+	// prompt path without an embedder.
+	ProjectContext string `json:"-"`
 }
 
 // CanvasResource is a simplified view of what's on the canvas for AI context.
@@ -200,7 +209,7 @@ type CanvasResource struct {
 // GenerateIaC sends a natural language request to the configured LLM with
 // full conversation context, provider awareness, and canvas state.
 func (c *Client) GenerateIaC(ctx context.Context, req ChatRequest) (string, []parser.Resource, error) {
-	systemPrompt := buildSystemPrompt(req.Tool, req.Provider, req.Canvas)
+	systemPrompt := buildSystemPromptWithContext(req.Tool, req.Provider, req.Canvas, req.ProjectContext)
 	userPrompt := buildChatUserPrompt(req)
 
 	raw, err := c.callLLM(ctx, systemPrompt, userPrompt)
@@ -425,10 +434,19 @@ func (c *Client) GenerateIaCSimple(ctx context.Context, message, tool string) (s
 // Tool, ProviderGuide, and CanvasContext; the caller never hand-composes the
 // prompt string any more.
 func buildSystemPrompt(tool, provider string, canvas []CanvasResource) string {
+	return buildSystemPromptWithContext(tool, provider, canvas, "")
+}
+
+// buildSystemPromptWithContext is the RAG-aware variant: projectContext
+// is a pre-formatted block of retrieved chunks (via rag.FormatContext)
+// and gets injected above the provider guide so the model reads
+// project-specific conventions before the generic provider rules.
+func buildSystemPromptWithContext(tool, provider string, canvas []CanvasResource, projectContext string) string {
 	return renderPrompt("system", map[string]string{
-		"Tool":          tool,
-		"ProviderGuide": buildProviderGuide(tool, provider),
-		"CanvasContext": buildCanvasContext(canvas),
+		"Tool":           tool,
+		"ProviderGuide":  buildProviderGuide(tool, provider),
+		"CanvasContext":  buildCanvasContext(canvas),
+		"ProjectContext": projectContext,
 	})
 }
 

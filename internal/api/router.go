@@ -593,6 +593,14 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			return
 		}
 
+		// Populate RAG context when a project is named + indexed. Failures
+		// are swallowed — chat degrades to ungrounded rather than erroring.
+		if req.Project != "" {
+			if projectPath, err := safeProjectPath(projectsDir, req.Project); err == nil {
+				req.ProjectContext = sharedRAG.Context(r.Context(), projectPath, req.Message, 5)
+			}
+		}
+
 		response, resources, err := aiClient.GenerateIaC(r.Context(), req)
 		if err != nil {
 			log.Printf("AI unavailable, using pattern matching: %v", err)
@@ -622,6 +630,14 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
 			return
+		}
+
+		// Grounding on the project's own code — same degrade-silent path
+		// as the non-streaming endpoint.
+		if req.Project != "" {
+			if projectPath, err := safeProjectPath(projectsDir, req.Project); err == nil {
+				req.ProjectContext = sharedRAG.Context(r.Context(), projectPath, req.Message, 5)
+			}
 		}
 
 		flusher, ok := w.(http.Flusher)
@@ -1147,6 +1163,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// AI agent — tool-use orchestrator that drives list_resources, run_policy,
 	// run_scan, write_hcl, etc. against the configured Anthropic provider.
 	registerAgentRoutes(mux, projectsDir, aiClient, regClient)
+
+	// RAG — build & query a per-project embedding index so chat / topology
+	// / fix responses are grounded on the project's own code instead of
+	// generic best-practice knowledge.
+	registerRAGRoutes(mux, projectsDir, aiClient)
 
 	return mux
 }
