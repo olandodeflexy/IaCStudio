@@ -1169,6 +1169,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// generic best-practice knowledge.
 	registerRAGRoutes(mux, projectsDir, aiClient)
 
+	// Vision — diagram-to-topology endpoint; multimodal provider call
+	// through Anthropic's image content blocks.
+	registerVisionRoutes(mux, aiClient)
+
 	return mux
 }
 

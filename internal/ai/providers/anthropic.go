@@ -179,22 +179,45 @@ type anthropicResponse struct {
 }
 
 func (p *anthropicProvider) Complete(ctx context.Context, req Request) (string, error) {
-	maxTokens := req.MaxTokens
-	if maxTokens <= 0 {
-		// The Messages API requires max_tokens; pick a sensible ceiling that
-		// matches the other providers' default.
-		maxTokens = 4096
-	}
 	reqBody := anthropicRequest{
 		Model:  p.model,
 		System: buildSystemField(req.System, req.Cacheable),
 		Messages: []anthropicMessage{
 			{Role: "user", Content: req.User},
 		},
-		MaxTokens:   maxTokens,
+		MaxTokens:   clampMaxTokens(req.MaxTokens),
 		Temperature: req.Temperature,
 	}
-	raw, _ := json.Marshal(reqBody)
+	return p.postMessagesAndExtractText(ctx, reqBody)
+}
+
+// clampMaxTokens enforces the Messages API requirement that max_tokens
+// is set, picking a sensible ceiling when the caller left it at zero.
+// Factored out of Complete so the vision path picks up the same
+// default without re-deriving the magic number.
+func clampMaxTokens(n int) int {
+	if n <= 0 {
+		return 4096
+	}
+	return n
+}
+
+// postMessagesAndExtractText is the shared HTTP round-trip used by
+// both Complete and CompleteWithImages. Accepts any JSON-marshalable
+// request body (the two methods diverge on Messages shape but agree
+// on everything else — headers, error handling, response decode,
+// usage bookkeeping, content-block concatenation) and returns the
+// extracted text. Keeping both paths on one code path means future
+// header tweaks (e.g. a new anthropic-beta flag) land once.
+func (p *anthropicProvider) postMessagesAndExtractText(ctx context.Context, reqBody any) (string, error) {
+	raw, err := json.Marshal(reqBody)
+	if err != nil {
+		// Defensive — the known request shapes are all marshalable, but
+		// a future caller could accidentally embed a non-marshalable
+		// value. Returning the marshal error up front beats silently
+		// issuing an empty POST and masking the real cause.
+		return "", fmt.Errorf("marshal anthropic request: %w", err)
+	}
 
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(raw))
 	if err != nil {
@@ -285,21 +308,24 @@ type anthropicStreamEvent struct {
 // Stream consumes Anthropic's Messages SSE stream. Each token arrives as a
 // content_block_delta event whose delta.text carries the increment.
 func (p *anthropicProvider) Stream(ctx context.Context, req Request, onDelta DeltaFunc) (string, error) {
-	maxTokens := req.MaxTokens
-	if maxTokens <= 0 {
-		maxTokens = 4096
-	}
 	reqBody := anthropicRequest{
 		Model:  p.model,
 		System: buildSystemField(req.System, req.Cacheable),
 		Messages: []anthropicMessage{
 			{Role: "user", Content: req.User},
 		},
-		MaxTokens:   maxTokens,
+		MaxTokens:   clampMaxTokens(req.MaxTokens),
 		Temperature: req.Temperature,
 		Stream:      true,
 	}
-	raw, _ := json.Marshal(reqBody)
+	raw, err := json.Marshal(reqBody)
+	if err != nil {
+		// Same defensive handling as postMessagesAndExtractText — known
+		// request shapes marshal cleanly, but a future caller could
+		// embed a non-marshalable value. Surface the encoding failure
+		// instead of silently POSTing an empty body.
+		return "", fmt.Errorf("marshal anthropic stream request: %w", err)
+	}
 	httpReq, err := http.NewRequestWithContext(ctx, "POST", p.endpoint, bytes.NewReader(raw))
 	if err != nil {
 		return "", err

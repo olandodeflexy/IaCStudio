@@ -60,6 +60,34 @@ type Request struct {
 	Cacheable bool
 }
 
+// Image is one visual attachment passed to VisionUser.CompleteWithImages
+// when the caller wants the model to reason over a diagram. Vision-
+// capable providers (Anthropic Opus/Sonnet, OpenAI GPT-4o, Google
+// Gemini) base64-encode Data and include MediaType in the API call.
+// Providers that don't support vision simply don't implement
+// VisionUser — callers type-assert on it before reaching for this
+// type, so there's no branch to take on the Image itself.
+//
+// MediaType follows the MIME form ("image/png", "image/jpeg",
+// "image/webp", "image/gif"). Validation happens at the HTTP boundary
+// — a caller that hands an unsupported MediaType to a vision-capable
+// provider gets a provider-specific error back.
+type Image struct {
+	MediaType string
+	Data      []byte
+}
+
+// VisionUser is the optional interface for providers that accept image
+// inputs. Callers type-assert on it the same way ToolUser works; non-
+// vision providers simply lack it.
+type VisionUser interface {
+	// CompleteWithImages is Complete + a slice of attachments. The
+	// implementation packs images alongside the user prompt into a
+	// multimodal message. Empty images slice degrades to Complete
+	// semantics (so callers don't need a separate branch).
+	CompleteWithImages(ctx context.Context, req Request, images []Image) (string, error)
+}
+
 // DeltaFunc receives incremental text chunks as they arrive from the LLM.
 // It MUST NOT block on the caller's UI — implementations of Provider.Stream
 // call this inline during the SSE/NDJSON read loop, so slow callbacks back

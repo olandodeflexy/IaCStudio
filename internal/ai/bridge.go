@@ -421,6 +421,89 @@ Only respond with valid JSON.`, req.Tool, providerGuide)
 	return parseAIResponse(raw)
 }
 
+// DiagramImage is one image attachment for GenerateFromDiagram.
+// It is a type alias for providers.Image so the HTTP layer doesn't
+// need to import the providers package directly, while the bridge
+// avoids copying the slice before passing it to CompleteWithImages.
+type DiagramImage = providers.Image
+
+// GenerateFromDiagram is the vision counterpart to GenerateTopology: it
+// takes architecture diagrams (whiteboard photos, lucid exports,
+// hand-sketches) + an optional free-text description, sends them to a
+// vision-capable provider, and returns the same (message, resources,
+// err) tuple GenerateTopology produces so every downstream scaffolding
+// path works unchanged.
+//
+// Returns a descriptive error when the configured provider does not
+// implement VisionUser — the HTTP handler surfaces that as a 400 with
+// a "switch to Anthropic" hint, mirroring the agent endpoint's pattern.
+func (c *Client) GenerateFromDiagram(ctx context.Context, req TopologyRequest, images []DiagramImage) (string, []parser.Resource, error) {
+	if c.providerErr != nil {
+		return "", nil, c.providerErr
+	}
+	// Validate input before checking provider capability. A caller that
+	// forgot to attach images should see "no images provided" regardless
+	// of which provider happens to be configured — the error should be
+	// deterministic on the inputs, not the environment.
+	if len(images) == 0 {
+		return "", nil, fmt.Errorf("no images provided — use GenerateTopology for text-only requests")
+	}
+	vu, ok := c.provider.(providers.VisionUser)
+	if !ok {
+		return "", nil, fmt.Errorf("provider %q does not support vision — switch to Anthropic to enable diagram-to-project", c.provider.Kind())
+	}
+
+	providerGuide := buildProviderGuide(req.Tool, req.Provider)
+	systemPrompt := fmt.Sprintf(`You are an expert Infrastructure as Code architect for %s.
+The user has uploaded one or more architecture diagrams. Read every diagram
+carefully: identify resources, relationships, and inferred constraints
+(environments, subnets, public/private tiers, load balancers, data stores).
+
+RULES:
+1. %s
+2. Translate every component visible in the diagram into a concrete
+   resource type. Common diagram shapes: a "VPC" cloud → aws_vpc; subnet
+   rectangles → aws_subnet; an EC2/VM icon → aws_instance; a database
+   cylinder → aws_db_instance or aws_rds_cluster depending on scale;
+   an "ALB"/"ELB" label → aws_lb; anything marked "S3" or a bucket icon
+   → aws_s3_bucket.
+3. Fill in supporting resources the diagram implies but doesn't draw —
+   IAM roles, security groups, route tables, NAT gateways.
+4. Preserve any labels from the diagram as names when they're descriptive
+   (snake_case'd); otherwise pick purposeful names.
+5. Follow dependency order: networking → security → compute → data →
+   monitoring.
+
+Respond with a JSON object:
+{
+  "message": "What you saw in the diagram and how you translated it",
+  "resources": [
+    {"type": "...", "name": "...", "properties": {...}}
+  ]
+}
+Only respond with valid JSON.`, req.Tool, providerGuide)
+
+	userText := "Build the infrastructure shown in the uploaded diagram."
+	if d := strings.TrimSpace(req.Description); d != "" {
+		userText = fmt.Sprintf("Build the infrastructure shown in the uploaded diagram. Additional context: %s", d)
+	}
+
+	raw, err := vu.CompleteWithImages(ctx, providers.Request{
+		System:      systemPrompt,
+		User:        userText,
+		Temperature: defaultTemperature,
+		MaxTokens:   defaultMaxTokens,
+		JSONMode:    true,
+		// The system prompt is long and stable per tool+provider combo;
+		// caching it on Anthropic saves tokens on repeated diagram uploads.
+		Cacheable: true,
+	}, images)
+	if err != nil {
+		return "", nil, err
+	}
+	return parseAIResponse(raw)
+}
+
 // GenerateIaCSimple is the legacy single-message interface (used by pattern matching fallback).
 func (c *Client) GenerateIaCSimple(ctx context.Context, message, tool string) (string, []parser.Resource, error) {
 	return c.GenerateIaC(ctx, ChatRequest{

@@ -179,9 +179,11 @@ func registerAgentRoutes(
 	})
 }
 
-// isClientError distinguishes user-caused errors (picked a non-tool-use
-// provider, misconfiguration) from transport/provider errors. The heuristic
-// is good enough for 400-vs-502 routing; we don't need typed errors.
+// isClientError distinguishes user-caused errors (picked an unsupported
+// provider, misconfiguration, bad inputs) from transport/provider
+// errors. The heuristic is good enough for 400-vs-502 routing; we
+// don't need typed errors. Shared across the agent, vision, and any
+// future handler that can fail for mixed reasons.
 func isClientError(err error) bool {
 	if err == nil {
 		return false
@@ -189,8 +191,12 @@ func isClientError(err error) bool {
 	msg := err.Error()
 	for _, needle := range []string{
 		"does not support tool use",
+		"does not support vision",
 		"no provider configured",
 		"no tool registry configured",
+		"provider requires an API key",
+		"unknown provider kind",
+		"no images provided",
 	} {
 		if strings.Contains(msg, needle) {
 			return true
