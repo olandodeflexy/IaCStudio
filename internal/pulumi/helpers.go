@@ -113,7 +113,14 @@ func fallbackPulumiType(tfType string) string {
 		rest := strings.TrimPrefix(tfType, "google_")
 		return "gcp." + guessGCPPackage(rest) + "." + pascalCaseFromSnake(rest)
 	case strings.HasPrefix(tfType, "azurerm_"):
-		return "azure.unknown." + pascalCaseFromSnake(strings.TrimPrefix(tfType, "azurerm_"))
+		rest := strings.TrimPrefix(tfType, "azurerm_")
+		// (azure as any) sidesteps the per-package typing for
+		// unknown Azure resources. TS still parses the expression
+		// and the program compiles; the user hand-fixes the import
+		// when they actually wire the resource up. Without the
+		// `as any` cast, `azure.fictional.Thing` would hard-fail
+		// tsc at the unknown namespace reference.
+		return "(azure as any)." + guessAzurePackage(rest) + "." + pascalCaseFromSnake(rest)
 	}
 	return pascalCaseFromSnake(tfType)
 }
@@ -146,6 +153,27 @@ func guessGCPPackage(rest string) string {
 		return p
 	}
 	return "compute"
+}
+
+// guessAzurePackage maps the first token after "azurerm_" to an
+// azure-native subpackage guess. Azure's namespacing doesn't line up
+// as cleanly as AWS/GCP — many TF types collapse unrelated services
+// (azurerm_key_vault vs. azurerm_storage_account) — so the fallback
+// defaults to "resources" which at least parses in TS with the
+// `(azure as any)` cast.
+func guessAzurePackage(rest string) string {
+	head := strings.SplitN(rest, "_", 2)[0]
+	pkgByHead := map[string]string{
+		"resource": "resources", "storage": "storage", "virtual": "network",
+		"subnet": "network", "network": "network", "key": "keyvault",
+		"linux": "compute", "windows": "compute", "container": "containerservice",
+		"managed": "containerservice", "postgresql": "dbforpostgresql",
+		"mysql": "dbformysql", "redis": "cache", "app": "web",
+	}
+	if p, ok := pkgByHead[head]; ok {
+		return p
+	}
+	return "resources"
 }
 
 // pascalCaseFromSnake: "nat_gateway" → "NatGateway". Pulumi
@@ -249,19 +277,43 @@ func tsPropValue(v any) string {
 }
 
 // isTaggableAWS reports whether the given AWS resource type accepts
-// tags. Covers the common taggable types; unknowns default to false
-// so we don't generate a `tags:` block on something that rejects it.
+// a flat map[string]string `tags` property. Allowlist rather than
+// denylist: many AWS resources don't accept tags at all
+// (aws_route_table_association, aws_iam_instance_profile, …) and a
+// previous denylist approach auto-injected tags into them, which
+// then fails tsc or the provider at plan time. Unknown types default
+// to false — safer to drop the convenience tags than to emit
+// resource programs that don't compile.
 func isTaggableAWS(tfType string) bool {
-	if !strings.HasPrefix(tfType, "aws_") {
-		return false
-	}
-	nonTaggable := map[string]struct{}{
-		"aws_iam_policy":   {},
-		"aws_iam_role":     {}, // can tag but requires tag block shape
-		"aws_route_table":  {},
-	}
-	if _, no := nonTaggable[tfType]; no {
-		return false
-	}
-	return true
+	_, ok := taggableAWSResources[tfType]
+	return ok
+}
+
+// taggableAWSResources lists AWS resource types that accept the flat
+// tags = { K: V, ... } shape. Covers the common set the canvas + fall-
+// back palette emit — not exhaustive across AWS's ~800 types, but
+// extending is a one-line addition as new resources are added to the
+// catalog.
+var taggableAWSResources = map[string]struct{}{
+	"aws_vpc":                   {},
+	"aws_subnet":                {},
+	"aws_internet_gateway":      {},
+	"aws_nat_gateway":           {},
+	"aws_security_group":        {},
+	"aws_instance":              {},
+	"aws_lambda_function":       {},
+	"aws_ecs_cluster":           {},
+	"aws_eks_cluster":           {},
+	"aws_s3_bucket":             {},
+	"aws_ebs_volume":            {},
+	"aws_ecr_repository":        {},
+	"aws_db_instance":           {},
+	"aws_dynamodb_table":        {},
+	"aws_elasticache_cluster":   {},
+	"aws_kms_key":               {},
+	"aws_secretsmanager_secret": {},
+	"aws_lb":                    {},
+	"aws_lb_target_group":       {},
+	"aws_autoscaling_group":     {},
+	"aws_cloudwatch_log_group":  {},
 }

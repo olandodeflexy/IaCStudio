@@ -275,6 +275,67 @@ func TestRenderStackYaml_AzureHonorsCfgRegion(t *testing.T) {
 	mustContain(t, yDefault, "azure-native:location: WestUS2")
 }
 
+func TestYamlScalar(t *testing.T) {
+	cases := map[string]string{
+		"simple":                  "simple",
+		"":                        `""`,
+		"has:colon":               `"has:colon"`,
+		"has#hash":                `"has#hash"`,
+		"with\nnewline":           `"with\nnewline"`,
+		"true":                    `"true"`,   // reserved bool
+		"null":                    `"null"`,   // reserved null
+		" leadingspace":           `" leadingspace"`,
+		"trailingspace ":          `"trailingspace "`,
+		`has"quote`:               `"has\"quote"`,
+		`back\slash`:              `"back\\slash"`,
+	}
+	for in, want := range cases {
+		if got := yamlScalar(in); got != want {
+			t.Errorf("yamlScalar(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestRenderPulumiYaml_QuotesRiskyValues(t *testing.T) {
+	// A description containing a colon must be quoted — otherwise YAML
+	// would parse "description: note: see docs" as a mapping.
+	y := renderPulumiYaml(ProjectConfig{
+		Name:        "simple-name",
+		Description: "note: see docs",
+	})
+	mustContain(t, y, `description: "note: see docs"`)
+	mustContain(t, y, "name: simple-name") // plain scalar is fine
+}
+
+func TestIsTaggableAWS_IsAllowlist(t *testing.T) {
+	// Unknown AWS types default to false now — previously they
+	// defaulted to true and would auto-inject `tags:` blocks into
+	// resources that don't accept them.
+	if isTaggableAWS("aws_route_table_association") {
+		t.Error("aws_route_table_association should not be taggable (unknown types default false)")
+	}
+	if isTaggableAWS("aws_iam_instance_profile") {
+		t.Error("aws_iam_instance_profile should not be taggable")
+	}
+	// Known taggable types still return true.
+	if !isTaggableAWS("aws_vpc") {
+		t.Error("aws_vpc should be taggable")
+	}
+	if !isTaggableAWS("aws_s3_bucket") {
+		t.Error("aws_s3_bucket should be taggable")
+	}
+}
+
+func TestFallbackPulumiType_AzureUsesAsAnyCast(t *testing.T) {
+	// (azure as any).<pkg>.<Type> parses cleanly in TS even when the
+	// namespace is wrong — better than azure.unknown.<Type> which
+	// hard-fails tsc at compile time.
+	got := terraformToPulumi("azurerm_fictional_thing")
+	if !strings.Contains(got, "(azure as any).") {
+		t.Errorf("Azure fallback should use `as any` cast, got %q", got)
+	}
+}
+
 func TestToCamelCase(t *testing.T) {
 	cases := map[string]string{
 		"web_server":      "webServer",

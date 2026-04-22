@@ -1,6 +1,7 @@
 package scaffold
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -106,17 +107,20 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 		Path:    "README.md",
 		Content: []byte(renderPulumiProjectReadme(name, cloud, envs)),
 	})
+	descriptor, err := json.MarshalIndent(map[string]any{
+		"tool":         "pulumi",
+		"blueprint":    "layered-pulumi",
+		"project_name": name,
+		"cloud":        cloud,
+		"environments": envs,
+		"layout":       "layered-v1",
+	}, "", "  ")
+	if err != nil {
+		return files, fmt.Errorf("marshal .iac-studio.json: %w", err)
+	}
 	files = append(files, File{
 		Path:    ".iac-studio.json",
-		Content: []byte(fmt.Sprintf(`{
-  "tool": "pulumi",
-  "blueprint": "layered-pulumi",
-  "project_name": %q,
-  "cloud": %q,
-  "environments": %s,
-  "layout": "layered-v1"
-}
-`, name, cloud, jsonStringSlice(envs))),
+		Content: append(descriptor, '\n'),
 	})
 	files = append(files, pulumiLifecycleScripts()...)
 	files = append(files, File{
@@ -133,11 +137,16 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 // seed, `pulumi preview` would succeed with zero resources which
 // looks like an empty project and misleads new users.
 //
-// owner is stamped onto the resource's tags so the scaffold's
-// owner_tag input isn't a decorative no-op — it round-trips through
-// the generator into real infrastructure metadata.
+// owner is stamped onto the resource's tags (or GCP-native labels) so
+// the scaffold's owner_tag input isn't a decorative no-op — it round-
+// trips through the generator into real infrastructure metadata.
 func seedResourcesFor(cloud, projectName, owner string) []parser.Resource {
-	tags := map[string]any{"Owner": owner, "ManagedBy": "iac-studio"}
+	// AWS/Azure accept PascalCase tag keys; GCP labels must be
+	// lowercase and typically snake_case (`[a-z0-9_-]`). Build both
+	// shapes and pick per cloud rather than reusing one map across
+	// all three.
+	awsAzureTags := map[string]any{"Owner": owner, "ManagedBy": "iac-studio"}
+	gcpLabels := map[string]any{"owner": strings.ToLower(owner), "managed_by": "iac-studio"}
 	switch cloud {
 	case "aws":
 		return []parser.Resource{{
@@ -146,7 +155,7 @@ func seedResourcesFor(cloud, projectName, owner string) []parser.Resource {
 			Name: projectName + "_seed",
 			Properties: map[string]any{
 				"bucket": projectName + "-seed",
-				"tags":   tags,
+				"tags":   awsAzureTags,
 			},
 		}}
 	case "gcp":
@@ -157,7 +166,7 @@ func seedResourcesFor(cloud, projectName, owner string) []parser.Resource {
 			Properties: map[string]any{
 				"name":     projectName + "-seed",
 				"location": "US",
-				"labels":   tags, // GCP uses "labels", not "tags"
+				"labels":   gcpLabels,
 			},
 		}}
 	case "azure":
@@ -168,7 +177,7 @@ func seedResourcesFor(cloud, projectName, owner string) []parser.Resource {
 			Properties: map[string]any{
 				"name":     projectName + "-rg",
 				"location": "WestUS2",
-				"tags":     tags,
+				"tags":     awsAzureTags,
 			},
 		}}
 	}
@@ -241,18 +250,6 @@ func renderPulumiProjectReadme(name, cloud string, envs []string) string {
 	b.WriteString("./scripts/apply.sh dev           # pulumi up --yes\n")
 	b.WriteString("```\n")
 	return b.String()
-}
-
-// jsonStringSlice renders a string slice as a JSON array literal —
-// used inside the .iac-studio.json content template which is already
-// a hand-written JSON string. Saves pulling in encoding/json just for
-// this one-line formatter.
-func jsonStringSlice(items []string) string {
-	quoted := make([]string, len(items))
-	for i, s := range items {
-		quoted[i] = fmt.Sprintf("%q", s)
-	}
-	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 func init() {

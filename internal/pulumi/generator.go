@@ -94,6 +94,12 @@ func GenerateProject(cfg ProjectConfig) ([]ProjectFile, error) {
 // renderPulumiYaml is the Pulumi project manifest. Runtime is nodejs
 // (TypeScript) and the project name must match Pulumi's own naming
 // rules (lowercase + hyphens); callers upstream enforce that.
+//
+// Name + description go through yamlScalar so values containing
+// colons, hashes, leading/trailing spaces, or newlines don't produce
+// invalid YAML. Pulumi's own manifests tend to stay simple so the
+// naive path worked in practice, but user-supplied descriptions are
+// the weak link and worth escaping.
 func renderPulumiYaml(cfg ProjectConfig) string {
 	desc := cfg.Description
 	if desc == "" {
@@ -105,7 +111,42 @@ runtime:
   name: nodejs
   options:
     typescript: true
-`, cfg.Name, desc)
+`, yamlScalar(cfg.Name), yamlScalar(desc))
+}
+
+// yamlScalar returns a YAML-safe representation of s. If s contains
+// any of the characters that would trip the YAML 1.2 plain-scalar
+// rules (: # newline, ! & * etc.) or looks like a number/bool, we
+// wrap in double quotes and escape backslashes + quotes. Otherwise
+// emit plain.
+//
+// Not a full YAML encoder — we only emit simple scalars here, and
+// pulling in a yaml dependency just for two fields is overkill. The
+// check list is conservative: anything the spec treats specially
+// triggers the quoted form.
+func yamlScalar(s string) string {
+	if s == "" {
+		return `""`
+	}
+	needsQuote := strings.ContainsAny(s, ":#\n\r\t!&*%@`\"'[]{},|>\\")
+	if !needsQuote && (s[0] == ' ' || s[len(s)-1] == ' ') {
+		needsQuote = true
+	}
+	// Pure digits / reserved keywords would be parsed as numbers or
+	// booleans if emitted plain.
+	switch strings.ToLower(s) {
+	case "true", "false", "null", "yes", "no", "on", "off", "~":
+		needsQuote = true
+	}
+	if !needsQuote {
+		return s
+	}
+	escaped := strings.ReplaceAll(s, `\`, `\\`)
+	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, "\n", `\n`)
+	escaped = strings.ReplaceAll(escaped, "\r", `\r`)
+	escaped = strings.ReplaceAll(escaped, "\t", `\t`)
+	return `"` + escaped + `"`
 }
 
 // renderStackYaml emits one Pulumi.<env>.yaml with the config values
