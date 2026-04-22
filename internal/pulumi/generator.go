@@ -30,21 +30,21 @@ import (
 func ValidateProjectName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
-		return fmt.Errorf("Name is required")
+		return fmt.Errorf("name is required")
 	}
 	if len(name) > 100 {
-		return fmt.Errorf("Name %q exceeds Pulumi's 100-char limit", name)
+		return fmt.Errorf("name %q exceeds Pulumi's 100-char limit", name)
 	}
 	for i, r := range name {
 		switch {
 		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
 			// ok
 		default:
-			return fmt.Errorf("Name %q has invalid character %q at position %d (lowercase letters, digits, hyphens, underscores only)", name, r, i)
+			return fmt.Errorf("name %q has invalid character %q at position %d (lowercase letters, digits, hyphens, underscores only)", name, r, i)
 		}
 	}
 	if name[0] < 'a' || name[0] > 'z' {
-		return fmt.Errorf("Name %q must start with a lowercase letter", name)
+		return fmt.Errorf("name %q must start with a lowercase letter", name)
 	}
 	return nil
 }
