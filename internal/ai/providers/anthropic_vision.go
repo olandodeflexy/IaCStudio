@@ -3,7 +3,6 @@ package providers
 import (
 	"context"
 	"encoding/base64"
-	"fmt"
 	"strings"
 )
 
@@ -26,6 +25,7 @@ func (p *anthropicProvider) CompleteWithImages(ctx context.Context, req Request,
 	// prompt text. Anthropic's docs explicitly recommend this ordering
 	// for diagram-to-structure tasks.
 	content := make([]any, 0, len(images)+1)
+	usableImages := 0
 	for _, img := range images {
 		if img.MediaType == "" || len(img.Data) == 0 {
 			continue
@@ -38,12 +38,19 @@ func (p *anthropicProvider) CompleteWithImages(ctx context.Context, req Request,
 				Data:      base64.StdEncoding.EncodeToString(img.Data),
 			},
 		})
+		usableImages++
+	}
+	// If every attachment was filtered out (all had empty MediaType or
+	// zero-length Data) the request effectively has no vision payload —
+	// fall back to Complete so the wire shape matches the interface
+	// doc ("empty images slice falls through to Complete"). The text-
+	// only Request would otherwise be sent as a block array which
+	// diverges needlessly.
+	if usableImages == 0 {
+		return p.Complete(ctx, req)
 	}
 	if strings.TrimSpace(req.User) != "" {
 		content = append(content, anthropicTextBlock{Type: "text", Text: req.User})
-	}
-	if len(content) == 0 {
-		return "", fmt.Errorf("anthropic vision: no usable image or text in request")
 	}
 
 	reqBody := anthropicVisionRequest{

@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -78,16 +79,18 @@ func registerVisionRoutes(mux *http.ServeMux, aiClient *ai.Client) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxVisionReqBytes)
 
 		ct := r.Header.Get("Content-Type")
-		if !strings.HasPrefix(ct, "multipart/form-data") {
+		mediaType, _, parseErr := mime.ParseMediaType(ct)
+		if parseErr != nil || strings.ToLower(mediaType) != "multipart/form-data" {
 			http.Error(w, "expected multipart/form-data", http.StatusUnsupportedMediaType)
 			return
 		}
 		if err := r.ParseMultipartForm(multipartMaxMemory); err != nil {
-			// MaxBytesReader surfaces its cap as "http: request body too
-			// large" — clients should see a 413 so they can distinguish
-			// a malformed body from one that merely blew the size budget.
-			if strings.Contains(err.Error(), "request body too large") {
-				http.Error(w, err.Error(), http.StatusRequestEntityTooLarge)
+			// MaxBytesReader reports the cap via *http.MaxBytesError
+			// (Go 1.19+). errors.As is robust to wrapping so a future
+			// middleware that re-wraps the error still routes to 413.
+			var maxBytes *http.MaxBytesError
+			if errors.As(err, &maxBytes) {
+				http.Error(w, fmt.Sprintf("request body exceeds %dMB limit", maxBytes.Limit/1024/1024), http.StatusRequestEntityTooLarge)
 				return
 			}
 			http.Error(w, "invalid multipart body: "+err.Error(), http.StatusBadRequest)
@@ -158,9 +161,13 @@ func readUploadedImages(r *http.Request) ([]ai.DiagramImage, error) {
 	}
 	out := make([]ai.DiagramImage, 0, len(files))
 	for _, fh := range files {
-		mediaType, err := parseMediaType(fh.Header.Get("Content-Type"))
+		ctHeader := fh.Header.Get("Content-Type")
+		mediaType, err := parseMediaType(ctHeader)
 		if err != nil {
-			return nil, fmt.Errorf("unsupported image type %q — use png, jpeg, webp, or gif", fh.Header.Get("Content-Type"))
+			// Header was missing or malformed — distinct from "well-
+			// formed but not one we support" so clients get the right
+			// hint on what to fix.
+			return nil, fmt.Errorf("image %q has missing or invalid Content-Type header: %w", fh.Filename, err)
 		}
 		if _, ok := allowedImageMediaTypes[mediaType]; !ok {
 			return nil, fmt.Errorf("unsupported image type %q — use png, jpeg, webp, or gif", mediaType)

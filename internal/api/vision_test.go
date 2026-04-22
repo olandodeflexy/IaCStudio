@@ -186,9 +186,10 @@ func TestVision_RejectsTooManyImages(t *testing.T) {
 func TestVision_AcceptsContentTypeWithParametersAndCase(t *testing.T) {
 	// "Image/JPEG; charset=binary" must be accepted — parseMediaType
 	// strips the parameter and lowercases the type. The underlying
-	// provider still rejects (non-vision Ollama), so we expect the
-	// 400 to carry the vision-provider hint, not an unsupported-type
-	// error.
+	// provider still rejects (non-vision Ollama), so we assert the
+	// status is 400 AND the body carries the vision-provider hint.
+	// The positive match matters — a "unsupported image type" false
+	// negative would've slipped past a body-only negative assertion.
 	srv := httptest.NewServer(visionMux(t, ai.NewClient("http://127.0.0.1:1", "x")))
 	defer srv.Close()
 
@@ -203,8 +204,12 @@ func TestVision_AcceptsContentTypeWithParametersAndCase(t *testing.T) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	msg, _ := io.ReadAll(resp.Body)
-	if strings.Contains(string(msg), "unsupported image type") {
-		t.Errorf("Content-Type with parameters/case should be accepted, got: %s", msg)
+	bodyMsg := string(msg)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("want 400 for non-vision provider, got %d with body %q", resp.StatusCode, bodyMsg)
+	}
+	if !strings.Contains(bodyMsg, "does not support vision") {
+		t.Errorf("want 'does not support vision' hint, got %q", bodyMsg)
 	}
 }
 
