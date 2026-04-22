@@ -14,10 +14,40 @@ package pulumi
 import (
 	"fmt"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/iac-studio/iac-studio/internal/parser"
 )
+
+// ValidateProjectName enforces Pulumi's project-name rules AND the
+// tighter npm package-name rules (the generator writes cfg.Name into
+// both Pulumi.yaml and package.json). Joint constraint: lowercase
+// letters, digits, hyphens, underscores; must start with a letter;
+// 1-100 chars. Anything stricter belongs in the caller's own input
+// validator (e.g. scaffold's safeNameRE) — we stay permissive here
+// so GenerateProject accepts whatever a blueprint validated upstream.
+func ValidateProjectName(name string) error {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return fmt.Errorf("Name is required")
+	}
+	if len(name) > 100 {
+		return fmt.Errorf("Name %q exceeds Pulumi's 100-char limit", name)
+	}
+	for i, r := range name {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-', r == '_':
+			// ok
+		default:
+			return fmt.Errorf("Name %q has invalid character %q at position %d (lowercase letters, digits, hyphens, underscores only)", name, r, i)
+		}
+	}
+	if name[0] < 'a' || name[0] > 'z' {
+		return fmt.Errorf("Name %q must start with a lowercase letter", name)
+	}
+	return nil
+}
 
 // ProjectConfig is the input to GenerateProject. Name becomes the
 // Pulumi project name; Environments enumerate the stack configs we
@@ -60,8 +90,8 @@ type ProjectFile struct {
 // convention as the Terraform scaffold. Callers decide whether a
 // partial render is worth persisting.
 func GenerateProject(cfg ProjectConfig) ([]ProjectFile, error) {
-	if strings.TrimSpace(cfg.Name) == "" {
-		return nil, fmt.Errorf("pulumi.GenerateProject: Name is required")
+	if err := ValidateProjectName(cfg.Name); err != nil {
+		return nil, fmt.Errorf("pulumi.GenerateProject: %w", err)
 	}
 	if cfg.Runtime == "" {
 		cfg.Runtime = "nodejs"
@@ -115,10 +145,11 @@ runtime:
 }
 
 // yamlScalar returns a YAML-safe representation of s. If s contains
-// any of the characters that would trip the YAML 1.2 plain-scalar
-// rules (: # newline, ! & * etc.) or looks like a number/bool, we
-// wrap in double quotes and escape backslashes + quotes. Otherwise
-// emit plain.
+// YAML 1.2 plain-scalar metacharacters (: # newline, ! & * etc.),
+// matches a reserved keyword (true/false/null/yes/no/on/off/~), or
+// parses as a number/int/float (which YAML would coerce to a typed
+// value), we wrap in double quotes and escape backslashes + quotes.
+// Otherwise emit plain.
 //
 // Not a full YAML encoder — we only emit simple scalars here, and
 // pulling in a yaml dependency just for two fields is overkill. The
@@ -138,6 +169,12 @@ func yamlScalar(s string) string {
 	case "true", "false", "null", "yes", "no", "on", "off", "~":
 		needsQuote = true
 	}
+	// Numeric-looking scalars ("123", "3.14", "-0.5", "1e6") — YAML
+	// would coerce these to int/float, so a version string like "1.0"
+	// would round-trip as a float and silently change shape.
+	if !needsQuote && looksNumeric(s) {
+		needsQuote = true
+	}
 	if !needsQuote {
 		return s
 	}
@@ -147,6 +184,21 @@ func yamlScalar(s string) string {
 	escaped = strings.ReplaceAll(escaped, "\r", `\r`)
 	escaped = strings.ReplaceAll(escaped, "\t", `\t`)
 	return `"` + escaped + `"`
+}
+
+// looksNumeric reports whether s would be parsed as a YAML number.
+// Matches the common forms: signed/unsigned ints, decimals, scientific
+// notation. Kept tight — anything false-positive wouldn't hurt (we
+// only add quotes) but false-negatives corrupt shape, so err on the
+// side of matching.
+func looksNumeric(s string) bool {
+	if s == "" {
+		return false
+	}
+	if _, err := strconv.ParseFloat(s, 64); err == nil {
+		return true
+	}
+	return false
 }
 
 // renderStackYaml emits one Pulumi.<env>.yaml with the config values
@@ -300,7 +352,7 @@ func renderProgram(cfg ProjectConfig) string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			b.WriteString(fmt.Sprintf("    %s: %s,\n", toCamelCase(k), tsPropValue(r.Properties[k])))
+			b.WriteString(fmt.Sprintf("    %s: %s,\n", toCamelCase(k), tsPropValue(r.Properties[k], k)))
 		}
 		// Tag each resource with the environment so downstream cost
 		// allocation / policy tags work out of the box. Only applies

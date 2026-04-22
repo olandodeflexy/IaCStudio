@@ -248,7 +248,16 @@ func sanitizeTSIdent(s string) string {
 // and slices recurse; primitive scalars emit their literal form. The
 // output is deterministic (sorted map keys) so two runs with the same
 // input produce byte-identical programs — important for CI diffing.
-func tsPropValue(v any) string {
+//
+// parentKey lets callers signal the semantic of the map being rendered:
+// map values under "tags" / "labels" / "environment" / similar keep
+// their literal key names (those ARE the tag/label/env-var identifier,
+// not a Pulumi property name). All other nested maps camelCase their
+// keys to match Pulumi TypeScript SDK conventions — a Terraform-style
+// nested block like `{network_acl: {cidr_blocks: […]}}` renders as
+// `{networkAcl: {cidrBlocks: […]}}`. Pass "" (or use tsPropValueTop)
+// at the outermost call site.
+func tsPropValue(v any, parentKey string) string {
 	switch x := v.(type) {
 	case nil:
 		return "undefined"
@@ -261,7 +270,7 @@ func tsPropValue(v any) string {
 	case []any:
 		items := make([]string, 0, len(x))
 		for _, el := range x {
-			items = append(items, tsPropValue(el))
+			items = append(items, tsPropValue(el, parentKey))
 		}
 		return "[" + strings.Join(items, ", ") + "]"
 	case map[string]any:
@@ -271,13 +280,35 @@ func tsPropValue(v any) string {
 		}
 		// Sort for deterministic output (Go maps iterate randomly).
 		sort.Strings(keys)
+		preserve := preservesLiteralKeys(parentKey)
 		items := make([]string, 0, len(keys))
 		for _, k := range keys {
-			items = append(items, fmt.Sprintf("%q: %s", k, tsPropValue(x[k])))
+			renderedKey := k
+			if !preserve {
+				renderedKey = toCamelCase(k)
+			}
+			items = append(items, fmt.Sprintf("%q: %s", renderedKey, tsPropValue(x[k], k)))
 		}
 		return "{ " + strings.Join(items, ", ") + " }"
 	}
 	return fmt.Sprintf("%q", fmt.Sprint(v))
+}
+
+// preservesLiteralKeys reports whether a map value whose parent key
+// matches one of the known literal-keyed wrappers (tags, labels,
+// environment variables, metadata, annotations) should keep its child
+// keys verbatim instead of camelCasing them. These are the places
+// where the child key IS the real-world tag / label / env-var name,
+// not a Pulumi SDK property. Getting this wrong produces subtly
+// incorrect infrastructure — e.g. "Owner" → "owner" silently changes
+// the tag key in the cloud.
+func preservesLiteralKeys(parentKey string) bool {
+	switch parentKey {
+	case "tags", "labels", "metadata", "annotations",
+		"environment", "environment_variables", "env":
+		return true
+	}
+	return false
 }
 
 // isTaggableAWS reports whether the given AWS resource type accepts

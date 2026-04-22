@@ -28,6 +28,26 @@ func validateTagValue(key, value string) error {
 	return nil
 }
 
+// truncateForBucketName clamps a base name to max chars while keeping
+// the name valid as an S3/GCS bucket (must end in an alphanumeric,
+// no trailing '-' or '_'). Used when composing `<project>-seed` +
+// `<project>-<env>` so long project names don't blow the 63-char
+// provider cap.
+func truncateForBucketName(base string, max int) string {
+	if len(base) <= max {
+		return base
+	}
+	out := base[:max]
+	for len(out) > 0 {
+		last := out[len(out)-1]
+		if (last >= 'a' && last <= 'z') || (last >= '0' && last <= '9') {
+			break
+		}
+		out = out[:len(out)-1]
+	}
+	return out
+}
+
 // sanitizeGCPLabel coerces an arbitrary value to the GCP label
 // charset. Lowercases, replaces anything outside [a-z0-9_-] with "_",
 // and clamps to 63 chars. Empty input returns "_" so the provider
@@ -127,8 +147,15 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 
 	var files []File
 	for _, env := range envs {
+		// Pulumi project names must stay within 100 chars (validated
+		// by pulumi.ValidateProjectName) but the canonical Pulumi docs
+		// recommend keeping them short. Clamp base to leave room for
+		// the "-<env>" suffix. Env is at most 32 chars (scaffold-level
+		// validation) so a 60-char base leaves comfortable margin.
+		const maxBase = 60
+		projName := truncateForBucketName(name, maxBase) + "-" + env
 		proj := pulumi.ProjectConfig{
-			Name:         fmt.Sprintf("%s-%s", name, env),
+			Name:         projName,
 			Description:  fmt.Sprintf("%s — %s environment (Pulumi)", name, env),
 			Environments: []string{env},
 			Region:       region,
@@ -198,6 +225,11 @@ func seedResourcesFor(cloud, projectName, owner, region string) []parser.Resourc
 		"owner":      sanitizeGCPLabel(owner),
 		"managed_by": "iac-studio",
 	}
+	// Bucket names are capped at 63 chars across S3 and GCS. Leave
+	// room for the "-seed" suffix (5 chars) so long project names
+	// don't produce invalid bucket names at apply time.
+	const maxBucketBase = 63 - len("-seed")
+	bucketBase := truncateForBucketName(projectName, maxBucketBase)
 	switch cloud {
 	case "aws":
 		return []parser.Resource{{
@@ -205,7 +237,7 @@ func seedResourcesFor(cloud, projectName, owner, region string) []parser.Resourc
 			Type: "aws_s3_bucket",
 			Name: projectName + "_seed",
 			Properties: map[string]any{
-				"bucket": projectName + "-seed",
+				"bucket": bucketBase + "-seed",
 				"tags":   awsAzureTags,
 			},
 		}}
@@ -223,7 +255,7 @@ func seedResourcesFor(cloud, projectName, owner, region string) []parser.Resourc
 			Type: "google_storage_bucket",
 			Name: projectName + "_seed",
 			Properties: map[string]any{
-				"name":     projectName + "-seed",
+				"name":     bucketBase + "-seed",
 				"location": loc,
 				"labels":   gcpLabels,
 			},

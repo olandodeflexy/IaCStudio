@@ -191,7 +191,7 @@ func TestTsPropValue_HandlesAllScalarTypes(t *testing.T) {
 		{map[string]any{"b": 2, "a": 1}, `{ "a": 1, "b": 2 }`}, // sorted keys
 	}
 	for _, tc := range cases {
-		if got := tsPropValue(tc.in); got != tc.want {
+		if got := tsPropValue(tc.in, ""); got != tc.want {
 			t.Errorf("tsPropValue(%v) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
@@ -333,6 +333,48 @@ func TestFallbackPulumiType_AzureUsesAsAnyCast(t *testing.T) {
 	got := terraformToPulumi("azurerm_fictional_thing")
 	if !strings.Contains(got, "(azure as any).") {
 		t.Errorf("Azure fallback should use `as any` cast, got %q", got)
+	}
+}
+
+func TestTsPropValue_CamelCasesNestedPropertyKeys(t *testing.T) {
+	// Terraform-style nested block — keys should camelCase so Pulumi
+	// sees 'networkAcl' + 'cidrBlocks' instead of the snake_case
+	// forms (which would be unrecognised SDK properties).
+	got := tsPropValue(map[string]any{
+		"network_acl": map[string]any{
+			"cidr_blocks": []any{"10.0.0.0/24"},
+		},
+	}, "ingress_rule")
+	if !strings.Contains(got, `"networkAcl"`) {
+		t.Errorf("expected camelCased 'networkAcl' in %q", got)
+	}
+	if !strings.Contains(got, `"cidrBlocks"`) {
+		t.Errorf("expected camelCased 'cidrBlocks' in %q", got)
+	}
+}
+
+func TestTsPropValue_PreservesTagAndLabelKeys(t *testing.T) {
+	// tags/labels keys ARE the tag name — a camelCase rewrite would
+	// silently change the infrastructure-level tag identifier.
+	got := tsPropValue(map[string]any{
+		"Owner":      "team_alpha",
+		"ManagedBy":  "iac-studio",
+		"cost_center": "platform",
+	}, "tags")
+	for _, key := range []string{`"Owner"`, `"ManagedBy"`, `"cost_center"`} {
+		if !strings.Contains(got, key) {
+			t.Errorf("tags key should be preserved: %q missing in %q", key, got)
+		}
+	}
+	// And labels get the same treatment.
+	gotLabels := tsPropValue(map[string]any{
+		"k8s-app":    "web",
+		"snake_case": "value",
+	}, "labels")
+	for _, key := range []string{`"k8s-app"`, `"snake_case"`} {
+		if !strings.Contains(gotLabels, key) {
+			t.Errorf("labels key should be preserved: %q missing in %q", key, gotLabels)
+		}
 	}
 }
 
