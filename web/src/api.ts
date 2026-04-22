@@ -470,7 +470,11 @@ export interface RegistryModule {
   provider: string;
   version: string;
   description: string;
-  source: string;
+  // source is optional — the public Terraform registry always includes
+  // it, but self-hosted / private registries occasionally omit it, and
+  // the panel already falls back to hiding the link. Keeping the type
+  // honest so callers don't assume it's always present.
+  source?: string;
   published_at: string;
   downloads: number;
   verified: boolean;

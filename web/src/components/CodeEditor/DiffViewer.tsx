@@ -1,4 +1,4 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { DiffEditor, type DiffOnMount } from '@monaco-editor/react';
 import type * as monaco from 'monaco-editor';
 
@@ -36,25 +36,40 @@ export function DiffViewer({
   className,
   height = '100%',
 }: DiffViewerProps) {
+  // Disposable returned by onDidChangeModelContent. We stash it on a
+  // ref so the effect teardown can dispose it when the component
+  // unmounts or the change-callback identity changes — otherwise the
+  // listener leaks for the life of the page and a stale `onModified-
+  // Change` closure keeps firing against old parent state.
+  const changeSubRef = useRef<{ dispose: () => void } | null>(null);
+  const onChangeRef = useRef(onModifiedChange);
+  onChangeRef.current = onModifiedChange;
+
   const handleMount: DiffOnMount = useCallback(
     (editor, monacoNs) => {
       registerLanguages(monacoNs as typeof monaco);
       monacoNs.editor.defineTheme(THEME_ID, studioDarkTheme);
       monacoNs.editor.setTheme(THEME_ID);
 
-      if (onModifiedChange) {
-        // The diff editor has a "modified" model we listen on; changes
-        // emit regardless of whether the edit happened by keystroke or
-        // programmatic setValue, so we rely on allowEdits to gate
-        // whether the callback fires meaningfully.
+      // Only subscribe when the user can actually edit — otherwise the
+      // callback fires for programmatic prop updates too and creates
+      // feedback loops in controlled usages.
+      if (allowEdits && onChangeRef.current) {
         const modifiedEditor = editor.getModifiedEditor();
-        modifiedEditor.onDidChangeModelContent(() => {
-          onModifiedChange(modifiedEditor.getValue());
+        changeSubRef.current = modifiedEditor.onDidChangeModelContent(() => {
+          onChangeRef.current?.(modifiedEditor.getValue());
         });
       }
     },
-    [onModifiedChange],
+    [allowEdits],
   );
+
+  useEffect(() => {
+    return () => {
+      changeSubRef.current?.dispose();
+      changeSubRef.current = null;
+    };
+  }, []);
 
   const resolvedLanguage = language ?? (filePath ? languageForPath(filePath) : 'plaintext');
 

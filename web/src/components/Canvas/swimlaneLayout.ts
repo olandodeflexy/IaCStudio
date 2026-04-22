@@ -62,7 +62,14 @@ export function buildSwimlaneLayout(input: SwimlaneInput): SwimlaneOutput {
 
   const { gutterWidth, envWidth, envGap, rowHeight, rowGap, headerHeight, resourceWidth, resourceHeight, resourceGap, padding } = LAYOUT;
 
-  const totalHeight = headerHeight + input.modules.length * (rowHeight + rowGap) - rowGap;
+  // With zero modules the naive formula yields headerHeight - rowGap,
+  // which makes the envColumn style.height go negative. Floor at
+  // headerHeight so an empty-modules project still renders a valid
+  // (if short) column band.
+  const totalHeight =
+    input.modules.length === 0
+      ? headerHeight
+      : headerHeight + input.modules.length * (rowHeight + rowGap) - rowGap;
 
   // Environment column headers + group containers. The group node is
   // what xyflow uses for visual grouping; the header is a separate

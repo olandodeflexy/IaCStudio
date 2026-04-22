@@ -22,10 +22,21 @@ export function ScanPanel({ projectName, tool = 'terraform', client = api }: Sca
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Same unmount guard as PolicyStudio — listSecurityScanners is an
+    // async fetch and the panel can legitimately disappear (tab switch,
+    // project change) before it resolves.
+    let cancelled = false;
     client.listSecurityScanners().then((list) => {
+      if (cancelled) return;
       setScanners(list);
       setSelected(Object.fromEntries(list.map((s) => [s.name, s.available])));
-    }).catch((err) => setError(String(err)));
+    }).catch((err) => {
+      if (cancelled) return;
+      setError(String(err));
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [client]);
 
   const run = async () => {

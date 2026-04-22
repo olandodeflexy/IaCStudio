@@ -30,13 +30,24 @@ export function PolicyStudioPanel({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Guard state setters against unmount so navigating away mid-fetch
+    // doesn't trigger React's "setState on unmounted component" warning
+    // (and worse, a ghost render after the panel is gone).
+    let cancelled = false;
     client.listPolicyEngines().then((engs) => {
+      if (cancelled) return;
       setEngines(engs);
       // Default: every available engine checked, unavailable ones off.
       setSelected(
         Object.fromEntries(engs.map((e) => [e.name, e.available])),
       );
-    }).catch((err) => setError(String(err)));
+    }).catch((err) => {
+      if (cancelled) return;
+      setError(String(err));
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [client]);
 
   const run = async () => {
