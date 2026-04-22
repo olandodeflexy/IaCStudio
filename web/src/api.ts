@@ -378,4 +378,104 @@ export const api = {
     });
     return (await check(res)).json();
   },
+
+  // Policy engines — the UI uses listPolicyEngines to render engine
+  // toggles, then runPolicy to fire the actual evaluation.
+  async listPolicyEngines(): Promise<{ name: string; available: boolean }[]> {
+    const res = await fetch(`${BASE}/api/policy/engines`);
+    return (await check(res)).json();
+  },
+  async runPolicy(
+    projectName: string,
+    req: { engines?: string[]; tool?: string; plan_json?: string } = {},
+  ): Promise<PolicyRunResponse> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/policy/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
+  // Security scanners. Parallel shape to policy — same request/response
+  // idiom so the Scan panel and the Policy Studio share a render
+  // pipeline.
+  async listSecurityScanners(): Promise<{ name: string; available: boolean }[]> {
+    const res = await fetch(`${BASE}/api/security/scanners`);
+    return (await check(res)).json();
+  },
+  async runScanners(
+    projectName: string,
+    req: { scanners?: string[]; tool?: string } = {},
+  ): Promise<ScanRunResponse> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/security/scanners/run`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
+  // Terraform module registry search. Backend proxies to the public
+  // registry so the browser doesn't need any CORS exception.
+  async searchModules(q: string, limit = 20): Promise<ModuleSearchResult> {
+    const res = await fetch(
+      `${BASE}/api/registry/modules/search?q=${encodeURIComponent(q)}&limit=${limit}`,
+    );
+    return (await check(res)).json();
+  },
 };
+
+// ─── Policy / Scan / Registry types ───────────────────────────────
+
+export type Severity = 'error' | 'warning' | 'info';
+
+export interface PolicyFinding {
+  engine: string;
+  policy_id: string;
+  policy_name: string;
+  severity: Severity;
+  category?: string;
+  resource?: string;
+  message: string;
+  suggestion?: string;
+  policy_file?: string;
+}
+
+export interface EngineResult {
+  engine: string;
+  available: boolean;
+  findings?: PolicyFinding[];
+  error?: string;
+}
+
+export interface PolicyRunResponse {
+  results: EngineResult[];
+  findings: PolicyFinding[];
+  blocking: boolean;
+}
+
+// Scan findings share the policy finding shape today — the backend
+// emits a superset-compatible Finding from both surfaces. If that
+// drifts we can split the types; for now one alias keeps rendering
+// code shared.
+export type ScanFinding = PolicyFinding;
+export type ScanResult = EngineResult;
+export type ScanRunResponse = PolicyRunResponse;
+
+export interface RegistryModule {
+  id: string;
+  namespace: string;
+  name: string;
+  provider: string;
+  version: string;
+  description: string;
+  source: string;
+  published_at: string;
+  downloads: number;
+  verified: boolean;
+}
+
+export interface ModuleSearchResult {
+  modules: RegistryModule[];
+}
