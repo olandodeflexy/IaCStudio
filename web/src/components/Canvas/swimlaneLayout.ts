@@ -15,9 +15,12 @@ import type { Resource } from '../../types';
 //   │   data  │  [rds]              │  [rds]              │  [rds] [replica]    │
 //   └─────────┴─────────────────────┴─────────────────────┴─────────────────────┘
 //
-// Env columns are group nodes (xyflow draws a subtle border around the
-// children); resource nodes are positioned absolutely within their
-// column. Module row labels sit in a fixed-width gutter on the left.
+// envColumn / envHeader / moduleLabel are background nodes — they set
+// visual chrome (borders, labels) but do not own resource children.
+// Resources carry absolute positions rather than xyflow parentId links
+// so the layout stays a pure function. Real xyflow grouping (parentId
+// + extent:'parent') can be bolted on later if the UX needs it (e.g.
+// drag a resource and have the whole column move).
 
 export interface SwimlaneInput {
   environments: string[];

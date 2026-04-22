@@ -98,13 +98,13 @@ describe('buildSwimlaneLayout', () => {
 describe('groupResourcesByCell', () => {
   it('groups via the classifier callback', () => {
     const resources = [
-      { ...r('a', 'aws_vpc'), file: 'envs/dev/network/main.tf' },
-      { ...r('b', 'aws_instance'), file: 'envs/prod/compute/main.tf' },
+      { ...r('a', 'aws_vpc'), file: 'environments/dev/network.tf' },
+      { ...r('b', 'aws_instance'), file: 'environments/prod/compute.tf' },
     ];
     const grouped = groupResourcesByCell(resources, (res) => {
       const parts = res.file?.split('/') ?? [];
-      if (parts[0] !== 'envs') return null;
-      return { environment: parts[1], module: parts[2] };
+      if (parts[0] !== 'environments') return null;
+      return { environment: parts[1], module: parts[2].replace(/\.tf$/, '') };
     });
     expect(grouped[cellKey('dev', 'network')]).toHaveLength(1);
     expect(grouped[cellKey('prod', 'compute')]).toHaveLength(1);
@@ -113,10 +113,10 @@ describe('groupResourcesByCell', () => {
   it('skips resources whose classifier returns null', () => {
     const resources = [
       { ...r('a', 'aws_vpc'), file: 'rogue.tf' },
-      { ...r('b', 'aws_instance'), file: 'envs/dev/compute/main.tf' },
+      { ...r('b', 'aws_instance'), file: 'environments/dev/compute.tf' },
     ];
     const grouped = groupResourcesByCell(resources, (res) =>
-      res.file?.startsWith('envs/') ? { environment: 'dev', module: 'compute' } : null,
+      res.file?.startsWith('environments/') ? { environment: 'dev', module: 'compute' } : null,
     );
     expect(Object.values(grouped).flat()).toHaveLength(1);
   });

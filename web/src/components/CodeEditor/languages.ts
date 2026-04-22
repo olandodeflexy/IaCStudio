@@ -6,8 +6,9 @@ import type * as monaco from 'monaco-editor';
 //
 // Monarch is regex-based and lives entirely on the worker thread, so
 // there's no language-server dependency to ship. When/if we wire a
-// proper terraform-ls or regols LSP, these become the fallback and the
-// LSP takes over for rich features (go-to-def, hover, etc.).
+// proper terraform-ls or a Rego language server, these become the
+// fallback and the LSP takes over for rich features (go-to-def,
+// hover, etc.).
 
 export type SupportedLanguage = 'hcl' | 'rego' | 'sentinel';
 

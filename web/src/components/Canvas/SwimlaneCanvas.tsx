@@ -26,29 +26,61 @@ export interface SwimlaneCanvasProps {
   className?: string;
 }
 
-const DEFAULT_ENVS_ROOT = 'environments';
-
-// Default classifier for layered-v1 projects. Walks the resource's
-// `file` path and picks out the environment + module segments based on
-// the scaffolded directory layout:
+// Default classifier for the layered-v1 scaffold, which on disk looks
+// like:
 //
-//   environments/<env>/<module>/main.tf
-//   modules/<module>/...              (no environment — skipped)
+//   environments/<env>/{main,variables,outputs,backend}.tf
+//   modules/<module>/{main,variables,outputs,versions}.tf
+//
+// Note the scaffold does NOT nest modules under environments — each
+// environment's main.tf instantiates a module via an HCL `module "<x>"
+// { source = "../../modules/<x>" }` block. The parser reports two
+// kinds of resources:
+//
+//   (1) resources defined inside `modules/<mod>/...`    — shared template
+//   (2) resources defined inside `environments/<env>/...` — env-local
+//
+// The swimlane view only meaningfully renders (2) today: the env is
+// explicit, and the module is guessed from the filename stem when it
+// matches a known module name, falling back to 'root' for env-level
+// plumbing that isn't a module instantiation.
+//
+// (1) is returned as null — module templates don't belong to any
+// single environment column. A later commit can expand them via HCL
+// module-block introspection so e.g. `modules/networking/aws_vpc.main`
+// shows up in (dev, networking), (stage, networking), (prod,
+// networking) with a "template" badge.
 //
 // Callers can override via SwimlaneCanvas.classify when their layout
-// differs (e.g. workspaces vs. directories).
+// differs (workspaces, Terragrunt, monorepo paths, …). 'root' is
+// treated as a valid module name when present in the modules array —
+// include it in LayeredProject.modules if you want env-level resources
+// to have a row.
 export function defaultLayeredClassifier(envs: string[], modules: string[]) {
   const envSet = new Set(envs);
   const modSet = new Set(modules);
   return (r: Resource) => {
     if (!r.file) return null;
     const parts = r.file.split('/');
-    const idx = parts.indexOf(DEFAULT_ENVS_ROOT);
-    if (idx < 0 || parts.length < idx + 3) return null;
-    const env = parts[idx + 1];
-    const mod = parts[idx + 2];
-    if (!envSet.has(env) || !modSet.has(mod)) return null;
-    return { environment: env, module: mod };
+
+    // modules/<mod>/...  → shared template, hide from the per-env view.
+    const modIdx = parts.indexOf('modules');
+    if (modIdx >= 0 && parts.length > modIdx + 1 && modSet.has(parts[modIdx + 1])) {
+      return null;
+    }
+
+    // environments/<env>/<file> → env-scoped. Module = filename stem if
+    // it matches a registered module, otherwise 'root'.
+    const envIdx = parts.indexOf('environments');
+    if (envIdx >= 0 && parts.length > envIdx + 1 && envSet.has(parts[envIdx + 1])) {
+      const env = parts[envIdx + 1];
+      const fileName = parts[parts.length - 1] ?? '';
+      const stem = fileName.replace(/\.tf$/, '');
+      const module = modSet.has(stem) ? stem : 'root';
+      if (!modSet.has(module)) return null;
+      return { environment: env, module };
+    }
+    return null;
   };
 }
 
