@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -133,20 +134,11 @@ func TestOllamaEmbed_ErrorFieldSurfaces(t *testing.T) {
 
 	e := NewOllama(Config{Endpoint: srv.URL, Model: "foo", Dim: 3})
 	_, err := e.Embed(context.Background(), []string{"x"})
-	if err == nil || !containsErr(err, "model not found") {
+	if err == nil || !errContains(err, "model not found") {
 		t.Errorf("want model-not-found error, got %v", err)
 	}
 }
 
-func containsErr(err error, needle string) bool {
-	return err != nil && (err.Error() == needle || len(err.Error()) >= len(needle) && contains(err.Error(), needle))
-}
-
-func contains(s, sub string) bool {
-	for i := 0; i+len(sub) <= len(s); i++ {
-		if s[i:i+len(sub)] == sub {
-			return true
-		}
-	}
-	return false
+func errContains(err error, needle string) bool {
+	return err != nil && strings.Contains(err.Error(), needle)
 }

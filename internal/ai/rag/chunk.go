@@ -66,6 +66,9 @@ func skipDir(name string) bool {
 // file is unreadable.
 func ChunkProject(dir string) ([]Chunk, error) {
 	var chunks []Chunk
+	// parsedDirs caches ParseDir results so each directory is only parsed
+	// once even when it contains multiple HCL files.
+	parsedDirs := map[string][]parser.Resource{}
 	walkErr := filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
@@ -88,7 +91,7 @@ func ChunkProject(dir string) ([]Chunk, error) {
 			return nil
 		}
 		rel, _ := filepath.Rel(dir, path)
-		produced, perr := chunkFile(path, rel, ext)
+		produced, perr := chunkFile(path, rel, ext, parsedDirs)
 		if perr != nil {
 			// Don't abort the walk; just skip this file.
 			return nil
@@ -103,14 +106,14 @@ func ChunkProject(dir string) ([]Chunk, error) {
 // everything else goes through whole-file chunking (with a soft line
 // cap that splits very long files into 200-line overlapping windows so
 // the embedder sees coherent regions).
-func chunkFile(absPath, relPath, ext string) ([]Chunk, error) {
+func chunkFile(absPath, relPath, ext string, parsedDirs map[string][]parser.Resource) ([]Chunk, error) {
 	body, err := os.ReadFile(absPath)
 	if err != nil {
 		return nil, err
 	}
 	switch ext {
 	case ".tf", ".hcl", ".tfvars":
-		return chunkHCL(absPath, relPath, body)
+		return chunkHCL(absPath, relPath, body, parsedDirs)
 	case ".md":
 		return chunkByHeadings(relPath, string(body), "markdown"), nil
 	case ".rego":
@@ -124,16 +127,23 @@ func chunkFile(absPath, relPath, ext string) ([]Chunk, error) {
 // chunkHCL uses the HCL parser to emit one chunk per resource/variable/
 // output/module/data/locals block. Non-parseable HCL falls through to a
 // whole-file chunk so we still index partially-broken files during
-// editing.
-func chunkHCL(absPath, relPath string, body []byte) ([]Chunk, error) {
+// editing. parsedDirs is a caller-owned cache: ParseDir is called at
+// most once per directory so a module with 10 .tf files doesn't trigger
+// 10 identical parses.
+func chunkHCL(absPath, relPath string, body []byte, parsedDirs map[string][]parser.Resource) ([]Chunk, error) {
 	lines := strings.Split(string(body), "\n")
 
-	// ParseDir walks the whole directory — a syntax error in a sibling
-	// file (e.g. scratch.tf the user is mid-edit) shouldn't block us
-	// from chunking this file's resources, so we only fall back when
-	// nothing at all was parsed.
-	p := parser.HCLParser{}
-	resources, _ := p.ParseDir(filepath.Dir(absPath))
+	dirPath := filepath.Dir(absPath)
+	resources, ok := parsedDirs[dirPath]
+	if !ok {
+		// ParseDir walks the whole directory — a syntax error in a sibling
+		// file (e.g. scratch.tf the user is mid-edit) shouldn't block us
+		// from chunking this file's resources, so we only fall back when
+		// nothing at all was parsed.
+		p := parser.HCLParser{}
+		resources, _ = p.ParseDir(dirPath)
+		parsedDirs[dirPath] = resources
+	}
 	if len(resources) == 0 {
 		return []Chunk{newChunk(relPath, 1, len(lines), "hcl_file", string(body))}, nil
 	}

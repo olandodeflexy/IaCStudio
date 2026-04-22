@@ -3,6 +3,8 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"sync"
@@ -68,7 +70,7 @@ func registerRAGRoutes(mux *http.ServeMux, projectsDir string, aiClient *ai.Clie
 			Dim      int    `json:"dim,omitempty"`
 		}
 		var body overrideBody
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && err.Error() != "EOF" {
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
