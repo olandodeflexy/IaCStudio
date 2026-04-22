@@ -54,7 +54,7 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activePanel, setActivePanel] = useState('palette');
-  const [showGuide, setShowGuide] = useState(true);
+
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
   const [dragging, setDragging] = useState<{ id: string; ox: number; oy: number } | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
@@ -856,7 +856,6 @@ export default function App() {
 
   const ct = TOOLS[tool];
   const selected = nodes.find(n => n.id === selectedNode);
-  const categories = [...new Set(catalogResources.map((r: any) => r.category))];
 
   // ─── Main UI ───
   return (

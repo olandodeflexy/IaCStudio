@@ -21,8 +21,8 @@ export interface SwimlaneCanvasProps {
   // cell it belongs in, or null to hide it. Default strategy: parse
   // the resource's `file` path as `<envs-root>/<env>/<module>/...`
   // which matches the layered-v1 scaffold layout from #1.
-  classify?: (r: Resource) => { environment: string; module: string } | null;
-  onSelectResource?: (id: string) => void;
+  classify?: (_r: Resource) => { environment: string; module: string } | null;
+  onSelectResource?: (_id: string) => void;
   className?: string;
 }
 

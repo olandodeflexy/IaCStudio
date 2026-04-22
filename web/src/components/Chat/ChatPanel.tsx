@@ -11,7 +11,7 @@ export interface ChatMessage {
 export interface ChatPanelProps {
   messages: ChatMessage[];
   input: string;
-  onInputChange: (value: string) => void;
+  onInputChange: (_value: string) => void;
   onSubmit: () => void;
   loading: boolean;
   // Tool colour is used for the AI bullet glyph and the send button

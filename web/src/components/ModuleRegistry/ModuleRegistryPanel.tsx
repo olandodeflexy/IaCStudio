@@ -10,7 +10,7 @@ export interface ModuleRegistryPanelProps {
   // Called when the user wants to adopt a module into their project
   // (e.g. drop a module block on the canvas). The parent decides what
   // 'adopt' means — insert an HCL block, open a scaffold dialog, etc.
-  onAdopt?: (module: RegistryModule) => void;
+  onAdopt?: (_module: RegistryModule) => void;
   initialQuery?: string;
 }
 
