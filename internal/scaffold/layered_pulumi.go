@@ -18,12 +18,6 @@ import (
 // users don't see "generated HCL" hints when a value fails.
 var tagValueRE = regexp.MustCompile(`^[A-Za-z0-9 _.:/=+\-@]{1,128}$`)
 
-// gcpLabelRE tightens tag validation for GCP labels: values must be
-// [a-z0-9_-], ≤63 chars, non-empty. The Pulumi blueprint normalises
-// to this subset via sanitizeGCPLabel so a user-entered "Team A"
-// doesn't reach the provider as an invalid label.
-var gcpLabelRE = regexp.MustCompile(`^[a-z0-9_-]{0,63}$`)
-
 func validateTagValue(key, value string) error {
 	if value == "" {
 		return fmt.Errorf("%s must not be empty", key)
