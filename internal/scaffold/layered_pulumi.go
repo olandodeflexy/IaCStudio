@@ -250,10 +250,13 @@ func seedResourcesFor(cloud, projectName, env, owner, region string) []parser.Re
 		"managed_by":  "iac-studio",
 		"environment": sanitizeGCPLabel(env),
 	}
-	// Bucket names are capped at 63 chars across S3 and GCS. Leave
-	// room for the "-<env>-seed" suffix so long project names plus
-	// long env names don't produce invalid bucket names at apply time.
-	suffix := "-" + env + "-seed"
+	// Bucket names are capped at 63 chars across S3 and GCS AND must
+	// be DNS-compatible (no underscores). The env directory name is
+	// allowed to contain underscores (validatePathSegment), so we
+	// sanitize it for bucket-naming purposes only — tags/directory
+	// paths keep the original env.
+	bucketEnv := strings.ReplaceAll(env, "_", "-")
+	suffix := "-" + bucketEnv + "-seed"
 	maxBucketBase := 63 - len(suffix)
 	if maxBucketBase < 3 {
 		maxBucketBase = 3 // S3 bucket-name floor
@@ -306,7 +309,10 @@ func seedResourcesFor(cloud, projectName, env, owner, region string) []parser.Re
 		}
 		// Resource-group names are scoped per-subscription and capped
 		// at 90 chars. Env-scope the name so dev + prod can coexist.
-		rgName := projectName + "-" + env + "-rg"
+		// Use the underscore-sanitized env so the RG name stays
+		// hyphen-based (Azure allows underscores but hyphens read
+		// cleaner and match the bucket-naming convention above).
+		rgName := projectName + "-" + bucketEnv + "-rg"
 		return []parser.Resource{{
 			ID:   "azurerm_resource_group.seed",
 			Type: "azurerm_resource_group",

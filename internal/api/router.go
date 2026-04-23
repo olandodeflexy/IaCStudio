@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -669,7 +670,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		var req struct {
 			Env string `json:"env,omitempty"`
 		}
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		// A missing body (EOF) is fine — kill defaults to the project
+		// root. Any other decode failure is a client error; treating
+		// it as "no env" would silently target the wrong execution.
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body: "+err.Error(), 400)
+			return
+		}
 		if req.Env != "" {
 			sub, subErr := safeSubdir(projectPath, "environments", req.Env)
 			if subErr != nil {
