@@ -658,6 +658,27 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), 400)
 			return
 		}
+
+		// SafeRunner keys active executions by the exact workdir the
+		// run handler passed in. When /run was invoked with env set,
+		// that workdir was rebased to environments/<env> — so kill
+		// must be able to rebase the same way to find the execution.
+		// Env is optional on kill; an empty body still works for
+		// project-root runs.
+		limitBody(w, r)
+		var req struct {
+			Env string `json:"env,omitempty"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.Env != "" {
+			sub, subErr := safeSubdir(projectPath, "environments", req.Env)
+			if subErr != nil {
+				http.Error(w, "invalid env: "+subErr.Error(), 400)
+				return
+			}
+			projectPath = sub
+		}
+
 		if err := run.Kill(projectPath); err != nil {
 			http.Error(w, err.Error(), 404)
 			return
