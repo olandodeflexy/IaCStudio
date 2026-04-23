@@ -100,26 +100,24 @@ var pulumiTypeOverrides = map[string]string{
 }
 
 // fallbackPulumiType guesses a Pulumi constructor when there's no
-// explicit override. It returns something that compiles even when the
-// package name is a guess — the user sees the TS compiler's missing-
-// module error and knows to either register an override upstream or
-// hand-edit the import.
+// explicit override. Every unknown path goes through an `as any` cast
+// so the generated program parses in TypeScript regardless of whether
+// the guessed subpackage exists. Without the cast, `aws.fictional.
+// Thing` / `gcp.bogus.Thing` would hard-fail tsc at the unknown
+// namespace reference, turning a best-effort guess into a blocker.
+// The user sees undefined-at-runtime errors when they actually wire
+// the resource up, and can register an override in
+// pulumiTypeOverrides or hand-edit the import.
 func fallbackPulumiType(tfType string) string {
 	switch {
 	case strings.HasPrefix(tfType, "aws_"):
 		rest := strings.TrimPrefix(tfType, "aws_")
-		return "aws." + guessAWSPackage(rest) + "." + pascalCaseFromSnake(rest)
+		return "(aws as any)." + guessAWSPackage(rest) + "." + pascalCaseFromSnake(rest)
 	case strings.HasPrefix(tfType, "google_"):
 		rest := strings.TrimPrefix(tfType, "google_")
-		return "gcp." + guessGCPPackage(rest) + "." + pascalCaseFromSnake(rest)
+		return "(gcp as any)." + guessGCPPackage(rest) + "." + pascalCaseFromSnake(rest)
 	case strings.HasPrefix(tfType, "azurerm_"):
 		rest := strings.TrimPrefix(tfType, "azurerm_")
-		// (azure as any) sidesteps the per-package typing for
-		// unknown Azure resources. TS still parses the expression
-		// and the program compiles; the user hand-fixes the import
-		// when they actually wire the resource up. Without the
-		// `as any` cast, `azure.fictional.Thing` would hard-fail
-		// tsc at the unknown namespace reference.
 		return "(azure as any)." + guessAzurePackage(rest) + "." + pascalCaseFromSnake(rest)
 	}
 	return pascalCaseFromSnake(tfType)

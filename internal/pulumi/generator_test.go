@@ -167,13 +167,19 @@ func TestTerraformToPulumi_Overrides(t *testing.T) {
 }
 
 func TestTerraformToPulumi_FallbackCompiles(t *testing.T) {
-	// Unknown type falls through to a best-effort guess. We don't
-	// enforce an exact string — just that it produces a dotted
-	// identifier that TS will parse (and the user can hand-fix if
-	// needed).
-	got := terraformToPulumi("aws_weirdthing_newservice")
-	if !strings.Contains(got, ".") || !strings.HasPrefix(got, "aws.") {
-		t.Errorf("unexpected fallback shape: %q", got)
+	// Unknown AWS/GCP/Azure types all fall through to the same
+	// (<ns> as any).<pkg>.<Type> shape so the TS compiler accepts
+	// them even when the guessed subpackage is wrong.
+	cases := map[string]string{
+		"aws_weirdthing_newservice":    "(aws as any).",
+		"google_bogus_service":         "(gcp as any).",
+		"azurerm_fictional_thing":      "(azure as any).",
+	}
+	for in, wantPrefix := range cases {
+		got := terraformToPulumi(in)
+		if !strings.HasPrefix(got, wantPrefix) {
+			t.Errorf("terraformToPulumi(%q) = %q, want prefix %q", in, got, wantPrefix)
+		}
 	}
 }
 

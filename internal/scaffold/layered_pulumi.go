@@ -312,7 +312,16 @@ func seedResourcesFor(cloud, projectName, env, owner, region string) []parser.Re
 		// Use the underscore-sanitized env so the RG name stays
 		// hyphen-based (Azure allows underscores but hyphens read
 		// cleaner and match the bucket-naming convention above).
-		rgName := projectName + "-" + bucketEnv + "-rg"
+		// Truncate the project-name segment when the total would blow
+		// the 90-char cap — projectName=63 + env=32 + '-rg'=3 +
+		// separators = up to 100.
+		rgSuffix := "-" + bucketEnv + "-rg"
+		maxRGBase := 90 - len(rgSuffix)
+		if maxRGBase < 1 {
+			maxRGBase = 1
+		}
+		rgBase := truncateForBucketName(projectName, maxRGBase)
+		rgName := rgBase + rgSuffix
 		return []parser.Resource{{
 			ID:   "azurerm_resource_group.seed",
 			Type: "azurerm_resource_group",

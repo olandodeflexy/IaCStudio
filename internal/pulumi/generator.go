@@ -87,9 +87,9 @@ type ProjectFile struct {
 //	index.ts                       resource program
 //	.gitignore                     exclude node_modules / Pulumi state
 //
-// Errors return a non-nil slice with the files produced so far — same
-// convention as the Terraform scaffold. Callers decide whether a
-// partial render is worth persisting.
+// Validation and unsupported-runtime errors return (nil, err). On
+// success the returned slice contains the complete rendered file set;
+// there are no partial-return paths today.
 func GenerateProject(cfg ProjectConfig) ([]ProjectFile, error) {
 	if err := ValidateProjectName(cfg.Name); err != nil {
 		return nil, fmt.Errorf("pulumi.GenerateProject: %w", err)
