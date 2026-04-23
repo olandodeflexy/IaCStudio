@@ -213,6 +213,43 @@ func toCamelCase(s string) string {
 	return out
 }
 
+// uniqueVarName returns a TS-safe variable name for a resource,
+// suffixing with a type-derived hint when the base camelCased name
+// is already in use. Terraform graphs only enforce Name-uniqueness
+// per-Type, so aws_vpc.main and aws_subnet.main can legitimately
+// coexist; emitting `const main = ...` twice is a TS redeclaration.
+//
+// First collision adopts Type-derived suffix ("mainVpc"); subsequent
+// collisions of the same suffix append a counter ("mainVpc2"). The
+// `used` map is mutated and expected to be caller-scoped to a single
+// program render.
+func uniqueVarName(base, resourceType string, used map[string]int) string {
+	if _, taken := used[base]; !taken {
+		used[base] = 1
+		return base
+	}
+	// Derive a suffix from the TF type's leaf segment: aws_vpc → Vpc.
+	parts := strings.Split(resourceType, "_")
+	suffix := ""
+	if len(parts) > 0 {
+		last := parts[len(parts)-1]
+		if last != "" {
+			runes := []rune(last)
+			runes[0] = unicode.ToUpper(runes[0])
+			suffix = string(runes)
+		}
+	}
+	candidate := base + suffix
+	for {
+		if _, taken := used[candidate]; !taken {
+			used[candidate] = 1
+			return candidate
+		}
+		used[base+suffix]++
+		candidate = fmt.Sprintf("%s%s%d", base, suffix, used[base+suffix])
+	}
+}
+
 // sanitizeTSIdent turns an arbitrary resource name into a valid
 // TypeScript identifier. camelCase on resource names like
 // "<project>_seed" is fine when the project is a valid identifier,

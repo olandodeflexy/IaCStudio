@@ -350,11 +350,20 @@ func renderProgram(cfg ProjectConfig) string {
 		return ordered[i].ID < ordered[j].ID
 	})
 
-	for _, r := range ordered {
+	// used tracks which TS identifiers have been emitted in this
+	// program so we can suffix a counter when two resources share a
+	// Name (aws_vpc.main + aws_subnet.main would both camelCase to
+	// "main" and produce a redeclaration error). We'd rather emit
+	// slightly ugly `mainVpc` / `mainSubnet` than a program that
+	// doesn't compile.
+	used := make(map[string]int)
+	varNames := make([]string, len(ordered))
+	for i, r := range ordered {
 		// Sanitize before camel-casing because project names can
 		// contain hyphens ("acme-infra") which would otherwise produce
 		// invalid TypeScript identifiers like `acme-infraSeed`.
-		varName := sanitizeTSIdent(toCamelCase(r.Name))
+		varName := uniqueVarName(sanitizeTSIdent(toCamelCase(r.Name)), r.Type, used)
+		varNames[i] = varName
 		pType := terraformToPulumi(r.Type)
 		b.WriteString(fmt.Sprintf("const %s = new %s(%q, {\n", varName, pType, r.Name))
 
@@ -381,8 +390,8 @@ func renderProgram(cfg ProjectConfig) string {
 	}
 
 	b.WriteString("// Exports — consumed by stack references + CI assertions.\n")
-	for _, r := range ordered {
-		varName := sanitizeTSIdent(toCamelCase(r.Name))
+	for i := range ordered {
+		varName := varNames[i]
 		b.WriteString(fmt.Sprintf("export const %sId = %s.id;\n", varName, varName))
 	}
 	return b.String()

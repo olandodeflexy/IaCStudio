@@ -304,8 +304,12 @@ func pulumiLifecycleScripts() []File {
 	initSh := `#!/usr/bin/env bash
 set -euo pipefail
 # Installs node_modules for every environment project. Run once after
-# cloning. Requires: pulumi, node, npm. The SafeRunner calls the
-# equivalent on the 'init' command when driving commands from the UI.
+# cloning. Requires: pulumi, node, npm.
+#
+# Note: this wrapper performs a per-environment install for layered
+# projects. The SafeRunner's 'init' command for Pulumi only runs 'npm
+# install' in the project root (suitable for flat Pulumi layouts);
+# layered users should run this script directly for now.
 cd "$(dirname "$0")/.."
 for dir in environments/*/; do
   echo "→ npm install in $dir"

@@ -336,6 +336,31 @@ func TestFallbackPulumiType_AzureUsesAsAnyCast(t *testing.T) {
 	}
 }
 
+func TestRenderProgram_DedupesSharedNamesAcrossTypes(t *testing.T) {
+	// Two resources of different types share the name "main". Without
+	// dedup we'd emit `const main = ...` twice (TS redeclaration
+	// error). Output should carry mainVpc + mainSubnet (Type-derived
+	// suffix) so the program compiles.
+	prog := renderProgram(ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{
+			{ID: "aws_vpc.main", Type: "aws_vpc", Name: "main",
+				Properties: map[string]any{"cidr_block": "10.0.0.0/16"}},
+			{ID: "aws_subnet.main", Type: "aws_subnet", Name: "main",
+				Properties: map[string]any{"cidr_block": "10.0.1.0/24"}},
+		},
+	})
+	mainCount := strings.Count(prog, "const main = ")
+	if mainCount > 1 {
+		t.Errorf("duplicate `const main` redeclaration — want at most 1, got %d\n%s", mainCount, prog)
+	}
+	// Second occurrence gets a type suffix so both resources end up
+	// with distinct identifiers.
+	if !strings.Contains(prog, "const main ") && !strings.Contains(prog, "const mainVpc ") {
+		t.Error("neither main nor mainVpc emitted")
+	}
+}
+
 func TestTsPropValue_CamelCasesNestedPropertyKeys(t *testing.T) {
 	// Terraform-style nested block — keys should camelCase so Pulumi
 	// sees 'networkAcl' + 'cidrBlocks' instead of the snake_case

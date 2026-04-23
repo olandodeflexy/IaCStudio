@@ -78,6 +78,56 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 	return resolved, nil
 }
 
+// safeSubdir resolves a subdirectory beneath projectPath while
+// enforcing the same traversal + containment guarantees safeProjectPath
+// offers at the project level. Each path segment is validated
+// (alphanumeric + hyphen + underscore, no dots, no separators) and
+// the final absolute path must stay inside projectPath after symlink
+// resolution.
+//
+// Used by the /api/projects/{name}/run endpoint to rebase execution
+// into environments/<env>/ for layered-v1 layouts so the runner finds
+// Pulumi.yaml / main.tf in the right workdir.
+func safeSubdir(projectPath string, segments ...string) (string, error) {
+	for _, seg := range segments {
+		if seg == "" || seg == "." || seg == ".." ||
+			strings.ContainsAny(seg, `/\`) ||
+			strings.Contains(seg, "..") {
+			return "", fmt.Errorf("invalid path segment: %q", seg)
+		}
+		for _, r := range seg {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+				(r >= '0' && r <= '9') || r == '-' || r == '_') {
+				return "", fmt.Errorf("invalid path segment: %q (only alphanumeric, hyphens, underscores)", seg)
+			}
+		}
+	}
+	joined := filepath.Join(append([]string{projectPath}, segments...)...)
+	absProject, err := filepath.Abs(projectPath)
+	if err != nil {
+		return "", err
+	}
+	if eval, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = eval
+	}
+	absJoined, err := filepath.Abs(joined)
+	if err != nil {
+		return "", err
+	}
+	if eval, err := filepath.EvalSymlinks(joined); err == nil {
+		if abs, absErr := filepath.Abs(eval); absErr == nil {
+			absJoined = abs
+		}
+	}
+	if !strings.HasPrefix(absJoined, absProject+string(filepath.Separator)) {
+		return "", fmt.Errorf("subdir escapes project root")
+	}
+	if _, err := os.Stat(joined); err != nil {
+		return "", fmt.Errorf("subdir does not exist: %w", err)
+	}
+	return joined, nil
+}
+
 // planGate tracks which projects have had a recent plan run.
 // Apply/destroy is only allowed after a plan has been run for the same project.
 var planGate = struct {
@@ -488,10 +538,28 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			// is telling us they've read the findings and still want to
 			// proceed. Logged server-side so the override is audit-trailable.
 			Acknowledged bool `json:"acknowledged"`
+			// Env names the environment subdirectory to execute in for
+			// layered-v1 projects (environments/<env>/...). Empty runs
+			// commands at the project root (flat layout). Validated as a
+			// safe path segment so a bad value can't traverse.
+			Env string `json:"env,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
 			return
+		}
+
+		// When Env is set, rebase projectPath into environments/<env>
+		// so the runner finds Pulumi.yaml / main.tf in the right
+		// working directory. The subdir must exist and be contained
+		// in projectPath — safeJoin below rejects traversal.
+		if req.Env != "" {
+			subPath, subErr := safeSubdir(projectPath, "environments", req.Env)
+			if subErr != nil {
+				http.Error(w, "invalid env: "+subErr.Error(), 400)
+				return
+			}
+			projectPath = subPath
 		}
 
 		// Block apply/destroy unless:
