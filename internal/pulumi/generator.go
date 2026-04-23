@@ -333,7 +333,24 @@ func renderProgram(cfg ProjectConfig) string {
 	b.WriteString(fmt.Sprintf("const config = new pulumi.Config(%q);\n", cfg.Name))
 	b.WriteString("const environment = config.get(\"environment\") ?? \"dev\";\n\n")
 
-	for _, r := range cfg.Resources {
+	// Sort a copy of the resource slice so upstream sources with
+	// non-deterministic ordering (filesystem walks, map iteration)
+	// can't produce different programs across runs. Ordering by Type
+	// then Name then ID mirrors the stable sort the property keys
+	// already use and is stable across any upstream input.
+	ordered := make([]parser.Resource, len(cfg.Resources))
+	copy(ordered, cfg.Resources)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		if ordered[i].Type != ordered[j].Type {
+			return ordered[i].Type < ordered[j].Type
+		}
+		if ordered[i].Name != ordered[j].Name {
+			return ordered[i].Name < ordered[j].Name
+		}
+		return ordered[i].ID < ordered[j].ID
+	})
+
+	for _, r := range ordered {
 		// Sanitize before camel-casing because project names can
 		// contain hyphens ("acme-infra") which would otherwise produce
 		// invalid TypeScript identifiers like `acme-infraSeed`.
@@ -364,7 +381,7 @@ func renderProgram(cfg ProjectConfig) string {
 	}
 
 	b.WriteString("// Exports — consumed by stack references + CI assertions.\n")
-	for _, r := range cfg.Resources {
+	for _, r := range ordered {
 		varName := sanitizeTSIdent(toCamelCase(r.Name))
 		b.WriteString(fmt.Sprintf("export const %sId = %s.id;\n", varName, varName))
 	}

@@ -10,6 +10,13 @@ import (
 	"github.com/iac-studio/iac-studio/internal/pulumi"
 )
 
+// gcpRegionRE matches Google Cloud's canonical region/zone shape —
+// one or more lowercase letters, a hyphen, one or more lowercase
+// letters, ending in digits (us-central1, europe-west2, asia-
+// northeast3). Used to distinguish a real GCP region from AWS-shaped
+// inputs ("us-east-1") when selecting a GCS bucket location.
+var gcpRegionRE = regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]+$`)
+
 // tagValueRE is a tool-agnostic accept pattern for free-form tag/
 // label values. Allows letters, digits, spaces, _.:/=+-@ — the
 // Terraform HCL-safe set without emphasising HCL in the error
@@ -242,12 +249,22 @@ func seedResourcesFor(cloud, projectName, owner, region string) []parser.Resourc
 			},
 		}}
 	case "gcp":
-		// GCS bucket locations use short names (US, EU, ASIA) or
-		// specific multi-regions. If the user provided a canonical
-		// region like us-central1 we fall back to US so the seed
-		// doesn't reject; hand-editable after scaffold.
+		// GCS accepts both canonical regions (us-central1, europe-
+		// west1) and short multi-regions (US, EU, ASIA). Pass the
+		// user's value through when it looks like a canonical GCP
+		// region, uppercase it when it's already a short multi-
+		// region, and fall back to US for AWS-shaped inputs
+		// (us-east-1, us-west-2) or empty.
 		loc := "US"
-		if region != "" && !strings.Contains(region, "-") {
+		switch {
+		case region == "":
+			// fall through to default
+		case gcpRegionRE.MatchString(region):
+			loc = region
+		case len(region) <= 4 && region == strings.ToUpper(region):
+			// Short multi-region as-is (US, EU, ASIA).
+			loc = region
+		case len(region) <= 4:
 			loc = strings.ToUpper(region)
 		}
 		return []parser.Resource{{
@@ -336,7 +353,11 @@ func renderPulumiProjectReadme(name, cloud string, envs []string) string {
 	b.WriteString("pulumi login                     # one-time — pick a backend (local / Pulumi Cloud)\n")
 	b.WriteString("./scripts/init.sh                # npm install in each environments/<env>\n")
 	for _, env := range envs {
-		fmt.Fprintf(&b, "pulumi stack init %s             # once per env — creates the Pulumi stack\n", env)
+		// `pulumi stack init` reads Pulumi.yaml from the working dir,
+		// which under layered-pulumi lives at environments/<env>/,
+		// not the repo root. Using --cwd keeps the commands runnable
+		// as-is from the README without a per-step cd.
+		fmt.Fprintf(&b, "pulumi --cwd environments/%s stack init %s   # once per env — creates the Pulumi stack\n", env, env)
 	}
 	b.WriteString("```\n\n")
 	b.WriteString("## Daily use\n\n")
