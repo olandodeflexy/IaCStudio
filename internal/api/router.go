@@ -122,8 +122,15 @@ func safeSubdir(projectPath string, segments ...string) (string, error) {
 	if !strings.HasPrefix(absJoined, absProject+string(filepath.Separator)) {
 		return "", fmt.Errorf("subdir escapes project root")
 	}
-	if _, err := os.Stat(joined); err != nil {
+	info, err := os.Stat(joined)
+	if err != nil {
 		return "", fmt.Errorf("subdir does not exist: %w", err)
+	}
+	// The result is used as cmd.Dir — passing a file would produce a
+	// confusing 'not a directory' error mid-exec. Reject here so the
+	// 400 carries a targeted message.
+	if !info.IsDir() {
+		return "", fmt.Errorf("subdir is not a directory: %s", joined)
 	}
 	return joined, nil
 }
@@ -552,7 +559,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// When Env is set, rebase projectPath into environments/<env>
 		// so the runner finds Pulumi.yaml / main.tf in the right
 		// working directory. The subdir must exist and be contained
-		// in projectPath — safeJoin below rejects traversal.
+		// in projectPath — safeSubdir below rejects traversal and
+		// rejects paths that point at a file instead of a directory.
 		if req.Env != "" {
 			subPath, subErr := safeSubdir(projectPath, "environments", req.Env)
 			if subErr != nil {
@@ -613,8 +621,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
 			result, err := run.Execute(context.Background(), projectPath, req.Tool, req.Command)
-			// Only record a successful plan — failed/cancelled plans don't count
-			if err == nil && (req.Command == "plan" || req.Command == "check") {
+			// Only record a successful plan — failed/cancelled plans don't count.
+			// 'preview' is Pulumi's equivalent of terraform plan; without it
+			// here, a pulumi up following a successful preview would be
+			// blocked with 'plan_required'. projectPath already reflects
+			// the env rebase so dev + prod track their plan state
+			// independently.
+			if err == nil && (req.Command == "plan" || req.Command == "preview" || req.Command == "check") {
 				recordPlan(projectPath)
 			}
 			msg := map[string]interface{}{

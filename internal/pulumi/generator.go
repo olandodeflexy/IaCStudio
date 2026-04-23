@@ -6,9 +6,10 @@
 //
 // Sibling to internal/scaffold/layered_terraform.go: same blueprint
 // shape (environments × modules), same naming conventions, but TS
-// instead of HCL. The dual-stack scaffolder consumes both so a single
-// canvas can render some environments as Terraform and others as
-// Pulumi.
+// instead of HCL. This package provides the Pulumi-side generator
+// for that blueprint shape; mixed per-environment Terraform+Pulumi
+// in a single project is a planned follow-up (see issue #5 — parser
+// + dual-stack mode).
 package pulumi
 
 import (

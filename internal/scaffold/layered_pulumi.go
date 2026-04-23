@@ -10,12 +10,13 @@ import (
 	"github.com/iac-studio/iac-studio/internal/pulumi"
 )
 
-// gcpRegionRE matches Google Cloud's canonical region/zone shape —
-// one or more lowercase letters, a hyphen, one or more lowercase
-// letters, ending in digits (us-central1, europe-west2, asia-
-// northeast3). Used to distinguish a real GCP region from AWS-shaped
-// inputs ("us-east-1") when selecting a GCS bucket location.
-var gcpRegionRE = regexp.MustCompile(`^[a-z]+-[a-z]+[0-9]+$`)
+// gcpRegionRE matches Google Cloud's canonical region shape —
+// lowercase alphabetic segments separated by hyphens, ending in a
+// digit suffix. Covers us-central1, europe-west2, asia-northeast3,
+// AND the longer forms like northamerica-northeast1 / southamerica-
+// east1. Deliberately excludes zones (us-central1-a, trailing -a/b/c)
+// since GCS bucket locations take regions, not zones.
+var gcpRegionRE = regexp.MustCompile(`^[a-z]+(-[a-z]+)+[0-9]+$`)
 
 // tagValueRE is a tool-agnostic accept pattern for free-form tag/
 // label values. Allows letters, digits, spaces, _.:/=+-@ — the
@@ -113,8 +114,8 @@ func (b *LayeredPulumiBlueprint) Inputs() []Input {
 			Options: []string{"aws", "gcp", "azure"}, Default: "aws", Required: true},
 		{Key: "environments", Label: "Environments", Type: "multiselect",
 			Options: []string{"dev", "staging", "prod"}, Default: []string{"dev", "prod"}},
-		{Key: "region", Label: "Primary region / location", Type: "string", Default: "us-east-1",
-			Description: "Baked into each Pulumi.<env>.yaml using the cloud-specific config key: aws:region / gcp:region / azure-native:location."},
+		{Key: "region", Label: "Primary region / location", Type: "string", Default: "",
+			Description: "Baked into each Pulumi.<env>.yaml using the cloud-specific config key: aws:region / gcp:region / azure-native:location. Leave empty to use the per-cloud default (us-east-1 for AWS, us-central1 for GCP, WestUS2 for Azure)."},
 		{Key: "owner_tag", Label: "Owner tag", Type: "string", Default: "platform"},
 	}
 }
@@ -136,21 +137,25 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 			return nil, err
 		}
 	}
-	region := stringInput(values, "region", "us-east-1")
+	// Default is empty — per-cloud fallback happens inside Pulumi's
+	// generator (aws: us-east-1, gcp: us-central1, azure: WestUS2).
+	// Only substitute a cloud-appropriate default at scaffold time so
+	// the seed resource locations match what ends up in Pulumi.<env>.yaml.
+	region := stringInput(values, "region", "")
+	if region == "" {
+		switch cloud {
+		case "gcp":
+			region = "us-central1"
+		case "azure":
+			region = "WestUS2"
+		default:
+			region = "us-east-1"
+		}
+	}
 	owner := stringInput(values, "owner_tag", "platform")
 	if err := validateTagValue("owner_tag", owner); err != nil {
 		return nil, err
 	}
-
-	// A minimal seed resource per cloud so the generated program isn't
-	// empty. Users replace/extend via the canvas; the seed exists so
-	// `pulumi preview` succeeds immediately after scaffolding without
-	// requiring the user to edit index.ts by hand. owner_tag flows
-	// onto the seed's tags so the configured value round-trips to
-	// real infrastructure instead of being a decorative input. region
-	// is threaded through so the seed's location matches the stack
-	// config (previously hardcoded to US / WestUS2 regardless).
-	seed := seedResourcesFor(cloud, name, owner, region)
 
 	var files []File
 	for _, env := range envs {
@@ -161,6 +166,13 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 		// validation) so a 60-char base leaves comfortable margin.
 		const maxBase = 60
 		projName := truncateForBucketName(name, maxBase) + "-" + env
+
+		// Seed resources are generated PER-ENV so cloud-global names
+		// (S3 / GCS buckets, Azure resource groups) stay unique across
+		// stacks in the same account. A shared <project>-seed bucket
+		// would make `pulumi up` in prod collide with dev.
+		seed := seedResourcesFor(cloud, name, env, owner, region)
+
 		proj := pulumi.ProjectConfig{
 			Name:         projName,
 			Description:  fmt.Sprintf("%s — %s environment (Pulumi)", name, env),
@@ -217,25 +229,35 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 // seed, `pulumi preview` would succeed with zero resources which
 // looks like an empty project and misleads new users.
 //
-// owner is stamped onto the resource's tags (or GCP-native labels) so
-// the scaffold's owner_tag input isn't a decorative no-op. region
+// env is suffixed to every cloud-global name (S3/GCS bucket, Azure
+// resource group) so running `pulumi up` in multiple stacks from the
+// same account doesn't collide on a shared "<project>-seed" identifier
+// — dev apply and prod apply must produce distinct cloud resources.
+//
+// owner is stamped onto the resource's tags (or GCP-native labels)
+// so the scaffold's owner_tag input isn't a decorative no-op. region
 // drives the seed's location value too — the stack config already
 // carries it, and forcing a hardcoded "US" / "WestUS2" would create a
 // confusing mismatch between stack yaml and resource location.
-func seedResourcesFor(cloud, projectName, owner, region string) []parser.Resource {
+func seedResourcesFor(cloud, projectName, env, owner, region string) []parser.Resource {
 	// AWS/Azure accept PascalCase tag keys; GCP labels must be
 	// lowercase [a-z0-9_-] so values get sanitised rather than just
 	// lowercased — "Team A" → "team_a" so the provider doesn't reject
 	// at apply time.
-	awsAzureTags := map[string]any{"Owner": owner, "ManagedBy": "iac-studio"}
+	awsAzureTags := map[string]any{"Owner": owner, "ManagedBy": "iac-studio", "Environment": env}
 	gcpLabels := map[string]any{
-		"owner":      sanitizeGCPLabel(owner),
-		"managed_by": "iac-studio",
+		"owner":       sanitizeGCPLabel(owner),
+		"managed_by":  "iac-studio",
+		"environment": sanitizeGCPLabel(env),
 	}
 	// Bucket names are capped at 63 chars across S3 and GCS. Leave
-	// room for the "-seed" suffix (5 chars) so long project names
-	// don't produce invalid bucket names at apply time.
-	const maxBucketBase = 63 - len("-seed")
+	// room for the "-<env>-seed" suffix so long project names plus
+	// long env names don't produce invalid bucket names at apply time.
+	suffix := "-" + env + "-seed"
+	maxBucketBase := 63 - len(suffix)
+	if maxBucketBase < 3 {
+		maxBucketBase = 3 // S3 bucket-name floor
+	}
 	bucketBase := truncateForBucketName(projectName, maxBucketBase)
 	switch cloud {
 	case "aws":
@@ -244,7 +266,7 @@ func seedResourcesFor(cloud, projectName, owner, region string) []parser.Resourc
 			Type: "aws_s3_bucket",
 			Name: projectName + "_seed",
 			Properties: map[string]any{
-				"bucket": bucketBase + "-seed",
+				"bucket": bucketBase + suffix,
 				"tags":   awsAzureTags,
 			},
 		}}
@@ -272,7 +294,7 @@ func seedResourcesFor(cloud, projectName, owner, region string) []parser.Resourc
 			Type: "google_storage_bucket",
 			Name: projectName + "_seed",
 			Properties: map[string]any{
-				"name":     bucketBase + "-seed",
+				"name":     bucketBase + suffix,
 				"location": loc,
 				"labels":   gcpLabels,
 			},
@@ -282,12 +304,15 @@ func seedResourcesFor(cloud, projectName, owner, region string) []parser.Resourc
 		if loc == "" {
 			loc = "WestUS2"
 		}
+		// Resource-group names are scoped per-subscription and capped
+		// at 90 chars. Env-scope the name so dev + prod can coexist.
+		rgName := projectName + "-" + env + "-rg"
 		return []parser.Resource{{
 			ID:   "azurerm_resource_group.seed",
 			Type: "azurerm_resource_group",
 			Name: projectName + "_seed",
 			Properties: map[string]any{
-				"name":     projectName + "-rg",
+				"name":     rgName,
 				"location": loc,
 				"tags":     awsAzureTags,
 			},
