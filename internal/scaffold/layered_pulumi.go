@@ -152,6 +152,18 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 			region = "us-east-1"
 		}
 	}
+	// Cloud-shape validation: an AWS-shaped region (us-east-1) on a
+	// GCP scaffold would emit gcp:region: us-east-1 in the stack
+	// config — invalid at provider time, AND the seed bucket would
+	// silently fall back to "US" multi-region, producing a confusing
+	// mismatch. Reject up front so the caller fixes the input.
+	if cloud == "gcp" && !gcpRegionRE.MatchString(region) {
+		// Allow short multi-regions (US, EU, ASIA) too — GCS accepts
+		// those and so does the provider config.
+		if len(region) > 4 || strings.ContainsAny(region, "0123456789-") {
+			return nil, fmt.Errorf("region %q is not a valid GCP region (expected canonical form like us-central1 or short multi-region like US/EU/ASIA)", region)
+		}
+	}
 	owner := stringInput(values, "owner_tag", "platform")
 	if err := validateTagValue("owner_tag", owner); err != nil {
 		return nil, err
@@ -182,7 +194,9 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 		}
 		emitted, err := pulumi.GenerateProject(proj)
 		if err != nil {
-			return files, fmt.Errorf("generate pulumi project for env %q: %w", env, err)
+			// Match layered-terraform: (nil, err) on failure so callers
+			// don't accidentally write a partially-rendered scaffold.
+			return nil, fmt.Errorf("generate pulumi project for env %q: %w", env, err)
 		}
 		for _, f := range emitted {
 			files = append(files, File{
@@ -208,7 +222,7 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 		"layout":       "layered-v1",
 	}, "", "  ")
 	if err != nil {
-		return files, fmt.Errorf("marshal .iac-studio.json: %w", err)
+		return nil, fmt.Errorf("marshal .iac-studio.json: %w", err)
 	}
 	files = append(files, File{
 		Path:    ".iac-studio.json",
