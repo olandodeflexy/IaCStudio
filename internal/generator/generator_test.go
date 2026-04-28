@@ -60,6 +60,82 @@ func TestHCLGenerator_Generate(t *testing.T) {
 	}
 }
 
+func TestHCLGenerator_PreservesRawReferences(t *testing.T) {
+	gen := &HCLGenerator{tool: "terraform"}
+
+	code, err := gen.Generate([]parser.Resource{
+		{
+			Type: "aws_vpc",
+			Name: "main",
+			Properties: map[string]interface{}{
+				"cidr_block": "var.vpc_cidr",
+				"tags": map[string]interface{}{
+					"Environment": "var.environment",
+					"Name":        "web",
+				},
+			},
+		},
+		{
+			Type: "aws_subnet",
+			Name: "public",
+			Properties: map[string]interface{}{
+				"vpc_id":     "aws_vpc.main.id",
+				"cidr_block": "cidrsubnet(var.vpc_cidr, 8, 0)",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	for _, want := range []string{
+		"cidr_block = var.vpc_cidr",
+		"Environment = var.environment",
+		`Name = "web"`,
+		"vpc_id = aws_vpc.main.id",
+		"cidr_block = cidrsubnet(var.vpc_cidr, 8, 0)",
+	} {
+		if !strings.Contains(code, want) {
+			t.Errorf("generated code missing %q:\n%s", want, code)
+		}
+	}
+}
+
+func TestHCLGenerator_EdgeOverrideWinsOverParsedLiteral(t *testing.T) {
+	gen := &HCLGenerator{tool: "terraform"}
+
+	code, err := gen.Generate([]parser.Resource{
+		{
+			Type:       "aws_vpc",
+			Name:       "selected",
+			Properties: map[string]interface{}{"cidr_block": "10.0.0.0/16"},
+		},
+		{
+			Type:       "aws_vpc",
+			Name:       "original",
+			Properties: map[string]interface{}{"cidr_block": "10.1.0.0/16"},
+		},
+		{
+			Type: "aws_subnet",
+			Name: "public",
+			Properties: map[string]interface{}{
+				"vpc_id":        "aws_vpc.original.id",
+				"__edge_vpc_id": "selected",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if !strings.Contains(code, "vpc_id = aws_vpc.selected.id") {
+		t.Fatalf("edge override was not emitted:\n%s", code)
+	}
+	if strings.Contains(code, "aws_vpc.original.id") || strings.Contains(code, "__edge_vpc_id") {
+		t.Fatalf("stale parsed reference or edge marker leaked:\n%s", code)
+	}
+}
+
 func TestHCLGenerator_GenerateEmpty(t *testing.T) {
 	gen := &HCLGenerator{tool: "terraform"}
 	code, err := gen.Generate([]parser.Resource{})
@@ -149,8 +225,8 @@ func TestYAMLGenerator_WriteScaffold(t *testing.T) {
 
 func TestForTool(t *testing.T) {
 	tests := []struct {
-		tool     string
-		wantExt  string
+		tool    string
+		wantExt string
 	}{
 		{"terraform", ".tf"},
 		{"opentofu", ".tf"},

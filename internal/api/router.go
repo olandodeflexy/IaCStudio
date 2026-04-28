@@ -146,6 +146,97 @@ func safeSubdir(projectPath string, segments ...string) (string, error) {
 	return joined, nil
 }
 
+func safeProjectFile(projectPath, requested string, allowedExts ...string) (string, error) {
+	if requested == "" {
+		return "", fmt.Errorf("file path is required")
+	}
+	target := requested
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(projectPath, target)
+	}
+	target = filepath.Clean(target)
+
+	absProject, err := filepath.Abs(projectPath)
+	if err != nil {
+		return "", fmt.Errorf("resolve project root: %w", err)
+	}
+	if eval, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = eval
+	}
+
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", fmt.Errorf("resolve file path: %w", err)
+	}
+
+	if len(allowedExts) > 0 {
+		ext := filepath.Ext(absTarget)
+		allowed := false
+		for _, allowedExt := range allowedExts {
+			if ext == allowedExt {
+				allowed = true
+				break
+			}
+		}
+		if !allowed {
+			return "", fmt.Errorf("unsupported file extension: %s", ext)
+		}
+	}
+
+	parent := filepath.Dir(absTarget)
+	evalParent, err := filepath.EvalSymlinks(parent)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("file parent directory does not exist")
+		}
+		return "", fmt.Errorf("file parent directory is not accessible")
+	}
+	evalParent, err = filepath.Abs(evalParent)
+	if err != nil {
+		return "", fmt.Errorf("resolve file parent: %w", err)
+	}
+	evalTargetPath := filepath.Join(evalParent, filepath.Base(absTarget))
+	parentRel, err := filepath.Rel(absProject, evalParent)
+	if err != nil || strings.HasPrefix(parentRel, ".."+string(filepath.Separator)) || parentRel == ".." {
+		return "", fmt.Errorf("file parent escapes project root")
+	}
+	targetRel, err := filepath.Rel(absProject, evalTargetPath)
+	if err != nil || targetRel == "." || strings.HasPrefix(targetRel, ".."+string(filepath.Separator)) || targetRel == ".." {
+		return "", fmt.Errorf("file path escapes project root")
+	}
+
+	if evalTarget, err := filepath.EvalSymlinks(absTarget); err == nil {
+		evalTarget, err = filepath.Abs(evalTarget)
+		if err != nil {
+			return "", fmt.Errorf("resolve existing file: %w", err)
+		}
+		targetRel, err := filepath.Rel(absProject, evalTarget)
+		if err != nil || strings.HasPrefix(targetRel, ".."+string(filepath.Separator)) || targetRel == ".." {
+			return "", fmt.Errorf("existing file escapes project root")
+		}
+	}
+
+	return absTarget, nil
+}
+
+func allowedGeneratedExtensions(tool, defaultExt string) []string {
+	if tool == "ansible" {
+		return []string{".yml", ".yaml"}
+	}
+	return []string{defaultExt}
+}
+
+func generateForSync(gen generator.Generator, resources []parser.Resource, includeProviders bool) (string, error) {
+	if !includeProviders {
+		if resourcesOnly, ok := gen.(interface {
+			GenerateResourcesOnly([]parser.Resource) (string, error)
+		}); ok {
+			return resourcesOnly.GenerateResourcesOnly(resources)
+		}
+	}
+	return gen.Generate(resources)
+}
+
 // planGate tracks which projects have had a recent plan run.
 // Apply/destroy is only allowed after a plan has been run for the same project.
 var planGate = struct {
@@ -243,6 +334,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		projectPath, err := safeProjectPath(projectsDir, req.Name)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
+			return
+		}
+		if entries, err := os.ReadDir(projectPath); err == nil && len(entries) > 0 {
+			http.Error(w, "project already exists", http.StatusConflict)
+			return
+		} else if err != nil && !os.IsNotExist(err) {
+			http.Error(w, err.Error(), 500)
 			return
 		}
 		if err := os.MkdirAll(projectPath, 0755); err != nil {
@@ -426,14 +524,58 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		limitBody(w, r)
 		var body struct {
 			Resources []parser.Resource `json:"resources"`
+			Code      *string           `json:"code,omitempty"`
+			File      string            `json:"file,omitempty"`
 			Edges     []struct {
-				From  string `json:"from"`       // source node ID
-				To    string `json:"to"`         // target node ID
-				Field string `json:"field"`      // connection field (e.g., "vpc_id")
+				From  string `json:"from"`  // source node ID
+				To    string `json:"to"`    // target node ID
+				Field string `json:"field"` // connection field (e.g., "vpc_id")
 			} `json:"edges"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid request body", 400)
+			return
+		}
+
+		gen := generator.ForTool(tool)
+		ext := gen.FileExtension()
+		allowedExts := allowedGeneratedExtensions(tool, ext)
+
+		if body.Code != nil {
+			target := body.File
+			if target == "" {
+				target = filepath.Join(projectPath, "main"+ext)
+			}
+			safeTarget, pathErr := safeProjectFile(projectPath, target, allowedExts...)
+			if pathErr != nil {
+				http.Error(w, "invalid code file: "+pathErr.Error(), 400)
+				return
+			}
+
+			// Pause watcher to avoid echo
+			fw.Pause(projectPath)
+			defer fw.Resume(projectPath)
+
+			// Invalidate plan gate — code changed, previous plan is stale
+			planGate.mu.Lock()
+			delete(planGate.plans, projectPath)
+			planGate.mu.Unlock()
+
+			tmpFile := safeTarget + ".tmp"
+			if err := os.WriteFile(tmpFile, []byte(*body.Code), 0644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			if err := os.Rename(tmpFile, safeTarget); err != nil {
+				_ = os.Remove(tmpFile) // best-effort cleanup on failure
+				http.Error(w, err.Error(), 500)
+				return
+			}
+
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"file": safeTarget,
+				"code": *body.Code,
+			})
 			return
 		}
 		resources := body.Resources
@@ -459,7 +601,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			}
 		}
 
-		gen := generator.ForTool(tool)
 		code, err := gen.Generate(resources)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -477,23 +618,34 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 		// Group resources by source file so we write back to original files.
 		// Resources without a source file go to main.tf/main.yml.
-		ext := gen.FileExtension()
 		fileGroups := make(map[string][]parser.Resource)
 		for _, r := range resources {
 			target := r.File
 			if target == "" {
 				target = filepath.Join(projectPath, "main"+ext)
 			}
-			fileGroups[target] = append(fileGroups[target], r)
+			safeTarget, pathErr := safeProjectFile(projectPath, target, allowedExts...)
+			if pathErr != nil {
+				http.Error(w, "invalid resource file: "+pathErr.Error(), 400)
+				return
+			}
+			fileGroups[safeTarget] = append(fileGroups[safeTarget], r)
 		}
 
 		// If all resources have no file origin, write to main file
 		if len(fileGroups) == 0 {
-			fileGroups[filepath.Join(projectPath, "main"+ext)] = resources
+			mainFile, pathErr := safeProjectFile(projectPath, filepath.Join(projectPath, "main"+ext), allowedExts...)
+			if pathErr != nil {
+				http.Error(w, "invalid main file: "+pathErr.Error(), 400)
+				return
+			}
+			fileGroups[mainFile] = resources
 		}
 
 		// Read preserved blocks from existing files (variables, outputs, etc.)
 		p := parser.ForTool(tool)
+		preservedByFile := make(map[string][]parser.PreservedBlock)
+		projectHasProvider := false
 		if hclParser, ok := p.(*parser.HCLParser); ok && tool != "ansible" {
 			existingFiles, _ := filepath.Glob(filepath.Join(projectPath, "*.tf"))
 			for _, f := range existingFiles {
@@ -501,10 +653,16 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				if err != nil || result == nil {
 					continue
 				}
-				// If this file has preserved blocks but no resources being written to it,
-				// don't touch it — leave it as-is
-				if _, hasResources := fileGroups[f]; !hasResources && len(result.PreservedBlocks) > 0 {
+				absFile, pathErr := safeProjectFile(projectPath, f, allowedExts...)
+				if pathErr != nil {
 					continue
+				}
+				preservedByFile[absFile] = result.PreservedBlocks
+				for _, b := range result.PreservedBlocks {
+					if b.Type == "provider" {
+						projectHasProvider = true
+						break
+					}
 				}
 			}
 		}
@@ -512,22 +670,20 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// Write each file atomically (temp file + rename)
 		var mainCode string
 		for file, fileResources := range fileGroups {
-			fileCode, err := gen.Generate(fileResources)
+			includeProviders := !projectHasProvider && filepath.Base(file) == "main"+ext
+			fileCode, err := generateForSync(gen, fileResources, includeProviders)
 			if err != nil {
 				continue
 			}
 
 			// Prepend preserved blocks for this file
-			if hclParser, ok := p.(*parser.HCLParser); ok && tool != "ansible" {
-				result, err := hclParser.ParseFileFull(file)
-				if err == nil && result != nil && len(result.PreservedBlocks) > 0 {
-					var preserved strings.Builder
-					for _, b := range result.PreservedBlocks {
-						preserved.WriteString(b.Content)
-						preserved.WriteString("\n\n")
-					}
-					fileCode = preserved.String() + fileCode
+			if blocks := preservedByFile[file]; len(blocks) > 0 {
+				var preserved strings.Builder
+				for _, b := range blocks {
+					preserved.WriteString(b.Content)
+					preserved.WriteString("\n\n")
 				}
+				fileCode = preserved.String() + fileCode
 			}
 
 			// Atomic write: write to temp file, then rename
@@ -871,8 +1027,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	mux.HandleFunc("POST /api/ai/suggest", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
 		var req struct {
-			Tool     string             `json:"tool"`
-			Provider string             `json:"provider"`
+			Tool     string              `json:"tool"`
+			Provider string              `json:"provider"`
 			Canvas   []ai.CanvasResource `json:"canvas"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -918,6 +1074,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// Load project state (canvas positions, edges, tool)
 	mux.HandleFunc("GET /api/projects/{name}/state", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
+		if _, err := safeProjectPath(projectsDir, name); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 		state, err := pm.Load(name)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -933,6 +1093,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// Save project state
 	mux.HandleFunc("PUT /api/projects/{name}/state", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
 		limitBody(w, r)
 		var state project.State
 		if err := json.NewDecoder(r.Body).Decode(&state); err != nil {
@@ -940,7 +1105,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			return
 		}
 		state.Name = name
-		state.Path = filepath.Join(projectsDir, name)
+		state.Path = projectPath
 		if err := pm.Save(name, &state); err != nil {
 			http.Error(w, err.Error(), 500)
 			return

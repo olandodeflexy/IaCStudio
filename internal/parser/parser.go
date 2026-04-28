@@ -48,8 +48,8 @@ type PreservedBlock struct {
 // source/version — those become the consumer's bindings to the module's
 // declared variables.
 type Module struct {
-	ID      string                 `json:"id"`              // "module.<name>"
-	Name    string                 `json:"name"`            // the block label
+	ID      string                 `json:"id"`   // "module.<name>"
+	Name    string                 `json:"name"` // the block label
 	Source  string                 `json:"source"`
 	Version string                 `json:"version,omitempty"` // registry constraints only
 	Inputs  map[string]interface{} `json:"inputs"`            // every other attribute
@@ -161,13 +161,13 @@ func (p *HCLParser) ParseFileFull(path string) (*ParseResult, error) {
 		case "data":
 			if len(block.Labels) >= 2 {
 				res := Resource{
-					ID:        fmt.Sprintf("data.%s.%s", block.Labels[0], block.Labels[1]),
-					Type:      block.Labels[0],
-					Name:      block.Labels[1],
+					ID:         fmt.Sprintf("data.%s.%s", block.Labels[0], block.Labels[1]),
+					Type:       block.Labels[0],
+					Name:       block.Labels[1],
 					Properties: make(map[string]interface{}),
-					File:      path,
-					Line:      startLine,
-					BlockType: "data",
+					File:       path,
+					Line:       startLine,
+					BlockType:  "data",
 				}
 				attrs, _ := block.Body.JustAttributes()
 				for name, attr := range attrs {
@@ -274,9 +274,29 @@ func extractRawExpression(srcLines []string, rng hcl.Range) string {
 			return strings.TrimSpace(line[start:end])
 		}
 	}
-	// Multi-line expression — return first line
-	if rng.Start.Line > 0 && rng.Start.Line <= len(srcLines) {
-		return strings.TrimSpace(srcLines[rng.Start.Line-1])
+	if rng.Start.Line > 0 && rng.End.Line > 0 && rng.Start.Line <= len(srcLines) && rng.End.Line <= len(srcLines) {
+		var parts []string
+		for lineNo := rng.Start.Line; lineNo <= rng.End.Line; lineNo++ {
+			line := srcLines[lineNo-1]
+			start, end := 0, len(line)
+			if lineNo == rng.Start.Line {
+				start = rng.Start.Column - 1
+				if start < 0 {
+					start = 0
+				}
+			}
+			if lineNo == rng.End.Line {
+				end = rng.End.Column - 1
+				if end > len(line) {
+					end = len(line)
+				}
+			}
+			if start > end {
+				start = end
+			}
+			parts = append(parts, line[start:end])
+		}
+		return strings.TrimSpace(strings.Join(parts, "\n"))
 	}
 	return ""
 }

@@ -11,32 +11,41 @@ import (
 
 // State holds the current state of a project as seen by the UI.
 type State struct {
-	Name      string     `json:"name"`
-	Tool      string     `json:"tool"`
-	Path      string     `json:"path"`
-	Resources []Node     `json:"resources"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	Name         string            `json:"name"`
+	Tool         string            `json:"tool"`
+	Path         string            `json:"path"`
+	Resources    []Node            `json:"resources"`
+	Layout       string            `json:"layout,omitempty"`
+	Blueprint    string            `json:"blueprint,omitempty"`
+	ProjectName  string            `json:"project_name,omitempty"`
+	Cloud        string            `json:"cloud,omitempty"`
+	Environments []string          `json:"environments,omitempty"`
+	Modules      json.RawMessage   `json:"modules,omitempty"`
+	Tags         map[string]string `json:"tags,omitempty"`
+	CreatedAt    time.Time         `json:"created_at"`
+	UpdatedAt    time.Time         `json:"updated_at"`
 }
 
 // Node represents a resource on the visual canvas.
 type Node struct {
-	ID         string         `json:"id"`
-	Type       string         `json:"type"`
-	Name       string         `json:"name"`
-	Label      string         `json:"label"`
-	Icon       string         `json:"icon"`
-	Properties map[string]any `json:"properties"`
-	X          float64        `json:"x"`
-	Y          float64        `json:"y"`
-	Connections []Connection  `json:"connections,omitempty"`
+	ID          string         `json:"id"`
+	Type        string         `json:"type"`
+	Name        string         `json:"name"`
+	Label       string         `json:"label"`
+	Icon        string         `json:"icon"`
+	Properties  map[string]any `json:"properties"`
+	File        string         `json:"file,omitempty"`
+	Line        int            `json:"line,omitempty"`
+	X           float64        `json:"x"`
+	Y           float64        `json:"y"`
+	Connections []Connection   `json:"connections,omitempty"`
 }
 
 // Connection represents a link between two resources.
 type Connection struct {
 	TargetID string `json:"target_id"`
-	Field    string `json:"field"`    // The property that references the target
-	Label    string `json:"label"`    // e.g., "vpc_id", "subnet_id"
+	Field    string `json:"field"` // The property that references the target
+	Label    string `json:"label"` // e.g., "vpc_id", "subnet_id"
 }
 
 // Manager handles project state persistence.
@@ -80,6 +89,12 @@ func (m *Manager) Load(projectName string) (*State, error) {
 	if err := json.Unmarshal(data, &state); err != nil {
 		return nil, fmt.Errorf("parsing state: %w", err)
 	}
+	if state.Name == "" {
+		state.Name = projectName
+	}
+	if state.Path == "" {
+		state.Path = filepath.Join(m.projectsDir, projectName)
+	}
 
 	m.mu.Lock()
 	m.states[projectName] = &state
@@ -90,6 +105,9 @@ func (m *Manager) Load(projectName string) (*State, error) {
 
 // Save writes project state to disk.
 func (m *Manager) Save(projectName string, state *State) error {
+	if state.CreatedAt.IsZero() {
+		state.CreatedAt = time.Now()
+	}
 	state.UpdatedAt = time.Now()
 
 	m.mu.Lock()
