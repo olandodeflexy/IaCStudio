@@ -144,8 +144,8 @@ export function VisionDropzone({
 
       {previews.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(112px, 1fr))', gap: 8 }}>
-          {previews.map(({ file, url }) => (
-            <div key={`${file.name}-${file.lastModified}-${file.size}`} style={{ position: 'relative', border: '1px solid var(--border-soft)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-elev-1)' }}>
+          {previews.map(({ file, url }, index) => (
+            <div key={`${file.name}-${file.lastModified}-${file.size}-${index}`} style={{ position: 'relative', border: '1px solid var(--border-soft)', borderRadius: 8, overflow: 'hidden', background: 'var(--bg-elev-1)' }}>
               <div style={{ aspectRatio: '4 / 3', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#0e1412' }}>
                 <img src={url} alt={file.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               </div>

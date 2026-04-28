@@ -25,7 +25,7 @@ describe('VisionDropzone', () => {
 
   it('accepts dropped images and renders a preview', () => {
     const onFilesChange = vi.fn();
-    render(<VisionDropzone files={[]} onFilesChange={onFilesChange} />);
+    const { rerender } = render(<VisionDropzone files={[]} onFilesChange={onFilesChange} />);
 
     const file = imageFile();
     fireEvent.drop(screen.getByRole('button', { name: /upload architecture/i }), {
@@ -33,6 +33,8 @@ describe('VisionDropzone', () => {
     });
 
     expect(onFilesChange).toHaveBeenCalledWith([file]);
+    rerender(<VisionDropzone files={[file]} onFilesChange={onFilesChange} />);
+    expect(screen.getByRole('img', { name: file.name })).toBeInTheDocument();
   });
 
   it('accepts pasted images', () => {
