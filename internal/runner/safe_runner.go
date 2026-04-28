@@ -80,7 +80,12 @@ func NewSafeRunner(config SafetyConfig) *SafeRunner {
 }
 
 // Execute runs a command with timeout, cancellation, and output limiting.
-func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command string) (*ExecutionResult, error) {
+//
+// env names the layered-v1 environment, threaded through to the
+// underlying Runner.buildArgs so pulumi commands receive an explicit
+// `--stack <env>`. Empty env runs in projectDir's own workspace
+// (flat layouts).
+func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command, env string) (*ExecutionResult, error) {
 	// Project-level lock — prevent concurrent executions on the same project
 	// which would cause terraform state lock contention and corruption.
 	sr.mu.Lock()
@@ -117,7 +122,7 @@ func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command str
 	}()
 
 	// Build command args
-	args := sr.runner.buildArgs(tool, command)
+	args := sr.runner.buildArgs(tool, command, env)
 	if len(args) == 0 {
 		return nil, fmt.Errorf("unknown tool/command: %s %s", tool, command)
 	}

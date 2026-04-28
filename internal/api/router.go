@@ -125,13 +125,23 @@ func safeSubdir(projectPath string, segments ...string) (string, error) {
 	}
 	info, err := os.Stat(joined)
 	if err != nil {
-		return "", fmt.Errorf("subdir does not exist: %w", err)
+		// Don't surface the underlying os.Stat error — it carries the
+		// absolute filesystem path which we don't want bubbling up to
+		// HTTP clients. Server-side log keeps the detail for ops
+		// debugging.
+		log.Printf("safeSubdir: stat %s: %v", joined, err)
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("subdir does not exist")
+		}
+		return "", fmt.Errorf("subdir is not accessible")
 	}
 	// The result is used as cmd.Dir — passing a file would produce a
 	// confusing 'not a directory' error mid-exec. Reject here so the
-	// 400 carries a targeted message.
+	// 400 carries a targeted message. Don't include the path; the
+	// caller already knows what they passed in.
 	if !info.IsDir() {
-		return "", fmt.Errorf("subdir is not a directory: %s", joined)
+		log.Printf("safeSubdir: not a directory: %s", joined)
+		return "", fmt.Errorf("subdir is not a directory")
 	}
 	return joined, nil
 }
@@ -373,6 +383,16 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		// Pulumi parsing isn't implemented — parser.ForTool falls
+		// back to HCL and would silently return zero resources for an
+		// index.ts project, leading the user to believe the canvas is
+		// in sync when it isn't. Reject explicitly until a TS-AST
+		// parser lands; flat HCL/Ansible projects keep their existing
+		// behaviour.
+		if tool == "pulumi" {
+			http.Error(w, "pulumi resource parsing is not supported yet — edit index.ts directly", 400)
+			return
+		}
 
 		p := parser.ForTool(tool)
 		resources, err := p.ParseDir(projectPath)
@@ -390,6 +410,16 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
+			return
+		}
+		// Pulumi generator is project-shaped (per-env directories with
+		// index.ts/Pulumi.yaml), not single-file like HCL. Calling
+		// generator.ForTool here would fall through to HCL and write
+		// main.tf at the project root — silently shadowing the
+		// scaffolded environments/<env>/index.ts. Reject until an
+		// AST-aware sync that round-trips through TS lands.
+		if tool == "pulumi" {
+			http.Error(w, "pulumi sync is not supported yet — edit environments/<env>/index.ts directly", 400)
 			return
 		}
 
@@ -596,6 +626,23 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 			if !req.Acknowledged {
+				// Pulumi has no parser or plan-JSON path today, so the
+				// builtin policies see zero resources and plan-based
+				// engines have no input — every Pulumi mutating
+				// command would silently bypass policy. Fail closed:
+				// require the caller to opt in with acknowledged:true
+				// so the override is explicit + audit-trailable. When
+				// a Pulumi parser/policy adapter lands this branch
+				// goes away.
+				if req.Tool == "pulumi" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"error":  "policy_unsupported",
+						"detail": "policy evaluation is not implemented for pulumi yet — re-submit with acknowledged:true to proceed without server-side policy checks",
+					})
+					return
+				}
 				// Walk every available engine against the project so we can
 				// surface blocking findings before the apply runs. On any
 				// error (engine crash, missing binary, malformed plan) we
@@ -612,7 +659,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 					return
 				}
 			} else {
-				log.Printf("apply gate: policy findings acknowledged by client for %s (command=%s)", name, req.Command)
+				log.Printf("apply gate: policy findings acknowledged by client for %s (command=%s tool=%s)", name, req.Command, req.Tool)
 			}
 		}
 
@@ -621,7 +668,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// a request-scoped context and kill the command. SafeRunner applies its
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
-			result, err := run.Execute(context.Background(), projectPath, req.Tool, req.Command)
+			result, err := run.Execute(context.Background(), projectPath, req.Tool, req.Command, req.Env)
 			// Only record a successful plan — failed/cancelled plans don't count.
 			// 'preview' is Pulumi's equivalent of terraform plan; without it
 			// here, a pulumi up following a successful preview would be

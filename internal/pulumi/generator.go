@@ -164,6 +164,19 @@ func yamlScalar(s string) string {
 	if !needsQuote && (s[0] == ' ' || s[len(s)-1] == ' ') {
 		needsQuote = true
 	}
+	// YAML plain scalars cannot safely start with the block / mapping
+	// indicator characters (-, ?, :) when the next char is whitespace
+	// — the parser would treat the scalar as a sequence/mapping
+	// element instead of a string. A description like "- note" would
+	// otherwise turn the whole document into an unintended list.
+	if !needsQuote && len(s) >= 2 {
+		switch s[0] {
+		case '-', '?', ':':
+			if s[1] == ' ' || s[1] == '\t' {
+				needsQuote = true
+			}
+		}
+	}
 	// Pure digits / reserved keywords would be parsed as numbers or
 	// booleans if emitted plain.
 	switch strings.ToLower(s) {

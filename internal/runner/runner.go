@@ -55,8 +55,14 @@ func (r *Runner) DetectTools() []ToolInfo {
 }
 
 // Execute runs an IaC command in the given project directory.
-func (r *Runner) Execute(projectDir, tool, command string) (string, error) {
-	args := r.buildArgs(tool, command)
+//
+// env names the layered-v1 environment to target. For pulumi, env is
+// passed through as `--stack <env>` so a request bound to dev cannot
+// silently mutate the workspace-selected stack (which Pulumi resolves
+// from local state and could be anything). Empty env runs in the
+// project root with no explicit stack — fine for flat layouts.
+func (r *Runner) Execute(projectDir, tool, command, env string) (string, error) {
+	args := r.buildArgs(tool, command, env)
 	if len(args) == 0 {
 		return "", fmt.Errorf("unknown tool/command: %s %s", tool, command)
 	}
@@ -81,7 +87,7 @@ func (r *Runner) Execute(projectDir, tool, command string) (string, error) {
 	return output, err
 }
 
-func (r *Runner) buildArgs(tool, command string) []string {
+func (r *Runner) buildArgs(tool, command, env string) []string {
 	switch tool {
 	case "terraform":
 		return r.terraformArgs(command, "terraform")
@@ -90,7 +96,7 @@ func (r *Runner) buildArgs(tool, command string) []string {
 	case "ansible":
 		return r.ansibleArgs(command)
 	case "pulumi":
-		return r.pulumiArgs(command)
+		return r.pulumiArgs(command, env)
 	}
 	return nil
 }
@@ -137,7 +143,20 @@ func (r *Runner) terraformArgs(command, binary string) []string {
 // follow-up; for now, layered-pulumi users run through the scaffold's
 // scripts/{init,plan,apply,destroy}.sh wrappers which handle the cd
 // per-env themselves.
-func (r *Runner) pulumiArgs(command string) []string {
+func (r *Runner) pulumiArgs(command, env string) []string {
+	// withStack appends --stack <env> when env is provided. Pulumi
+	// otherwise resolves the stack from local workspace state, so a
+	// request bound to dev could silently mutate whatever stack
+	// happens to be selected. Pinning explicitly removes that
+	// ambiguity AND ensures the plan-gate (keyed by env-rebased
+	// projectPath) actually corresponds to the stack apply will run
+	// against.
+	withStack := func(args []string) []string {
+		if env == "" {
+			return args
+		}
+		return append(args, "--stack", env)
+	}
 	switch command {
 	case "init":
 		// Prime the project: install node_modules so the TS program
@@ -146,13 +165,13 @@ func (r *Runner) pulumiArgs(command string) []string {
 		// @pulumi/* SDKs.
 		return []string{"npm", "install"}
 	case "plan", "preview":
-		return []string{"pulumi", "preview", "--non-interactive", "--color=never"}
+		return withStack([]string{"pulumi", "preview", "--non-interactive", "--color=never"})
 	case "apply", "up":
-		return []string{"pulumi", "up", "--yes", "--non-interactive", "--color=never"}
+		return withStack([]string{"pulumi", "up", "--yes", "--non-interactive", "--color=never"})
 	case "destroy":
-		return []string{"pulumi", "destroy", "--yes", "--non-interactive", "--color=never"}
+		return withStack([]string{"pulumi", "destroy", "--yes", "--non-interactive", "--color=never"})
 	case "refresh":
-		return []string{"pulumi", "refresh", "--yes", "--non-interactive", "--color=never"}
+		return withStack([]string{"pulumi", "refresh", "--yes", "--non-interactive", "--color=never"})
 	case "validate":
 		// The closest Pulumi equivalent of `terraform validate` is a
 		// TypeScript compile with no emit — catches type errors

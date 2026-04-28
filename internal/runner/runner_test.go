@@ -44,7 +44,7 @@ func TestBuildArgs_Terraform(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		args := r.buildArgs("terraform", tt.command)
+		args := r.buildArgs("terraform", tt.command, "")
 		if len(args) == 0 {
 			t.Errorf("buildArgs(terraform, %s) returned empty", tt.command)
 			continue
@@ -57,7 +57,7 @@ func TestBuildArgs_Terraform(t *testing.T) {
 
 func TestBuildArgs_OpenTofu(t *testing.T) {
 	r := New()
-	args := r.buildArgs("opentofu", "plan")
+	args := r.buildArgs("opentofu", "plan", "")
 	if len(args) == 0 || args[0] != "tofu" {
 		t.Errorf("OpenTofu should use 'tofu' binary, got %v", args)
 	}
@@ -76,7 +76,7 @@ func TestBuildArgs_Ansible(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		args := r.buildArgs("ansible", tt.command)
+		args := r.buildArgs("ansible", tt.command, "")
 		if len(args) == 0 {
 			t.Errorf("buildArgs(ansible, %s) returned empty", tt.command)
 			continue
@@ -108,7 +108,7 @@ func TestBuildArgs_Pulumi(t *testing.T) {
 		{"validate", "npx", false}, // tsc --noEmit
 	}
 	for _, tc := range cases {
-		args := r.buildArgs("pulumi", tc.command)
+		args := r.buildArgs("pulumi", tc.command, "")
 		if len(args) == 0 {
 			t.Errorf("buildArgs(pulumi, %s) returned empty", tc.command)
 			continue
@@ -133,7 +133,7 @@ func TestBuildArgs_Pulumi(t *testing.T) {
 
 func TestBuildArgs_Unknown(t *testing.T) {
 	r := New()
-	args := r.buildArgs("unknown_tool", "init")
+	args := r.buildArgs("unknown_tool", "init", "")
 	if args != nil {
 		t.Errorf("Unknown tool should return nil, got %v", args)
 	}
@@ -141,9 +141,46 @@ func TestBuildArgs_Unknown(t *testing.T) {
 
 func TestBuildArgs_UnknownCommand(t *testing.T) {
 	r := New()
-	args := r.buildArgs("terraform", "unknown_command")
+	args := r.buildArgs("terraform", "unknown_command", "")
 	if args != nil {
 		t.Errorf("Unknown command should return nil, got %v", args)
+	}
+}
+
+// TestBuildArgs_PulumiPassesStack pins the env→--stack plumbing.
+// Without this, an env-rebased Pulumi run would inherit whichever
+// stack is workspace-selected in environments/<env>/, which lets a
+// preview against dev hand-off to an apply against whatever was last
+// `pulumi stack select`'d — wrong-environment mutation risk.
+func TestBuildArgs_PulumiPassesStack(t *testing.T) {
+	r := New()
+	cases := []string{"plan", "preview", "apply", "up", "destroy", "refresh"}
+	for _, cmd := range cases {
+		args := r.buildArgs("pulumi", cmd, "dev")
+		hasStack := false
+		for i, a := range args {
+			if a == "--stack" && i+1 < len(args) && args[i+1] == "dev" {
+				hasStack = true
+				break
+			}
+		}
+		if !hasStack {
+			t.Errorf("buildArgs(pulumi, %s, env=dev) missing --stack dev: %v", cmd, args)
+		}
+	}
+	// Empty env → no --stack flag (flat layout).
+	args := r.buildArgs("pulumi", "preview", "")
+	for _, a := range args {
+		if a == "--stack" {
+			t.Errorf("empty env should not emit --stack: %v", args)
+		}
+	}
+	// init uses npm, no --stack regardless of env.
+	args = r.buildArgs("pulumi", "init", "dev")
+	for _, a := range args {
+		if a == "--stack" {
+			t.Errorf("init should not carry --stack: %v", args)
+		}
 	}
 }
 

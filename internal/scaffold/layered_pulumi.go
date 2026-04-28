@@ -159,10 +159,15 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 	// mismatch. Reject up front so the caller fixes the input.
 	if cloud == "gcp" && !gcpRegionRE.MatchString(region) {
 		// Allow short multi-regions (US, EU, ASIA) too — GCS accepts
-		// those and so does the provider config.
+		// those and so does the provider config. Normalize casing
+		// here so a lower/mixed input ("us", "Us") becomes the
+		// canonical "US" before it hits Pulumi.<env>.yaml; an
+		// un-normalised value would emit `gcp:region: us` which
+		// the provider rejects.
 		if len(region) > 4 || strings.ContainsAny(region, "0123456789-") {
 			return nil, fmt.Errorf("region %q is not a valid GCP region (expected canonical form like us-central1 or short multi-region like US/EU/ASIA)", region)
 		}
+		region = strings.ToUpper(region)
 	}
 	owner := stringInput(values, "owner_tag", "platform")
 	if err := validateTagValue("owner_tag", owner); err != nil {
