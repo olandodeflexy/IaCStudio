@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Image as ImageIcon, Upload, X } from 'lucide-react';
 
 export const MAX_VISION_IMAGE_BYTES = 8 * 1024 * 1024;
 export const MAX_VISION_IMAGE_COUNT = 5;
+export const MAX_VISION_REQUEST_BYTES = 20 * 1024 * 1024;
 export const ACCEPTED_VISION_IMAGE_TYPES = new Set([
   'image/png',
   'image/jpeg',
@@ -19,9 +20,9 @@ export interface VisionDropzoneProps {
   disabled?: boolean;
 }
 
-export function validateVisionFiles(files: File[], existingCount = 0): string | null {
+export function validateVisionFiles(files: File[], existingFiles: File[] = []): string | null {
   if (files.length === 0) return null;
-  if (existingCount + files.length > MAX_VISION_IMAGE_COUNT) {
+  if (existingFiles.length + files.length > MAX_VISION_IMAGE_COUNT) {
     return `Upload up to ${MAX_VISION_IMAGE_COUNT} images.`;
   }
   const badType = files.find(file => !ACCEPTED_VISION_IMAGE_TYPES.has(file.type.toLowerCase()));
@@ -31,6 +32,10 @@ export function validateVisionFiles(files: File[], existingCount = 0): string | 
   const oversize = files.find(file => file.size > MAX_VISION_IMAGE_BYTES);
   if (oversize) {
     return `${oversize.name} is too large. Maximum size is 8MB.`;
+  }
+  const totalBytes = [...existingFiles, ...files].reduce((sum, file) => sum + file.size, 0);
+  if (totalBytes > MAX_VISION_REQUEST_BYTES) {
+    return 'Upload size is too large. Maximum total size is 20MB.';
   }
   return null;
 }
@@ -59,16 +64,28 @@ export function VisionDropzone({
     };
   }, [files]);
 
-  const addFiles = (incoming: File[]) => {
+  const addFiles = useCallback((incoming: File[]) => {
     if (disabled || incoming.length === 0) return;
-    const validationError = validateVisionFiles(incoming, files.length);
+    const validationError = validateVisionFiles(incoming, files);
     if (validationError) {
       onError?.(validationError);
       return;
     }
     onFilesChange([...files, ...incoming]);
     onError?.(null);
-  };
+  }, [disabled, files, onError, onFilesChange]);
+
+  useEffect(() => {
+    if (disabled) return;
+    const handlePaste = (event: ClipboardEvent) => {
+      const pasted = Array.from(event.clipboardData?.files || []);
+      if (pasted.length === 0) return;
+      event.preventDefault();
+      addFiles(pasted);
+    };
+    window.addEventListener('paste', handlePaste);
+    return () => window.removeEventListener('paste', handlePaste);
+  }, [addFiles, disabled]);
 
   const removeFile = (target: File) => {
     onFilesChange(files.filter(file => file !== target));
@@ -97,13 +114,6 @@ export function VisionDropzone({
           event.preventDefault();
           setDragging(false);
           addFiles(Array.from(event.dataTransfer.files));
-        }}
-        onPaste={event => {
-          const pasted = Array.from(event.clipboardData.files);
-          if (pasted.length > 0) {
-            event.preventDefault();
-            addFiles(pasted);
-          }
         }}
         style={{
           minHeight: 128,
@@ -134,7 +144,7 @@ export function VisionDropzone({
         <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, textAlign: 'center' }}>
           <Upload size={22} color="var(--accent-action)" />
           <div style={{ fontSize: 13, color: 'var(--text-main)', fontWeight: 600 }}>Drop or paste architecture diagrams</div>
-          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>PNG, JPEG, WEBP, or GIF. Up to 5 images, 8MB each.</div>
+          <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>PNG, JPEG, WEBP, or GIF. Up to 5 images, 8MB each, 20MB total.</div>
         </div>
       </div>
 

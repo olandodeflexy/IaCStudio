@@ -1,10 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { fireEvent, render, screen } from '@testing-library/react';
 
-import { MAX_VISION_IMAGE_BYTES, VisionDropzone, validateVisionFiles } from './VisionDropzone';
+import {
+  MAX_VISION_IMAGE_BYTES,
+  MAX_VISION_REQUEST_BYTES,
+  VisionDropzone,
+  validateVisionFiles,
+} from './VisionDropzone';
 
-function imageFile(name = 'diagram.png', type = 'image/png') {
-  return new File(['image-bytes'], name, { type });
+function imageFile(name = 'diagram.png', type = 'image/png', size?: number) {
+  const file = new File(['image-bytes'], name, { type });
+  if (typeof size === 'number') {
+    Object.defineProperty(file, 'size', { value: size });
+  }
+  return file;
 }
 
 describe('VisionDropzone', () => {
@@ -42,7 +51,7 @@ describe('VisionDropzone', () => {
     render(<VisionDropzone files={[]} onFilesChange={onFilesChange} />);
 
     const file = imageFile('pasted.webp', 'image/webp');
-    fireEvent.paste(screen.getByRole('button', { name: /upload architecture/i }), {
+    fireEvent.paste(window, {
       clipboardData: { files: [file] },
     });
 
@@ -63,10 +72,15 @@ describe('VisionDropzone', () => {
   });
 
   it('validates count and size limits', () => {
-    const oversized = imageFile('big.png');
-    Object.defineProperty(oversized, 'size', { value: MAX_VISION_IMAGE_BYTES + 1 });
+    const oversized = imageFile('big.png', 'image/png', MAX_VISION_IMAGE_BYTES + 1);
+    const existing = [
+      imageFile('existing-a.png', 'image/png', 7 * 1024 * 1024),
+      imageFile('existing-b.png', 'image/png', 7 * 1024 * 1024),
+    ];
+    const overTotal = imageFile('over-total.png', 'image/png', MAX_VISION_REQUEST_BYTES - existing[0].size - existing[1].size + 1);
 
     expect(validateVisionFiles([oversized])).toContain('too large');
     expect(validateVisionFiles(Array.from({ length: 6 }, (_, i) => imageFile(`d${i}.png`)))).toContain('Upload up to 5 images');
+    expect(validateVisionFiles([overTotal], existing)).toContain('Maximum total size is 20MB');
   });
 });

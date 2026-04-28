@@ -701,7 +701,8 @@ export default function App() {
       await api.generateTopology(topologyDesc, toolKey, topologyProvider);
       // Don't setImportLoading(false) here — WebSocket handler does it
     } catch (e: any) {
-      setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: e.message || 'Generation failed', warnings: [e.message] });
+      const message = e?.message || 'Generation failed';
+      setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: message, warnings: [message] });
       setImportLoading(false);
       setNotification(null);
     }
