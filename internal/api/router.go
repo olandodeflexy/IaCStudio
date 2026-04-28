@@ -524,6 +524,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		limitBody(w, r)
 		var body struct {
 			Resources []parser.Resource `json:"resources"`
+			Code      *string           `json:"code,omitempty"`
+			File      string            `json:"file,omitempty"`
 			Edges     []struct {
 				From  string `json:"from"`  // source node ID
 				To    string `json:"to"`    // target node ID
@@ -532,6 +534,48 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid request body", 400)
+			return
+		}
+
+		gen := generator.ForTool(tool)
+		ext := gen.FileExtension()
+		allowedExts := allowedGeneratedExtensions(tool, ext)
+
+		if body.Code != nil {
+			target := body.File
+			if target == "" {
+				target = filepath.Join(projectPath, "main"+ext)
+			}
+			safeTarget, pathErr := safeProjectFile(projectPath, target, allowedExts...)
+			if pathErr != nil {
+				http.Error(w, "invalid code file: "+pathErr.Error(), 400)
+				return
+			}
+
+			// Pause watcher to avoid echo
+			fw.Pause(projectPath)
+			defer fw.Resume(projectPath)
+
+			// Invalidate plan gate — code changed, previous plan is stale
+			planGate.mu.Lock()
+			delete(planGate.plans, projectPath)
+			planGate.mu.Unlock()
+
+			tmpFile := safeTarget + ".tmp"
+			if err := os.WriteFile(tmpFile, []byte(*body.Code), 0644); err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			if err := os.Rename(tmpFile, safeTarget); err != nil {
+				_ = os.Remove(tmpFile) // best-effort cleanup on failure
+				http.Error(w, err.Error(), 500)
+				return
+			}
+
+			_ = json.NewEncoder(w).Encode(map[string]interface{}{
+				"file": safeTarget,
+				"code": *body.Code,
+			})
 			return
 		}
 		resources := body.Resources
@@ -557,7 +601,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			}
 		}
 
-		gen := generator.ForTool(tool)
 		code, err := gen.Generate(resources)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
@@ -575,8 +618,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 		// Group resources by source file so we write back to original files.
 		// Resources without a source file go to main.tf/main.yml.
-		ext := gen.FileExtension()
-		allowedExts := allowedGeneratedExtensions(tool, ext)
 		fileGroups := make(map[string][]parser.Resource)
 		for _, r := range resources {
 			target := r.File

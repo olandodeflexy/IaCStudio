@@ -72,3 +72,62 @@ func TestSyncRejectsResourceFileOutsideProject(t *testing.T) {
 		t.Fatalf("sync with escaping file should 400, got %d", resp.StatusCode)
 	}
 }
+
+func TestSyncCodeWritesMainFile(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	body := `{"file":"main.tf","code":"resource \"aws_vpc\" \"main\" {}\n"}`
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/sync?tool=terraform",
+		"application/json",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code sync should 200, got %d", resp.StatusCode)
+	}
+	data, err := os.ReadFile(filepath.Join(projectDir, "main.tf"))
+	if err != nil {
+		t.Fatalf("read synced file: %v", err)
+	}
+	if got := string(data); got != "resource \"aws_vpc\" \"main\" {}\n" {
+		t.Fatalf("unexpected synced file content: %q", got)
+	}
+}
+
+func TestSyncCodeRejectsFileOutsideProject(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	body := `{"file":"../outside.tf","code":"resource \"aws_vpc\" \"main\" {}\n"}`
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/sync?tool=terraform",
+		"application/json",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("code sync with escaping file should 400, got %d", resp.StatusCode)
+	}
+}
