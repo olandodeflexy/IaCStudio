@@ -3,6 +3,7 @@ package parser
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -62,6 +63,43 @@ resource "aws_subnet" "public" {
 	}
 	if subnet.Name != "public" {
 		t.Errorf("Second resource name = %s, want public", subnet.Name)
+	}
+}
+
+func TestHCLParser_PreservesMultilineRawExpressions(t *testing.T) {
+	dir := t.TempDir()
+	tfFile := filepath.Join(dir, "main.tf")
+
+	content := `resource "aws_instance" "web" {
+  ami           = data.aws_ami.ubuntu.id
+  instance_type = "t3.micro"
+  tags = {
+    Environment = var.environment
+    Name        = "web"
+  }
+}
+`
+	if err := os.WriteFile(tfFile, []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	p := &HCLParser{}
+	resources, err := p.ParseFile(tfFile)
+	if err != nil {
+		t.Fatalf("ParseFile failed: %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("Expected 1 resource, got %d", len(resources))
+	}
+
+	tags, ok := resources[0].Properties["tags"].(string)
+	if !ok {
+		t.Fatalf("tags should be preserved as raw HCL, got %#v", resources[0].Properties["tags"])
+	}
+	for _, want := range []string{"{", "Environment = var.environment", `Name        = "web"`, "}"} {
+		if !strings.Contains(tags, want) {
+			t.Errorf("raw tags expression missing %q:\n%s", want, tags)
+		}
 	}
 }
 

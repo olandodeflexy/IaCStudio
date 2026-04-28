@@ -7,6 +7,9 @@ import { UIButton, UIInput, UIKicker, UILabel, UIModal, UIPanel, UITextArea } fr
 import { CodeEditor } from './components/CodeEditor';
 import { ChatPanel } from './components/Chat';
 import { TerminalPanel } from './components/Terminal';
+import { ModuleRegistryPanel } from './components/ModuleRegistry';
+import { PolicyStudioPanel } from './components/PolicyStudio';
+import { ScanPanel } from './components/ScanPanel';
 import { S } from './styles';
 import {
   TOOLS,
@@ -54,6 +57,7 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activePanel, setActivePanel] = useState('palette');
+  const [rightTab, setRightTab] = useState<'inspect' | 'policy' | 'scan' | 'modules'>('inspect');
 
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
   const [dragging, setDragging] = useState<{ id: string; ox: number; oy: number } | null>(null);
@@ -818,14 +822,19 @@ export default function App() {
                       </UIButton>
                       {importPreview.resources.length > 0 && (
                         <UIButton variant="primary"
-                          onClick={() => {
+                          onClick={async () => {
                             const t = importPreview!.tool === 'opentofu' ? 'opentofu' : importPreview!.tool === 'ansible' ? 'ansible' : 'terraform';
+                            await api.createProject(projectName, t).catch(() => {});
                             setTool(t);
                             setProjectId(projectName);
                             hasCreatedProject.current = true;
+                            initialLoadDone.current = true;
                             // Place resources on canvas in a grid layout
                             const imported = importPreview!.resources.map((r, i) => ({
-                              ...r,
+                              ...(() => {
+                                const { file: _file, line: _line, ...rest } = r;
+                                return rest;
+                              })(),
                               id: r.id || `imp_${i}_${Date.now()}`,
                               x: 80 + (i % 5) * 200,
                               y: 80 + Math.floor(i / 5) * 130,
@@ -1279,6 +1288,28 @@ export default function App() {
           onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = 'var(--border-main)'; }}
           onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
         <aside style={{ ...S.right, width: rightWidth }}>
+          <div style={S.tabs}>
+            {[
+              { key: 'inspect', label: selected || selectedEdge ? 'Inspect' : 'Code' },
+              { key: 'policy', label: 'Policy' },
+              { key: 'scan', label: 'Scan' },
+              ...(tool === 'ansible' ? [] : [{ key: 'modules', label: 'Modules' }]),
+            ].map(t => (
+              <button
+                key={t.key}
+                style={{
+                  ...S.tab,
+                  ...(rightTab === t.key ? { color: ct.color, borderBottomColor: ct.color } : {}),
+                  fontSize: 10,
+                }}
+                onClick={() => setRightTab(t.key as typeof rightTab)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {rightTab === 'inspect' && (
+            <>
           {/* Selected edge info */}
           {selectedEdge && (() => {
             const edge = edges.find(e => e.id === selectedEdge);
@@ -1373,6 +1404,23 @@ export default function App() {
               />
             </div>
           </div>
+            </>
+          )}
+          {rightTab === 'policy' && (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <PolicyStudioPanel projectName={projectId} tool={tool} />
+            </div>
+          )}
+          {rightTab === 'scan' && (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <ScanPanel projectName={projectId} tool={tool} />
+            </div>
+          )}
+          {rightTab === 'modules' && tool !== 'ansible' && (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <ModuleRegistryPanel initialQuery="vpc" />
+            </div>
+          )}
         </aside>
       </div>
 
