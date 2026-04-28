@@ -215,8 +215,10 @@ export default function App() {
       initialLoadDone.current = false;
       api.loadState(saved.current.projectId).then(state => {
         applyProjectState(state);
-        if (shouldParseResourcesFromDisk(state, saved.current.tool)) {
-          api.getResources(saved.current.projectId, saved.current.tool).then(applyParsedResources).catch(() => {});
+        const selectedTool = state?.tool || saved.current.tool;
+        setTool(selectedTool);
+        if (shouldParseResourcesFromDisk(state, selectedTool)) {
+          api.getResources(saved.current.projectId, selectedTool).then(applyParsedResources).catch(() => {});
         }
       }).catch(() => {});
     }
@@ -251,6 +253,7 @@ export default function App() {
       const state = await api.loadState(proj.name);
       applyProjectState(state);
       const selectedTool = state?.tool || proj.tool || 'terraform';
+      setTool(selectedTool);
       if (shouldParseResourcesFromDisk(state, selectedTool)) {
         const parsed = await api.getResources(proj.name, selectedTool);
         applyParsedResources(parsed);
@@ -264,6 +267,12 @@ export default function App() {
       setCanvasMode('freeform');
     }
   }, [applyParsedResources, applyProjectState]);
+
+  useEffect(() => {
+    if (tool === 'ansible' && rightTab === 'modules') {
+      setRightTab('inspect');
+    }
+  }, [tool, rightTab]);
 
   // WebSocket for live sync
   const handleWSMessage = useCallback((msg: WSMessage) => {
@@ -927,7 +936,13 @@ export default function App() {
                         <UIButton variant="primary"
                           onClick={async () => {
                             const t = importPreview!.tool === 'opentofu' ? 'opentofu' : importPreview!.tool === 'ansible' ? 'ansible' : 'terraform';
-                            await api.createProject(projectName, t).catch(() => {});
+                            try {
+                              await api.createProject(projectName, t);
+                            } catch (e: any) {
+                              setNotification(`Import failed: ${e.message}`);
+                              setTimeout(() => setNotification(null), 5000);
+                              return;
+                            }
                             setTool(t);
                             setProjectId(projectName);
                             setProjectLayoutMeta(null);

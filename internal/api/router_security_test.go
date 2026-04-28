@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -17,6 +18,7 @@ func fullRouterForTest(t *testing.T, projectsDir string) *http.ServeMux {
 	t.Helper()
 	hub := NewHub()
 	go hub.Run()
+	t.Cleanup(hub.Close)
 	fw := watcher.New(hub)
 	t.Cleanup(fw.Close)
 	return NewRouter(
@@ -96,6 +98,16 @@ func TestSyncCodeWritesMainFile(t *testing.T) {
 
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("code sync should 200, got %d", resp.StatusCode)
+	}
+	var got struct {
+		File string `json:"file"`
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.File != "main.tf" {
+		t.Fatalf("code sync should return project-relative file, got %q", got.File)
 	}
 	data, err := os.ReadFile(filepath.Join(projectDir, "main.tf"))
 	if err != nil {

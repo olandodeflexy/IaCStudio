@@ -31,6 +31,8 @@ type Hub struct {
 	broadcast  chan []byte
 	register   chan *Client
 	unregister chan *Client
+	done       chan struct{}
+	closeOnce  sync.Once
 	mu         sync.RWMutex
 }
 
@@ -40,12 +42,22 @@ func NewHub() *Hub {
 		broadcast:  make(chan []byte, 256),
 		register:   make(chan *Client),
 		unregister: make(chan *Client),
+		done:       make(chan struct{}),
 	}
 }
 
 func (h *Hub) Run() {
 	for {
 		select {
+		case <-h.done:
+			h.mu.Lock()
+			for client := range h.clients {
+				delete(h.clients, client)
+				close(client.send)
+			}
+			h.mu.Unlock()
+			return
+
 		case client := <-h.register:
 			h.mu.Lock()
 			h.clients[client] = true
@@ -87,9 +99,19 @@ func (h *Hub) Run() {
 	}
 }
 
+// Close stops the hub loop and disconnects active clients.
+func (h *Hub) Close() {
+	h.closeOnce.Do(func() {
+		close(h.done)
+	})
+}
+
 // Broadcast sends a message to all connected clients.
 func (h *Hub) Broadcast(msg []byte) {
-	h.broadcast <- msg
+	select {
+	case h.broadcast <- msg:
+	case <-h.done:
+	}
 }
 
 // ServeWS upgrades an HTTP connection to WebSocket.
@@ -101,7 +123,12 @@ func ServeWS(hub *Hub, w http.ResponseWriter, r *http.Request) {
 	}
 
 	client := &Client{hub: hub, conn: conn, send: make(chan []byte, 256)}
-	hub.register <- client
+	select {
+	case hub.register <- client:
+	case <-hub.done:
+		_ = conn.Close()
+		return
+	}
 
 	go client.writePump()
 	go client.readPump()
@@ -116,7 +143,10 @@ var allowedClientMessageTypes = map[string]bool{
 
 func (c *Client) readPump() {
 	defer func() {
-		c.hub.unregister <- c
+		select {
+		case c.hub.unregister <- c:
+		case <-c.hub.done:
+		}
 		_ = c.conn.Close()
 	}()
 	// Cap incoming message size to 1MB to prevent abuse
@@ -140,7 +170,11 @@ func (c *Client) readPump() {
 			log.Printf("WS: dropping disallowed message type %q from client", envelope.Type)
 			continue
 		}
-		c.hub.broadcast <- message
+		select {
+		case c.hub.broadcast <- message:
+		case <-c.hub.done:
+			return
+		}
 	}
 }
 

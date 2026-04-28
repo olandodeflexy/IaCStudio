@@ -571,9 +571,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				http.Error(w, err.Error(), 500)
 				return
 			}
+			responseFile, relErr := filepath.Rel(projectPath, safeTarget)
+			if relErr != nil || responseFile == "." || strings.HasPrefix(responseFile, "..") {
+				responseFile = filepath.Base(safeTarget)
+			}
 
 			_ = json.NewEncoder(w).Encode(map[string]interface{}{
-				"file": safeTarget,
+				"file": responseFile,
 				"code": *body.Code,
 			})
 			return
