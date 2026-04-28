@@ -7,7 +7,12 @@ import { UIButton, UIInput, UIKicker, UILabel, UIModal, UIPanel, UITextArea } fr
 import { CodeEditor } from './components/CodeEditor';
 import { ChatPanel } from './components/Chat';
 import { TerminalPanel } from './components/Terminal';
+import { ModuleRegistryPanel } from './components/ModuleRegistry';
+import { PolicyStudioPanel } from './components/PolicyStudio';
+import { ScanPanel } from './components/ScanPanel';
+import { SwimlaneCanvas } from './components/Canvas';
 import { S } from './styles';
+import type { LayeredProject, LayeredModule } from './types';
 import {
   TOOLS,
   FALLBACK_RESOURCES,
@@ -17,6 +22,60 @@ import {
   generateLocalCode,
   type Edge,
 } from './legacy';
+
+type CanvasMode = 'freeform' | 'swimlane';
+const EMPTY_CODE_PLACEHOLDER = 'Add resources from the palette or write code here';
+
+const extractLayoutMeta = (state: any) => {
+  if (!state?.layout) return null;
+  const meta: Record<string, any> = {};
+  for (const key of ['layout', 'blueprint', 'project_name', 'cloud', 'environments', 'modules', 'tags']) {
+    if (state[key] !== undefined) meta[key] = state[key];
+  }
+  return meta;
+};
+
+const normalizeLayeredProject = (state: any): LayeredProject | null => {
+  if (state?.layout !== 'layered-v1') return null;
+  const environments = Array.isArray(state.environments)
+    ? state.environments.filter((env: unknown): env is string => typeof env === 'string' && env.length > 0)
+    : [];
+  if (environments.length === 0) return null;
+
+  const rawModules = Array.isArray(state.modules) ? state.modules : [];
+  const modules: LayeredModule[] = rawModules
+    .map((mod: unknown) => {
+      if (typeof mod === 'string') {
+        return { name: mod, path: `modules/${mod}`, environments };
+      }
+      if (mod && typeof mod === 'object') {
+        const candidate = mod as Partial<LayeredModule>;
+        if (!candidate.name) return null;
+        return {
+          name: candidate.name,
+          path: candidate.path || `modules/${candidate.name}`,
+          source: candidate.source,
+          environments: Array.isArray(candidate.environments) && candidate.environments.length > 0
+            ? candidate.environments
+            : environments,
+        };
+      }
+      return null;
+    })
+    .filter((mod): mod is LayeredModule => Boolean(mod?.name));
+
+  if (!modules.some((mod) => mod.name === 'root')) {
+    modules.unshift({ name: 'root', path: 'environments', environments });
+  }
+
+  return { layout: 'layered-v1', environments, modules };
+};
+
+const shouldParseResourcesFromDisk = (state: any, selectedTool: string) => {
+  if (selectedTool === 'pulumi') return false;
+  if (!state?.resources || state.resources.length === 0) return true;
+  return state.layout === 'layered-v1' && state.resources.some((resource: any) => !resource.file);
+};
 
 export default function App() {
   // Restore active project from localStorage on mount
@@ -54,11 +113,16 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activePanel, setActivePanel] = useState('palette');
+  const [rightTab, setRightTab] = useState<'inspect' | 'policy' | 'scan' | 'modules'>('inspect');
+  const [projectLayoutMeta, setProjectLayoutMeta] = useState<Record<string, any> | null>(null);
+  const [layeredProject, setLayeredProject] = useState<LayeredProject | null>(null);
+  const [canvasMode, setCanvasMode] = useState<CanvasMode>('freeform');
 
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
   const [dragging, setDragging] = useState<{ id: string; ox: number; oy: number } | null>(null);
   const [wsConnected, setWsConnected] = useState(false);
   const [syncCode, setSyncCode] = useState('');
+  const [codeSaving, setCodeSaving] = useState(false);
   const [notification, setNotification] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [lastCmdError, setLastCmdError] = useState<{ command: string; output: string } | null>(null);
@@ -74,6 +138,73 @@ export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
+  const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
+
+  const buildPersistedState = useCallback(() => ({
+    ...(projectLayoutMeta || {}),
+    tool,
+    resources: nodes.map(n => ({
+      id: n.id, type: n.type, name: n.name, label: n.label, icon: n.icon,
+      properties: n.properties, file: n.file, line: n.line, x: n.x, y: n.y,
+      connections: edges.filter(e => e.from === n.id).map(e => ({
+        target_id: e.to, field: e.field, label: e.label,
+      })),
+    })),
+  }), [projectLayoutMeta, tool, nodes, edges]);
+
+  const applyProjectState = useCallback((state: any) => {
+    const meta = extractLayoutMeta(state);
+    const layered = normalizeLayeredProject(meta);
+    setProjectLayoutMeta(meta);
+    setLayeredProject(layered);
+    setCanvasMode(layered ? 'swimlane' : 'freeform');
+
+    if (state?.resources?.length > 0) {
+      resetNodes(state.resources.map((n: any) => ({
+        id: n.id || `res_${Math.random().toString(36).slice(2)}`,
+        type: n.type, name: n.name,
+        label: n.label || n.type, icon: n.icon || '📦',
+        properties: n.properties || {},
+        file: n.file,
+        line: n.line,
+        x: n.x ?? 80 + Math.random() * 300,
+        y: n.y ?? 80 + Math.random() * 200,
+      })));
+      const restoredEdges: Edge[] = [];
+      for (const n of state.resources) {
+        if (n.connections) {
+          for (const c of n.connections) {
+            restoredEdges.push({
+              id: `${n.id}->${c.target_id}:${c.field}`,
+              from: n.id, to: c.target_id,
+              fromType: n.type,
+              toType: state.resources.find((r: any) => r.id === c.target_id)?.type || '',
+              field: c.field, label: c.label || c.field,
+            });
+          }
+        }
+      }
+      setEdges(restoredEdges);
+    } else {
+      resetNodes([]);
+      setEdges([]);
+    }
+  }, [resetNodes]);
+
+  const applyParsedResources = useCallback((resources: Resource[]) => {
+    resetNodes(resources.map((r, i) => {
+      return {
+        ...r,
+        id: r.id || `${r.type}.${r.name || i}`,
+        label: r.label || r.type,
+        icon: r.icon || '📦',
+        properties: r.properties || {},
+        x: r.x ?? 80 + (i % 5) * 200,
+        y: r.y ?? 80 + Math.floor(i / 5) * 130,
+      };
+    }));
+    setEdges([]);
+  }, [resetNodes]);
 
   // Detect tools and load saved projects on mount
   useEffect(() => {
@@ -84,34 +215,15 @@ export default function App() {
       hasCreatedProject.current = true;
       initialLoadDone.current = false;
       api.loadState(saved.current.projectId).then(state => {
-        if (state?.resources?.length > 0) {
-          resetNodes(state.resources.map((n: any) => ({
-            id: n.id || `res_${Math.random().toString(36).slice(2)}`,
-            type: n.type, name: n.name,
-            label: n.label || n.type, icon: n.icon || '📦',
-            properties: n.properties || {},
-            x: n.x ?? 80 + Math.random() * 300,
-            y: n.y ?? 80 + Math.random() * 200,
-          })));
-          const restoredEdges: Edge[] = [];
-          for (const n of state.resources) {
-            if (n.connections) {
-              for (const c of n.connections) {
-                restoredEdges.push({
-                  id: `${n.id}->${c.target_id}:${c.field}`,
-                  from: n.id, to: c.target_id,
-                  fromType: n.type,
-                  toType: state.resources.find((r: any) => r.id === c.target_id)?.type || '',
-                  field: c.field, label: c.label || c.field,
-                });
-              }
-            }
-          }
-          setEdges(restoredEdges);
+        applyProjectState(state);
+        const selectedTool = state?.tool || saved.current.tool;
+        setTool(selectedTool);
+        if (shouldParseResourcesFromDisk(state, selectedTool)) {
+          api.getResources(saved.current.projectId, selectedTool).then(applyParsedResources).catch(() => {});
         }
       }).catch(() => {});
     }
-  }, []);
+  }, [applyParsedResources, applyProjectState]);
 
   // Persist active session to localStorage so page reload restores it
   useEffect(() => {
@@ -128,18 +240,9 @@ export default function App() {
     if (!tool || !projectId || !hasCreatedProject.current) return;
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
-      api.saveState(projectId, {
-        tool,
-        resources: nodes.map(n => ({
-          id: n.id, type: n.type, name: n.name, label: n.label, icon: n.icon,
-          properties: n.properties, x: n.x, y: n.y,
-          connections: edges.filter(e => e.from === n.id).map(e => ({
-            target_id: e.to, field: e.field, label: e.label,
-          })),
-        })),
-      }).catch(() => {});
+      api.saveState(projectId, buildPersistedState()).catch(() => {});
     }, 2000);
-  }, [nodes, edges, tool, projectId]);
+  }, [buildPersistedState, tool, projectId]);
 
   // Open a saved project
   const openProject = useCallback(async (proj: any) => {
@@ -149,40 +252,28 @@ export default function App() {
     hasCreatedProject.current = true;
     try {
       const state = await api.loadState(proj.name);
-      if (state?.resources?.length > 0) {
-        const restored = state.resources.map((n: any) => ({
-          id: n.id || `res_${Math.random().toString(36).slice(2)}`,
-          type: n.type, name: n.name,
-          label: n.label || n.type,
-          icon: n.icon || '📦',
-          properties: n.properties || {},
-          x: n.x ?? 80 + Math.random() * 300,
-          y: n.y ?? 80 + Math.random() * 200,
-        }));
-        resetNodes(restored);
-        // Restore edges from node connections
-        const restoredEdges: Edge[] = [];
-        for (const n of state.resources) {
-          if (n.connections) {
-            for (const c of n.connections) {
-              restoredEdges.push({
-                id: `${n.id}->${c.target_id}:${c.field}`,
-                from: n.id, to: c.target_id,
-                fromType: n.type,
-                toType: state.resources.find((r: any) => r.id === c.target_id)?.type || '',
-                field: c.field, label: c.label || c.field,
-              });
-            }
-          }
-        }
-        setEdges(restoredEdges);
-        setNotification(`Opened project: ${proj.name}`);
-        setTimeout(() => setNotification(null), 3000);
+      applyProjectState(state);
+      const selectedTool = state?.tool || proj.tool || 'terraform';
+      setTool(selectedTool);
+      if (shouldParseResourcesFromDisk(state, selectedTool)) {
+        const parsed = await api.getResources(proj.name, selectedTool);
+        applyParsedResources(parsed);
       }
+      setNotification(`Opened project: ${proj.name}`);
+      setTimeout(() => setNotification(null), 3000);
     } catch {
       // No saved state — start fresh
+      setProjectLayoutMeta(null);
+      setLayeredProject(null);
+      setCanvasMode('freeform');
     }
-  }, [resetNodes, catalogResources]);
+  }, [applyParsedResources, applyProjectState]);
+
+  useEffect(() => {
+    if (tool === 'ansible' && rightTab === 'modules') {
+      setRightTab('inspect');
+    }
+  }, [tool, rightTab]);
 
   // WebSocket for live sync
   const handleWSMessage = useCallback((msg: WSMessage) => {
@@ -313,7 +404,7 @@ export default function App() {
   // Generate code preview whenever nodes change
   useEffect(() => {
     if (!tool || !nodes.length) {
-      setSyncCode(tool ? `# Add resources from the palette or use AI chat\n` : '');
+      setSyncCode('');
       return;
     }
     const code = generateLocalCode(tool, nodes, edges);
@@ -551,8 +642,39 @@ export default function App() {
     });
   };
 
+  const saveCodeToDisk = useCallback(async (value: string) => {
+    if (!tool || !projectId) return;
+    if (!value.trim()) {
+      setNotification('Nothing to save yet');
+      setTimeout(() => setNotification(null), 3000);
+      return;
+    }
+    if (tool === 'pulumi') {
+      setNotification('Pulumi editor save is blocked until TypeScript sync lands');
+      setTimeout(() => setNotification(null), 4000);
+      return;
+    }
+    setCodeSaving(true);
+    isSyncing.current = true;
+    try {
+      const fileName = `main${TOOLS[tool]?.ext || '.tf'}`;
+      await api.syncCodeToDisk(projectId, tool, value, fileName);
+      setNotification(`Saved ${fileName}`);
+      setTimeout(() => setNotification(null), 3000);
+    } catch (err: any) {
+      setNotification(`Save failed: ${err.message}`);
+      setTimeout(() => setNotification(null), 5000);
+    } finally {
+      setCodeSaving(false);
+      setTimeout(() => { isSyncing.current = false; }, 1500);
+    }
+  }, [projectId, tool]);
+
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
+    setProjectLayoutMeta(null);
+    setLayeredProject(null);
+    setCanvasMode('freeform');
     // Lock the project ID at creation time so renaming the display input
     // can't silently redirect API calls to a different directory.
     setProjectId(projectName);
@@ -818,14 +940,28 @@ export default function App() {
                       </UIButton>
                       {importPreview.resources.length > 0 && (
                         <UIButton variant="primary"
-                          onClick={() => {
+                          onClick={async () => {
                             const t = importPreview!.tool === 'opentofu' ? 'opentofu' : importPreview!.tool === 'ansible' ? 'ansible' : 'terraform';
+                            try {
+                              await api.createProject(projectName, t);
+                            } catch (e: any) {
+                              setNotification(`Import failed: ${e.message}`);
+                              setTimeout(() => setNotification(null), 5000);
+                              return;
+                            }
                             setTool(t);
                             setProjectId(projectName);
+                            setProjectLayoutMeta(null);
+                            setLayeredProject(null);
+                            setCanvasMode('freeform');
                             hasCreatedProject.current = true;
+                            initialLoadDone.current = true;
                             // Place resources on canvas in a grid layout
                             const imported = importPreview!.resources.map((r, i) => ({
-                              ...r,
+                              ...(() => {
+                                const { file: _file, line: _line, ...rest } = r;
+                                return rest;
+                              })(),
                               id: r.id || `imp_${i}_${Date.now()}`,
                               x: 80 + (i % 5) * 200,
                               y: 80 + Math.floor(i / 5) * 130,
@@ -881,20 +1017,12 @@ export default function App() {
           <button style={S.backBtn} onClick={async () => {
             // Save state before navigating away
             if (projectId && hasCreatedProject.current) {
-              await api.saveState(projectId, {
-                tool,
-                resources: nodes.map(n => ({
-                  id: n.id, type: n.type, name: n.name, label: n.label, icon: n.icon,
-                  properties: n.properties, x: n.x, y: n.y,
-                  connections: edges.filter(e => e.from === n.id).map(e => ({
-                    target_id: e.to, field: e.field, label: e.label,
-                  })),
-                })),
-              }).catch(() => {});
+              await api.saveState(projectId, buildPersistedState()).catch(() => {});
             }
             // Refresh saved projects list
             api.listProjectStates().then(setSavedProjects).catch(() => {});
             setTool(null); resetNodes([]); setEdges([]); setChatMessages([]); setTerminalOutput([]);
+            setProjectLayoutMeta(null); setLayeredProject(null); setCanvasMode('freeform');
             initialLoadDone.current = false; hasCreatedProject.current = false;
           }}>←</button>
           <span style={{ ...S.badge, background: ct.color + '22', color: ct.color }}>{ct.icon} {ct.name}</span>
@@ -1145,12 +1273,35 @@ export default function App() {
           onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
 
         {/* Canvas */}
-        <main style={S.canvas} ref={canvasRef} onMouseMove={onMouseMove} onMouseUp={(e) => {
+        <main style={S.canvas} ref={canvasRef} onMouseMove={isSwimlaneMode ? undefined : onMouseMove} onMouseUp={(e) => {
+          if (isSwimlaneMode) return;
           onMouseUp(e);
           // Finish manual connection if dragging to empty space
           if (connecting) setConnecting(null);
-        }} onMouseLeave={() => { onMouseUp(null as any); setConnecting(null); }}
+        }} onMouseLeave={() => { if (!isSwimlaneMode) { onMouseUp(null as any); setConnecting(null); } }}
           onClick={() => { setSelectedNode(null); setSelectedEdge(null); }}>
+          {layeredProject && (
+            <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 10, display: 'flex', gap: 6, padding: 4, background: 'var(--bg-elev-1)', border: '1px solid var(--border-main)', borderRadius: 8 }}>
+              {(['swimlane', 'freeform'] as const).map(mode => (
+                <button
+                  key={mode}
+                  style={{ ...S.cmd, background: canvasMode === mode ? ct.color + '22' : 'transparent', color: canvasMode === mode ? ct.color : 'var(--text-muted)', padding: '5px 9px' }}
+                  onClick={(e) => { e.stopPropagation(); setCanvasMode(mode); }}
+                >
+                  {mode === 'swimlane' ? 'Swimlane' : 'Freeform'}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {isSwimlaneMode && layeredProject ? (
+            <SwimlaneCanvas
+              project={layeredProject}
+              resources={nodes}
+              onSelectResource={(id) => { setSelectedNode(id); setSelectedEdge(null); }}
+            />
+          ) : (
+            <>
           <div style={S.grid} className="iac-canvas-grid" />
 
           {/* SVG layer for connection lines */}
@@ -1270,6 +1421,8 @@ export default function App() {
               </div>
             </div>
           );})}
+            </>
+          )}
         </main>
 
         {/* Right Panel */}
@@ -1279,6 +1432,28 @@ export default function App() {
           onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = 'var(--border-main)'; }}
           onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
         <aside style={{ ...S.right, width: rightWidth }}>
+          <div style={S.tabs}>
+            {[
+              { key: 'inspect', label: selected || selectedEdge ? 'Inspect' : 'Code' },
+              { key: 'policy', label: 'Policy' },
+              { key: 'scan', label: 'Scan' },
+              ...(tool === 'ansible' ? [] : [{ key: 'modules', label: 'Modules' }]),
+            ].map(t => (
+              <button
+                key={t.key}
+                style={{
+                  ...S.tab,
+                  ...(rightTab === t.key ? { color: ct.color, borderBottomColor: ct.color } : {}),
+                  fontSize: 10,
+                }}
+                onClick={() => setRightTab(t.key as typeof rightTab)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+          {rightTab === 'inspect' && (
+            <>
           {/* Selected edge info */}
           {selectedEdge && (() => {
             const edge = edges.find(e => e.id === selectedEdge);
@@ -1362,17 +1537,51 @@ export default function App() {
           <div style={S.codePanel}>
             <div style={S.codeHead}>
               <span>FILE main{ct.ext}</span>
+              <button
+                style={{ ...S.copyBtn, color: tool === 'pulumi' || codeSaving || !syncCode.trim() ? '#555' : ct.color }}
+                disabled={tool === 'pulumi' || codeSaving || !syncCode.trim()}
+                title={tool === 'pulumi' ? 'Pulumi sync is tracked in the Pulumi parser follow-up' : 'Save editor buffer to disk'}
+                onClick={() => saveCodeToDisk(syncCode)}
+              >
+                {codeSaving ? 'Saving...' : 'Save'}
+              </button>
               <button style={{ ...S.copyBtn, color: ct.color }}
                 onClick={() => navigator.clipboard?.writeText(syncCode)}>Copy</button>
             </div>
             <div style={S.codePre}>
-              <CodeEditor
-                value={syncCode || '# Add resources to see generated code\n'}
-                filePath={`main${ct.ext}`}
-                readOnly
-              />
+              <div style={{ position: 'relative', flex: 1, minWidth: 0, height: '100%', display: 'flex' }}>
+                {!syncCode && (
+                  <div style={{ position: 'absolute', top: 14, left: 18, zIndex: 1, color: '#555', fontFamily: 'JetBrains Mono', fontSize: 13, pointerEvents: 'none' }}>
+                    {EMPTY_CODE_PLACEHOLDER}
+                  </div>
+                )}
+                <CodeEditor
+                  value={syncCode}
+                  filePath={`main${ct.ext}`}
+                  readOnly={tool === 'pulumi'}
+                  onChange={setSyncCode}
+                  onSave={saveCodeToDisk}
+                />
+              </div>
             </div>
           </div>
+            </>
+          )}
+          {rightTab === 'policy' && (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <PolicyStudioPanel projectName={projectId} tool={tool} />
+            </div>
+          )}
+          {rightTab === 'scan' && (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <ScanPanel projectName={projectId} tool={tool} />
+            </div>
+          )}
+          {rightTab === 'modules' && tool !== 'ansible' && (
+            <div style={{ flex: 1, minHeight: 0 }}>
+              <ModuleRegistryPanel initialQuery="vpc" />
+            </div>
+          )}
         </aside>
       </div>
 

@@ -206,6 +206,18 @@ export const api = {
     return (await check(res)).json();
   },
 
+  // Save an explicit editor buffer through the same sync endpoint. This is
+  // intentionally separate from resource sync so Monaco edits only write when
+  // the user saves, not on every canvas change.
+  async syncCodeToDisk(projectName: string, tool: string, code: string, file?: string): Promise<{ file: string; code: string }> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/sync?tool=${tool}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code, file }),
+    });
+    return (await check(res)).json();
+  },
+
   // Run IaC command. For apply/destroy, pass approved:true after plan
   // review. For pulumi layered-v1 projects, pass env so the runner
   // executes inside environments/<env> and threads --stack <env> to

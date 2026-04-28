@@ -2,6 +2,7 @@ APP_NAME := iac-studio
 VERSION  := 0.1.0
 BUILD    := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 LDFLAGS  := -ldflags "-s -w -X main.AppVersion=$(VERSION)-$(BUILD)"
+GO_PACKAGES := ./cmd/... ./internal/...
 
 .PHONY: all build dev test clean deps docker install release
 
@@ -37,13 +38,13 @@ build-backend:
 ## ─── Test ───
 
 test:
-	go test ./... -v -race -cover
+	go test $(GO_PACKAGES) -v -race -cover
 
 test-frontend:
 	cd web && npm test
 
 lint:
-	golangci-lint run ./...
+	golangci-lint run $(GO_PACKAGES)
 
 ## ─── Docker ───
 
