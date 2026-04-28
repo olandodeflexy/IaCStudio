@@ -536,7 +536,17 @@ export default function App() {
       return;
     }
     setTerminalOutput(prev => [...prev, `$ ${command}`, '']);
-    api.runCommand(projectId, tool, command, needsApproval).catch(err => {
+    // For pulumi the backend rejects mutating commands with
+    // policy_unsupported because server-side policy evaluation isn't
+    // implemented for it yet. Auto-acknowledge once the user has
+    // already confirmed via the apply/destroy prompt above —
+    // anything stricter would force a second confirm() for the same
+    // action. Non-pulumi tools keep the standard policy flow.
+    const ack = tool === 'pulumi' && needsApproval;
+    api.runCommand(projectId, tool, command, {
+      approved: needsApproval,
+      acknowledged: ack,
+    }).catch(err => {
       setTerminalOutput(prev => [...prev, `Error: ${err.message}`]);
     });
   };

@@ -158,16 +158,18 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 	// silently fall back to "US" multi-region, producing a confusing
 	// mismatch. Reject up front so the caller fixes the input.
 	if cloud == "gcp" && !gcpRegionRE.MatchString(region) {
-		// Allow short multi-regions (US, EU, ASIA) too — GCS accepts
-		// those and so does the provider config. Normalize casing
-		// here so a lower/mixed input ("us", "Us") becomes the
-		// canonical "US" before it hits Pulumi.<env>.yaml; an
-		// un-normalised value would emit `gcp:region: us` which
-		// the provider rejects.
-		if len(region) > 4 || strings.ContainsAny(region, "0123456789-") {
-			return nil, fmt.Errorf("region %q is not a valid GCP region (expected canonical form like us-central1 or short multi-region like US/EU/ASIA)", region)
+		// Allow short multi-regions only — GCS accepts US, EU, ASIA
+		// (and a small set of named multi-regions). Anything outside
+		// that allowlist would silently uppercase to a still-invalid
+		// value and fail at provider time. Normalise casing so a
+		// lower/mixed input ("us", "Us") becomes canonical before
+		// hitting Pulumi.<env>.yaml.
+		switch strings.ToUpper(region) {
+		case "US", "EU", "ASIA":
+			region = strings.ToUpper(region)
+		default:
+			return nil, fmt.Errorf("region %q is not a valid GCP region (expected canonical form like us-central1 or short multi-region US/EU/ASIA)", region)
 		}
-		region = strings.ToUpper(region)
 	}
 	owner := stringInput(values, "owner_tag", "platform")
 	if err := validateTagValue("owner_tag", owner); err != nil {
@@ -345,10 +347,15 @@ func seedResourcesFor(cloud, projectName, env, owner, region string) []parser.Re
 			ID:   "azurerm_resource_group.seed",
 			Type: "azurerm_resource_group",
 			Name: projectName + "_seed",
+			// Azure Native's ResourceGroup expects `resourceGroupName`,
+			// not `name`. Emit the snake_case form so the generator's
+			// camelCase pass produces the right Pulumi property name —
+			// otherwise tsc rejects the seed and the whole scaffold
+			// fails preview before touching the cloud.
 			Properties: map[string]any{
-				"name":     rgName,
-				"location": loc,
-				"tags":     awsAzureTags,
+				"resource_group_name": rgName,
+				"location":            loc,
+				"tags":                awsAzureTags,
 			},
 		}}
 	}
@@ -375,26 +382,31 @@ for dir in environments/*/; do
   (cd "$dir" && npm install)
 done
 `
+	// Every mutating verb pins --stack "$env" so the script can't
+	// silently target whatever stack happens to be workspace-selected
+	// in the env directory. Mirrors the runner-side guard in
+	// pulumiArgs(); without this, ./scripts/apply.sh dev could mutate
+	// stage if a developer ran `pulumi stack select stage` there.
 	planSh := `#!/usr/bin/env bash
 set -euo pipefail
 # Usage: ./scripts/plan.sh <env>
 env="${1:?env required — usage: ./scripts/plan.sh <env>}"
 cd "$(dirname "$0")/../environments/$env"
-pulumi preview --non-interactive --color=never
+pulumi preview --stack "$env" --non-interactive --color=never
 `
 	applySh := `#!/usr/bin/env bash
 set -euo pipefail
 # Usage: ./scripts/apply.sh <env>
 env="${1:?env required — usage: ./scripts/apply.sh <env>}"
 cd "$(dirname "$0")/../environments/$env"
-pulumi up --yes --non-interactive --color=never
+pulumi up --stack "$env" --yes --non-interactive --color=never
 `
 	destroySh := `#!/usr/bin/env bash
 set -euo pipefail
 # Usage: ./scripts/destroy.sh <env>
 env="${1:?env required — usage: ./scripts/destroy.sh <env>}"
 cd "$(dirname "$0")/../environments/$env"
-pulumi destroy --yes --non-interactive --color=never
+pulumi destroy --stack "$env" --yes --non-interactive --color=never
 `
 	return []File{
 		{Path: "scripts/init.sh", Content: []byte(initSh), Executable: true},
