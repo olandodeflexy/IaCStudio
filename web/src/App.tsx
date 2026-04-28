@@ -11,6 +11,7 @@ import { ModuleRegistryPanel } from './components/ModuleRegistry';
 import { PolicyStudioPanel } from './components/PolicyStudio';
 import { ScanPanel } from './components/ScanPanel';
 import { SwimlaneCanvas } from './components/Canvas';
+import { VisionDropzone } from './components/VisionDropzone';
 import { S } from './styles';
 import type { LayeredProject, LayeredModule } from './types';
 import {
@@ -100,6 +101,8 @@ export default function App() {
   const [importLoading, setImportLoading] = useState(false);
   const [topologyDesc, setTopologyDesc] = useState('');
   const [topologyProvider, setTopologyProvider] = useState('aws');
+  const [visionImages, setVisionImages] = useState<File[]>([]);
+  const [visionError, setVisionError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [aiSettings, setAiSettings] = useState({ type: 'ollama', endpoint: '', model: '', api_key: '' });
   const [savedProjects, setSavedProjects] = useState<any[]>([]);
@@ -642,6 +645,68 @@ export default function App() {
     });
   };
 
+  const closeImportWizard = () => {
+    setShowImportWizard(false);
+    setImportPreview(null);
+    setVisionImages([]);
+    setVisionError(null);
+  };
+
+  const handleGenerateTopology = async () => {
+    const toolKey = detectedTools.find(t => t.available && t.name !== 'Ansible')?.name === 'OpenTofu' ? 'opentofu' : 'terraform';
+
+    if (visionImages.length > 0) {
+      setImportLoading(true);
+      setNotification('AI is reading your diagram...');
+      try {
+        const result = await api.generateTopologyFromImages({
+          description: topologyDesc,
+          tool: toolKey,
+          provider: topologyProvider,
+          images: visionImages,
+        });
+        if (result.message) {
+          setChatMessages(prev => [...prev, { role: 'ai', text: `Diagram analysis: ${result.message}` }]);
+        }
+        setImportPreview({
+          tool: toolKey,
+          provider: topologyProvider,
+          files: visionImages.map(file => ({ path: file.name, name: file.name, type: file.type, size: file.size })),
+          resources: result.resources || [],
+          edges: [],
+          summary: result.message || 'Infrastructure generated from diagram',
+        });
+      } catch (e: any) {
+        setImportPreview({
+          tool: 'unknown',
+          provider: topologyProvider,
+          files: [],
+          resources: [],
+          edges: [],
+          summary: e.message || 'Diagram analysis failed',
+          warnings: [e.message || 'Diagram analysis failed'],
+        });
+      } finally {
+        setImportLoading(false);
+        setNotification(null);
+      }
+      return;
+    }
+
+    if (!topologyDesc.trim()) return;
+    setImportLoading(true);
+    setNotification('AI is designing your infrastructure...');
+    try {
+      // Fire and forget — result arrives via WebSocket
+      await api.generateTopology(topologyDesc, toolKey, topologyProvider);
+      // Don't setImportLoading(false) here — WebSocket handler does it
+    } catch (e: any) {
+      setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: e.message || 'Generation failed', warnings: [e.message] });
+      setImportLoading(false);
+      setNotification(null);
+    }
+  };
+
   const saveCodeToDisk = useCallback(async (value: string) => {
     if (!tool || !projectId) return;
     if (!value.trim()) {
@@ -784,30 +849,30 @@ export default function App() {
             {/* Import / Topology buttons */}
             <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>
               <UIButton
-                onClick={() => { setImportTab('browse'); setShowImportWizard(true); api.browse().then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {}); }}>
+                onClick={() => { setImportTab('browse'); setVisionImages([]); setVisionError(null); setShowImportWizard(true); api.browse().then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {}); }}>
                 Import Existing Project
               </UIButton>
               <UIButton variant="primary"
                 onClick={() => { setImportTab('topology'); setShowImportWizard(true); }}>
-                Build from Description
+                Build with AI
               </UIButton>
             </div>
           </UIPanel>
 
           {/* ─── Import Wizard Modal ─── */}
           {showImportWizard && (
-            <UIModal onClose={() => { setShowImportWizard(false); setImportPreview(null); }}>
+            <UIModal onClose={closeImportWizard}>
               {/* Wizard header */}
               <div className="ui-modal-header">
                 <div style={{ display: 'flex', gap: 12 }}>
                     {(['browse', 'topology'] as const).map(t => (
                       <UIButton key={t} variant="tab" active={importTab === t}
-                        onClick={() => { setImportTab(t); setImportPreview(null); }}>
-                        {t === 'browse' ? 'Browse Files' : 'Describe Architecture'}
+                        onClick={() => { setImportTab(t); setImportPreview(null); if (t === 'browse') { setVisionImages([]); setVisionError(null); } }}>
+                        {t === 'browse' ? 'Browse Files' : 'AI Topology'}
                       </UIButton>
                     ))}
                 </div>
-                <button className="ui-close" onClick={() => { setShowImportWizard(false); setImportPreview(null); }}>×</button>
+                <button className="ui-close" onClick={closeImportWizard}>×</button>
               </div>
 
                 {/* Browse tab */}
@@ -860,11 +925,18 @@ export default function App() {
                   <div style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
                     <div style={{ fontSize: 14, color: 'var(--text-main)', fontWeight: 600 }}>Describe your infrastructure</div>
                     <div className="ui-note">
-                      Tell us what you want to build in plain language. The AI will generate a complete infrastructure topology with all necessary resources and connections.
+                      Tell us what you want to build in plain language, or upload a diagram for vision analysis.
                     </div>
-                    <UITextArea style={{ flex: 1 }}
+                    <VisionDropzone
+                      files={visionImages}
+                      onFilesChange={setVisionImages}
+                      onError={setVisionError}
+                      error={visionError}
+                      disabled={importLoading}
+                    />
+                    <UITextArea style={{ flex: 1, minHeight: 120 }}
                       value={topologyDesc} onChange={e => setTopologyDesc(e.target.value)}
-                      placeholder={"Examples:\n• A three-tier web app with VPC, ALB, auto-scaling EC2, RDS PostgreSQL, and S3 for static assets\n• A GKE cluster with Cloud SQL, Redis cache, and Cloud Storage for a microservices platform\n• An Azure AKS cluster with PostgreSQL, Key Vault, and Application Gateway"} />
+                      placeholder={"Optional context:\nA three-tier web app with VPC, ALB, auto-scaling EC2, RDS PostgreSQL, and S3 for static assets\nA GKE cluster with Cloud SQL, Redis cache, and Cloud Storage for a microservices platform"} />
                     <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                       <UILabel>Provider:</UILabel>
                       {['aws', 'google', 'azurerm'].map(p => (
@@ -875,22 +947,9 @@ export default function App() {
                       ))}
                     </div>
                     <UIButton variant="primary"
-                      disabled={!topologyDesc.trim() || importLoading}
-                      onClick={async () => {
-                        setImportLoading(true);
-                        setNotification('AI is designing your infrastructure...');
-                        try {
-                          const toolKey = detectedTools.find(t => t.available && t.name !== 'Ansible')?.name === 'OpenTofu' ? 'opentofu' : 'terraform';
-                          // Fire and forget — result arrives via WebSocket
-                          await api.generateTopology(topologyDesc, toolKey, topologyProvider);
-                          // Don't setImportLoading(false) here — WebSocket handler does it
-                        } catch (e: any) {
-                          setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: e.message || 'Generation failed', warnings: [e.message] });
-                          setImportLoading(false);
-                          setNotification(null);
-                        }
-                      }}>
-                      {importLoading ? 'Generating... (this may take a minute)' : 'Generate Infrastructure'}
+                      disabled={(!topologyDesc.trim() && visionImages.length === 0) || Boolean(visionError) || importLoading}
+                      onClick={handleGenerateTopology}>
+                      {importLoading ? 'Generating... (this may take a minute)' : visionImages.length > 0 ? 'Generate from Diagram' : 'Generate Infrastructure'}
                     </UIButton>
                   </div>
                 )}
@@ -984,6 +1043,8 @@ export default function App() {
                             }
                             setShowImportWizard(false);
                             setImportPreview(null);
+                            setVisionImages([]);
+                            setVisionError(null);
                             setNotification(`Imported ${importPreview!.resources.length} resources`);
                             setTimeout(() => setNotification(null), 4000);
                           }}>

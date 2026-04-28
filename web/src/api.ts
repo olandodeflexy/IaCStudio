@@ -113,6 +113,26 @@ export const api = {
     return (await check(res)).json();
   },
 
+  // AI vision topology builder (sync multipart upload).
+  async generateTopologyFromImages(req: {
+    description?: string;
+    tool: string;
+    provider: string;
+    images: File[];
+  }): Promise<{ message: string; resources: Resource[] }> {
+    const form = new FormData();
+    form.set('tool', req.tool);
+    form.set('provider', req.provider);
+    if (req.description?.trim()) form.set('description', req.description.trim());
+    req.images.forEach(file => form.append('image', file, file.name));
+
+    const res = await fetch(`${BASE}/api/ai/topology/image`, {
+      method: 'POST',
+      body: form,
+    });
+    return (await check(res)).json();
+  },
+
   // AI provider settings
   async getAISettings(): Promise<{ type: string; endpoint: string; model: string; api_key: string }> {
     const res = await fetch(`${BASE}/api/ai/settings`);
