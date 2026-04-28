@@ -80,7 +80,12 @@ func NewSafeRunner(config SafetyConfig) *SafeRunner {
 }
 
 // Execute runs a command with timeout, cancellation, and output limiting.
-func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command string) (*ExecutionResult, error) {
+//
+// env names the layered-v1 environment, threaded through to the
+// underlying Runner.buildArgs so pulumi commands receive an explicit
+// `--stack <env>`. Empty env runs in projectDir's own workspace
+// (flat layouts).
+func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command, env string) (*ExecutionResult, error) {
 	// Project-level lock — prevent concurrent executions on the same project
 	// which would cause terraform state lock contention and corruption.
 	sr.mu.Lock()
@@ -117,7 +122,7 @@ func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command str
 	}()
 
 	// Build command args
-	args := sr.runner.buildArgs(tool, command)
+	args := sr.runner.buildArgs(tool, command, env)
 	if len(args) == 0 {
 		return nil, fmt.Errorf("unknown tool/command: %s %s", tool, command)
 	}
@@ -279,11 +284,22 @@ func (sr *SafeRunner) ExecutePlanJSON(ctx context.Context, projectDir, tool stri
 }
 
 // RequiresApproval returns true if the command needs plan review first.
+// Covers both the Terraform/Ansible vocabulary ("apply", "destroy")
+// and Pulumi's native verbs ("up", "refresh") so every state-mutating
+// action lands on the approval gate regardless of which tool the user
+// picked. refresh is gated because Pulumi's refresh re-reads and
+// overwrites the stack state file with whatever it observes in the
+// cloud — a surprise refresh can hide drift an operator wanted to
+// investigate.
 func (sr *SafeRunner) RequiresApproval(command string) bool {
 	if !sr.defaults.RequireApproval {
 		return false
 	}
-	return command == "apply" || command == "destroy"
+	switch command {
+	case "apply", "up", "destroy", "refresh":
+		return true
+	}
+	return false
 }
 
 // ParsePlanSummary extracts the summary line from terraform plan output.
@@ -303,9 +319,13 @@ func (sr *SafeRunner) timeoutFor(command string) time.Duration {
 	switch command {
 	case "init":
 		return sr.defaults.InitTimeout
-	case "plan":
+	case "plan", "preview":
 		return sr.defaults.PlanTimeout
-	case "apply", "destroy":
+	case "apply", "up", "destroy", "refresh":
+		// Pulumi's "up" and "refresh" mutate state the same way
+		// terraform's "apply" / "destroy" do — give them the long
+		// apply-timeout bucket so real stacks don't hit the 5-minute
+		// DefaultTimeout prematurely.
 		return sr.defaults.ApplyTimeout
 	default:
 		return sr.defaults.DefaultTimeout

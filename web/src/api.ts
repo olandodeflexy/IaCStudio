@@ -206,12 +206,44 @@ export const api = {
     return (await check(res)).json();
   },
 
-  // Run IaC command. For apply/destroy, pass approved:true after plan review.
-  async runCommand(projectName: string, tool: string, command: string, approved = false): Promise<{ status: string }> {
+  // Run IaC command. For apply/destroy, pass approved:true after plan
+  // review. For pulumi layered-v1 projects, pass env so the runner
+  // executes inside environments/<env> and threads --stack <env> to
+  // pulumi (otherwise the workspace-selected stack is targeted, which
+  // can be wrong). Pass acknowledged:true to override the policy gate
+  // — required for pulumi today since server-side policy evaluation
+  // is unimplemented for it (the backend returns
+  // {error:"policy_unsupported"} on the first apply attempt; surface
+  // that to the user as an explicit confirmation prompt before the
+  // retry sets acknowledged).
+  async runCommand(
+    projectName: string,
+    tool: string,
+    command: string,
+    opts: { approved?: boolean; env?: string; acknowledged?: boolean } = {},
+  ): Promise<{ status: string }> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool, command, approved }),
+      body: JSON.stringify({
+        tool,
+        command,
+        approved: opts.approved ?? false,
+        env: opts.env,
+        acknowledged: opts.acknowledged ?? false,
+      }),
+    });
+    return (await check(res)).json();
+  },
+
+  // Kill a running command. Pass env to match the workdir the command
+  // was launched in (layered-v1 / pulumi); otherwise the kill targets
+  // the project root and won't find the active execution.
+  async killCommand(projectName: string, env?: string): Promise<{ status: string }> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/kill`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: env ? JSON.stringify({ env }) : '',
     });
     return (await check(res)).json();
   },

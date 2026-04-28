@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -76,6 +77,73 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 		return "", fmt.Errorf("project path escapes root: %q", name)
 	}
 	return resolved, nil
+}
+
+// safeSubdir resolves a subdirectory beneath projectPath while
+// enforcing the same traversal + containment guarantees safeProjectPath
+// offers at the project level. Each path segment is validated
+// (alphanumeric + hyphen + underscore, no dots, no separators) and
+// the final absolute path must stay inside projectPath after symlink
+// resolution.
+//
+// Used by the /api/projects/{name}/run endpoint to rebase execution
+// into environments/<env>/ for layered-v1 layouts so the runner finds
+// Pulumi.yaml / main.tf in the right workdir.
+func safeSubdir(projectPath string, segments ...string) (string, error) {
+	for _, seg := range segments {
+		if seg == "" || seg == "." || seg == ".." ||
+			strings.ContainsAny(seg, `/\`) ||
+			strings.Contains(seg, "..") {
+			return "", fmt.Errorf("invalid path segment: %q", seg)
+		}
+		for _, r := range seg {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+				(r >= '0' && r <= '9') || r == '-' || r == '_') {
+				return "", fmt.Errorf("invalid path segment: %q (only alphanumeric, hyphens, underscores)", seg)
+			}
+		}
+	}
+	joined := filepath.Join(append([]string{projectPath}, segments...)...)
+	absProject, err := filepath.Abs(projectPath)
+	if err != nil {
+		return "", err
+	}
+	if eval, err := filepath.EvalSymlinks(absProject); err == nil {
+		absProject = eval
+	}
+	absJoined, err := filepath.Abs(joined)
+	if err != nil {
+		return "", err
+	}
+	if eval, err := filepath.EvalSymlinks(joined); err == nil {
+		if abs, absErr := filepath.Abs(eval); absErr == nil {
+			absJoined = abs
+		}
+	}
+	if !strings.HasPrefix(absJoined, absProject+string(filepath.Separator)) {
+		return "", fmt.Errorf("subdir escapes project root")
+	}
+	info, err := os.Stat(joined)
+	if err != nil {
+		// Don't surface the underlying os.Stat error — it carries the
+		// absolute filesystem path which we don't want bubbling up to
+		// HTTP clients. Server-side log keeps the detail for ops
+		// debugging.
+		log.Printf("safeSubdir: stat %s: %v", joined, err)
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("subdir does not exist")
+		}
+		return "", fmt.Errorf("subdir is not accessible")
+	}
+	// The result is used as cmd.Dir — passing a file would produce a
+	// confusing 'not a directory' error mid-exec. Reject here so the
+	// 400 carries a targeted message. Don't include the path; the
+	// caller already knows what they passed in.
+	if !info.IsDir() {
+		log.Printf("safeSubdir: not a directory: %s", joined)
+		return "", fmt.Errorf("subdir is not a directory")
+	}
+	return joined, nil
 }
 
 // planGate tracks which projects have had a recent plan run.
@@ -315,6 +383,16 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		// Pulumi parsing isn't implemented — parser.ForTool falls
+		// back to HCL and would silently return zero resources for an
+		// index.ts project, leading the user to believe the canvas is
+		// in sync when it isn't. Reject explicitly until a TS-AST
+		// parser lands; flat HCL/Ansible projects keep their existing
+		// behaviour.
+		if tool == "pulumi" {
+			http.Error(w, "pulumi resource parsing is not supported yet — edit index.ts directly", 400)
+			return
+		}
 
 		p := parser.ForTool(tool)
 		resources, err := p.ParseDir(projectPath)
@@ -332,6 +410,16 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
+			return
+		}
+		// Pulumi generator is project-shaped (per-env directories with
+		// index.ts/Pulumi.yaml), not single-file like HCL. Calling
+		// generator.ForTool here would fall through to HCL and write
+		// main.tf at the project root — silently shadowing the
+		// scaffolded environments/<env>/index.ts. Reject until an
+		// AST-aware sync that round-trips through TS lands.
+		if tool == "pulumi" {
+			http.Error(w, "pulumi sync is not supported yet — edit environments/<env>/index.ts directly", 400)
 			return
 		}
 
@@ -488,10 +576,29 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			// is telling us they've read the findings and still want to
 			// proceed. Logged server-side so the override is audit-trailable.
 			Acknowledged bool `json:"acknowledged"`
+			// Env names the environment subdirectory to execute in for
+			// layered-v1 projects (environments/<env>/...). Empty runs
+			// commands at the project root (flat layout). Validated as a
+			// safe path segment so a bad value can't traverse.
+			Env string `json:"env,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
 			return
+		}
+
+		// When Env is set, rebase projectPath into environments/<env>
+		// so the runner finds Pulumi.yaml / main.tf in the right
+		// working directory. The subdir must exist and be contained
+		// in projectPath — safeSubdir below rejects traversal and
+		// rejects paths that point at a file instead of a directory.
+		if req.Env != "" {
+			subPath, subErr := safeSubdir(projectPath, "environments", req.Env)
+			if subErr != nil {
+				http.Error(w, "invalid env: "+subErr.Error(), 400)
+				return
+			}
+			projectPath = subPath
 		}
 
 		// Block apply/destroy unless:
@@ -519,6 +626,23 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 			if !req.Acknowledged {
+				// Pulumi has no parser or plan-JSON path today, so the
+				// builtin policies see zero resources and plan-based
+				// engines have no input — every Pulumi mutating
+				// command would silently bypass policy. Fail closed:
+				// require the caller to opt in with acknowledged:true
+				// so the override is explicit + audit-trailable. When
+				// a Pulumi parser/policy adapter lands this branch
+				// goes away.
+				if req.Tool == "pulumi" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"error":  "policy_unsupported",
+						"detail": "policy evaluation is not implemented for pulumi yet — re-submit with acknowledged:true to proceed without server-side policy checks",
+					})
+					return
+				}
 				// Walk every available engine against the project so we can
 				// surface blocking findings before the apply runs. On any
 				// error (engine crash, missing binary, malformed plan) we
@@ -535,7 +659,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 					return
 				}
 			} else {
-				log.Printf("apply gate: policy findings acknowledged by client for %s (command=%s)", name, req.Command)
+				log.Printf("apply gate: policy findings acknowledged by client for %s (command=%s tool=%s)", name, req.Command, req.Tool)
 			}
 		}
 
@@ -544,9 +668,14 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// a request-scoped context and kill the command. SafeRunner applies its
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
-			result, err := run.Execute(context.Background(), projectPath, req.Tool, req.Command)
-			// Only record a successful plan — failed/cancelled plans don't count
-			if err == nil && (req.Command == "plan" || req.Command == "check") {
+			result, err := run.Execute(context.Background(), projectPath, req.Tool, req.Command, req.Env)
+			// Only record a successful plan — failed/cancelled plans don't count.
+			// 'preview' is Pulumi's equivalent of terraform plan; without it
+			// here, a pulumi up following a successful preview would be
+			// blocked with 'plan_required'. projectPath already reflects
+			// the env rebase so dev + prod track their plan state
+			// independently.
+			if err == nil && (req.Command == "plan" || req.Command == "preview" || req.Command == "check") {
 				recordPlan(projectPath)
 			}
 			msg := map[string]interface{}{
@@ -577,6 +706,33 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), 400)
 			return
 		}
+
+		// SafeRunner keys active executions by the exact workdir the
+		// run handler passed in. When /run was invoked with env set,
+		// that workdir was rebased to environments/<env> — so kill
+		// must be able to rebase the same way to find the execution.
+		// Env is optional on kill; an empty body still works for
+		// project-root runs.
+		limitBody(w, r)
+		var req struct {
+			Env string `json:"env,omitempty"`
+		}
+		// A missing body (EOF) is fine — kill defaults to the project
+		// root. Any other decode failure is a client error; treating
+		// it as "no env" would silently target the wrong execution.
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body: "+err.Error(), 400)
+			return
+		}
+		if req.Env != "" {
+			sub, subErr := safeSubdir(projectPath, "environments", req.Env)
+			if subErr != nil {
+				http.Error(w, "invalid env: "+subErr.Error(), 400)
+				return
+			}
+			projectPath = sub
+		}
+
 		if err := run.Kill(projectPath); err != nil {
 			http.Error(w, err.Error(), 404)
 			return
