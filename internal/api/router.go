@@ -673,8 +673,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 		// Write each file atomically (temp file + rename)
 		var mainCode string
+		rootMainFile, pathErr := safeProjectFile(projectPath, filepath.Join(projectPath, "main"+ext), allowedExts...)
+		if pathErr != nil {
+			http.Error(w, "invalid main file: "+pathErr.Error(), 400)
+			return
+		}
 		for file, fileResources := range fileGroups {
-			includeProviders := !projectHasProvider && filepath.Base(file) == "main"+ext
+			includeProviders := !projectHasProvider && file == rootMainFile
 			fileCode, err := generateForSync(gen, fileResources, includeProviders)
 			if err != nil {
 				continue
@@ -702,7 +707,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 
-			if strings.HasSuffix(file, "main"+ext) {
+			if file == rootMainFile {
 				mainCode = fileCode
 			}
 		}

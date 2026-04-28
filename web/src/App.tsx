@@ -24,6 +24,7 @@ import {
 } from './legacy';
 
 type CanvasMode = 'freeform' | 'swimlane';
+const EMPTY_CODE_PLACEHOLDER = 'Add resources from the palette or write code here';
 
 const extractLayoutMeta = (state: any) => {
   if (!state?.layout) return null;
@@ -403,7 +404,7 @@ export default function App() {
   // Generate code preview whenever nodes change
   useEffect(() => {
     if (!tool || !nodes.length) {
-      setSyncCode(tool ? `# Add resources from the palette or use AI chat\n` : '');
+      setSyncCode('');
       return;
     }
     const code = generateLocalCode(tool, nodes, edges);
@@ -643,6 +644,11 @@ export default function App() {
 
   const saveCodeToDisk = useCallback(async (value: string) => {
     if (!tool || !projectId) return;
+    if (!value.trim()) {
+      setNotification('Nothing to save yet');
+      setTimeout(() => setNotification(null), 3000);
+      return;
+    }
     if (tool === 'pulumi') {
       setNotification('Pulumi editor save is blocked until TypeScript sync lands');
       setTimeout(() => setNotification(null), 4000);
@@ -1532,8 +1538,8 @@ export default function App() {
             <div style={S.codeHead}>
               <span>FILE main{ct.ext}</span>
               <button
-                style={{ ...S.copyBtn, color: tool === 'pulumi' || codeSaving ? '#555' : ct.color }}
-                disabled={tool === 'pulumi' || codeSaving}
+                style={{ ...S.copyBtn, color: tool === 'pulumi' || codeSaving || !syncCode.trim() ? '#555' : ct.color }}
+                disabled={tool === 'pulumi' || codeSaving || !syncCode.trim()}
                 title={tool === 'pulumi' ? 'Pulumi sync is tracked in the Pulumi parser follow-up' : 'Save editor buffer to disk'}
                 onClick={() => saveCodeToDisk(syncCode)}
               >
@@ -1543,13 +1549,20 @@ export default function App() {
                 onClick={() => navigator.clipboard?.writeText(syncCode)}>Copy</button>
             </div>
             <div style={S.codePre}>
-              <CodeEditor
-                value={syncCode || '# Add resources to see generated code\n'}
-                filePath={`main${ct.ext}`}
-                readOnly={tool === 'pulumi'}
-                onChange={setSyncCode}
-                onSave={saveCodeToDisk}
-              />
+              <div style={{ position: 'relative', flex: 1, minWidth: 0, height: '100%', display: 'flex' }}>
+                {!syncCode && (
+                  <div style={{ position: 'absolute', top: 14, left: 18, zIndex: 1, color: '#555', fontFamily: 'JetBrains Mono', fontSize: 13, pointerEvents: 'none' }}>
+                    {EMPTY_CODE_PLACEHOLDER}
+                  </div>
+                )}
+                <CodeEditor
+                  value={syncCode}
+                  filePath={`main${ct.ext}`}
+                  readOnly={tool === 'pulumi'}
+                  onChange={setSyncCode}
+                  onSave={saveCodeToDisk}
+                />
+              </div>
             </div>
           </div>
             </>

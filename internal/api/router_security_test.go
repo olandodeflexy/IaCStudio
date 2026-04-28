@@ -143,3 +143,37 @@ func TestSyncCodeRejectsFileOutsideProject(t *testing.T) {
 		t.Fatalf("code sync with escaping file should 400, got %d", resp.StatusCode)
 	}
 }
+
+func TestSyncDoesNotInjectProviderIntoNestedMainFile(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	moduleDir := filepath.Join(projectDir, "modules", "networking")
+	if err := os.MkdirAll(moduleDir, 0o755); err != nil {
+		t.Fatalf("mkdir module: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	body := `{"resources":[{"id":"aws_vpc.main","type":"aws_vpc","name":"main","file":"modules/networking/main.tf","properties":{"cidr_block":"10.0.0.0/16"}}]}`
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/sync?tool=terraform",
+		"application/json",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sync should 200, got %d", resp.StatusCode)
+	}
+	data, err := os.ReadFile(filepath.Join(moduleDir, "main.tf"))
+	if err != nil {
+		t.Fatalf("read synced module file: %v", err)
+	}
+	if strings.Contains(string(data), `provider "aws"`) {
+		t.Fatalf("nested module main.tf should not receive provider block:\n%s", string(data))
+	}
+}
