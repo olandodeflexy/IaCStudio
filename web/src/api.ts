@@ -211,14 +211,18 @@ export const api = {
   },
 
   // Parse project files into resources
-  async getResources(projectName: string, tool: string): Promise<Resource[]> {
-    const res = await fetch(`${BASE}/api/projects/${projectName}/resources?tool=${tool}`);
+  async getResources(projectName: string, tool: string, env?: string): Promise<Resource[]> {
+    const params = new URLSearchParams({ tool });
+    if (env) params.set('env', env);
+    const res = await fetch(`${BASE}/api/projects/${projectName}/resources?${params}`);
     return (await check(res)).json();
   },
 
   // Sync resources and connections from UI to disk
-  async syncToDisk(projectName: string, tool: string, resources: Resource[], edges?: { from: string; to: string; field: string }[]): Promise<{ file: string; code: string }> {
-    const res = await fetch(`${BASE}/api/projects/${projectName}/sync?tool=${tool}`, {
+  async syncToDisk(projectName: string, tool: string, resources: Resource[], edges?: { from: string; to: string; field: string }[], env?: string): Promise<{ file: string; code: string }> {
+    const params = new URLSearchParams({ tool });
+    if (env) params.set('env', env);
+    const res = await fetch(`${BASE}/api/projects/${projectName}/sync?${params}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ resources, edges: edges || [] }),
@@ -229,8 +233,10 @@ export const api = {
   // Save an explicit editor buffer through the same sync endpoint. This is
   // intentionally separate from resource sync so Monaco edits only write when
   // the user saves, not on every canvas change.
-  async syncCodeToDisk(projectName: string, tool: string, code: string, file?: string): Promise<{ file: string; code: string }> {
-    const res = await fetch(`${BASE}/api/projects/${projectName}/sync?tool=${tool}`, {
+  async syncCodeToDisk(projectName: string, tool: string, code: string, file?: string, env?: string): Promise<{ file: string; code: string }> {
+    const params = new URLSearchParams({ tool });
+    if (env) params.set('env', env);
+    const res = await fetch(`${BASE}/api/projects/${projectName}/sync?${params}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ code, file }),

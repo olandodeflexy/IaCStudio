@@ -376,10 +376,43 @@ func renderProgram(cfg ProjectConfig) string {
 		// Sanitize before camel-casing because project names can
 		// contain hyphens ("acme-infra") which would otherwise produce
 		// invalid TypeScript identifiers like `acme-infraSeed`.
-		varName := uniqueVarName(sanitizeTSIdent(toCamelCase(r.Name)), r.Type, used)
-		varNames[i] = varName
+		varNames[i] = uniqueVarName(sanitizeTSIdent(toCamelCase(r.Name)), r.Type, used)
+	}
+	varByTypeName := make(map[string]map[string]string)
+	firstVarByType := make(map[string]string)
+	for i, r := range ordered {
+		if varByTypeName[r.Type] == nil {
+			varByTypeName[r.Type] = make(map[string]string)
+		}
+		varByTypeName[r.Type][r.Name] = varNames[i]
+		if firstVarByType[r.Type] == "" {
+			firstVarByType[r.Type] = varNames[i]
+		}
+	}
+	connectsVia := pulumiConnectsVia()
+
+	for i, r := range ordered {
+		varName := varNames[i]
 		pType := terraformToPulumi(r.Type)
 		b.WriteString(fmt.Sprintf("const %s = new %s(%q, {\n", varName, pType, r.Name))
+
+		emittedFields := make(map[string]bool)
+		connections := connectsVia[r.Type]
+		if len(connections) > 0 {
+			for field, targetType := range connections {
+				targetVar := firstVarByType[targetType]
+				if edgeTarget, ok := r.Properties["__edge_"+field]; ok {
+					targetVar = varByTypeName[targetType][fmt.Sprintf("%v", edgeTarget)]
+				} else if _, hasLiteral := r.Properties[field]; hasLiteral {
+					continue
+				}
+				if targetVar == "" {
+					continue
+				}
+				b.WriteString(fmt.Sprintf("    %s: %s.id,\n", toCamelCase(field), targetVar))
+				emittedFields[field] = true
+			}
+		}
 
 		// Stable property ordering so the generated program is
 		// deterministic across runs with the same input.
@@ -392,7 +425,16 @@ func renderProgram(cfg ProjectConfig) string {
 		}
 		sort.Strings(keys)
 		for _, k := range keys {
-			b.WriteString(fmt.Sprintf("    %s: %s,\n", toCamelCase(k), tsPropValue(r.Properties[k], k)))
+			if emittedFields[k] {
+				continue
+			}
+			value := tsPropValue(r.Properties[k], k)
+			if _, isConnection := connections[k]; isConnection {
+				if raw, ok := r.Properties[k].(string); ok && isTSReferenceExpr(raw) {
+					value = raw
+				}
+			}
+			b.WriteString(fmt.Sprintf("    %s: %s,\n", toCamelCase(k), value))
 		}
 		// Tag each resource with the environment so downstream cost
 		// allocation / policy tags work out of the box. Only applies

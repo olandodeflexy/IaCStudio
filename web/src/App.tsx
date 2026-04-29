@@ -73,10 +73,14 @@ const normalizeLayeredProject = (state: any): LayeredProject | null => {
 };
 
 const shouldParseResourcesFromDisk = (state: any, selectedTool: string) => {
-  if (selectedTool === 'pulumi') return false;
+  if (selectedTool === 'pulumi') return true;
   if (!state?.resources || state.resources.length === 0) return true;
   return state.layout === 'layered-v1' && state.resources.some((resource: any) => !resource.file);
 };
+
+const envForTool = (selectedTool: string, layered: LayeredProject | null) => (
+  selectedTool === 'pulumi' ? layered?.environments[0] : undefined
+);
 
 export default function App() {
   // Restore active project from localStorage on mount
@@ -142,6 +146,7 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
   const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
+  const pulumiEnv = envForTool(tool || '', layeredProject);
 
   const buildPersistedState = useCallback(() => ({
     ...(projectLayoutMeta || {}),
@@ -220,9 +225,10 @@ export default function App() {
       api.loadState(saved.current.projectId).then(state => {
         applyProjectState(state);
         const selectedTool = state?.tool || saved.current.tool;
+        const selectedLayered = normalizeLayeredProject(extractLayoutMeta(state));
         setTool(selectedTool);
         if (shouldParseResourcesFromDisk(state, selectedTool)) {
-          api.getResources(saved.current.projectId, selectedTool).then(applyParsedResources).catch(() => {});
+          api.getResources(saved.current.projectId, selectedTool, envForTool(selectedTool, selectedLayered)).then(applyParsedResources).catch(() => {});
         }
       }).catch(() => {});
     }
@@ -257,9 +263,10 @@ export default function App() {
       const state = await api.loadState(proj.name);
       applyProjectState(state);
       const selectedTool = state?.tool || proj.tool || 'terraform';
+      const selectedLayered = normalizeLayeredProject(extractLayoutMeta(state));
       setTool(selectedTool);
       if (shouldParseResourcesFromDisk(state, selectedTool)) {
-        const parsed = await api.getResources(proj.name, selectedTool);
+        const parsed = await api.getResources(proj.name, selectedTool, envForTool(selectedTool, selectedLayered));
         applyParsedResources(parsed);
       }
       setNotification(`Opened project: ${proj.name}`);
@@ -430,11 +437,11 @@ export default function App() {
     clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(() => {
       isSyncing.current = true;
-      api.syncToDisk(projectId, tool, nodes, edges).catch(() => {}).finally(() => {
+      api.syncToDisk(projectId, tool, nodes, edges, pulumiEnv).catch(() => {}).finally(() => {
         setTimeout(() => { isSyncing.current = false; }, 1500);
       });
     }, 2000);
-  }, [nodes, edges, tool, projectId]);
+  }, [nodes, edges, tool, projectId, pulumiEnv]);
 
   // ─── Handlers ───
 
@@ -715,16 +722,11 @@ export default function App() {
       setTimeout(() => setNotification(null), 3000);
       return;
     }
-    if (tool === 'pulumi') {
-      setNotification('Pulumi editor save is blocked until TypeScript sync lands');
-      setTimeout(() => setNotification(null), 4000);
-      return;
-    }
     setCodeSaving(true);
     isSyncing.current = true;
     try {
-      const fileName = `main${TOOLS[tool]?.ext || '.tf'}`;
-      await api.syncCodeToDisk(projectId, tool, value, fileName);
+      const fileName = tool === 'pulumi' ? 'index.ts' : `main${TOOLS[tool]?.ext || '.tf'}`;
+      await api.syncCodeToDisk(projectId, tool, value, fileName, pulumiEnv);
       setNotification(`Saved ${fileName}`);
       setTimeout(() => setNotification(null), 3000);
     } catch (err: any) {
@@ -734,7 +736,7 @@ export default function App() {
       setCodeSaving(false);
       setTimeout(() => { isSyncing.current = false; }, 1500);
     }
-  }, [projectId, tool]);
+  }, [projectId, pulumiEnv, tool]);
 
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
@@ -1062,8 +1064,9 @@ export default function App() {
     );
   }
 
-  const ct = TOOLS[tool];
+  const ct = TOOLS[tool] || TOOLS.terraform;
   const selected = nodes.find(n => n.id === selectedNode);
+  const codeFileLabel = tool === 'pulumi' && pulumiEnv ? `environments/${pulumiEnv}/index.ts` : `main${ct.ext}`;
 
   // ─── Main UI ───
   return (
@@ -1598,11 +1601,11 @@ export default function App() {
           )}
           <div style={S.codePanel}>
             <div style={S.codeHead}>
-              <span>FILE main{ct.ext}</span>
+              <span>FILE {codeFileLabel}</span>
               <button
-                style={{ ...S.copyBtn, color: tool === 'pulumi' || codeSaving || !syncCode.trim() ? '#555' : ct.color }}
-                disabled={tool === 'pulumi' || codeSaving || !syncCode.trim()}
-                title={tool === 'pulumi' ? 'Pulumi sync is tracked in the Pulumi parser follow-up' : 'Save editor buffer to disk'}
+                style={{ ...S.copyBtn, color: codeSaving || !syncCode.trim() ? '#555' : ct.color }}
+                disabled={codeSaving || !syncCode.trim()}
+                title="Save editor buffer to disk"
                 onClick={() => saveCodeToDisk(syncCode)}
               >
                 {codeSaving ? 'Saving...' : 'Save'}
@@ -1619,8 +1622,8 @@ export default function App() {
                 )}
                 <CodeEditor
                   value={syncCode}
-                  filePath={`main${ct.ext}`}
-                  readOnly={tool === 'pulumi'}
+                  filePath={tool === 'pulumi' ? 'index.ts' : `main${ct.ext}`}
+                  readOnly={false}
                   onChange={setSyncCode}
                   onSave={saveCodeToDisk}
                 />

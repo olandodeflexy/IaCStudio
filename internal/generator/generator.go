@@ -22,6 +22,8 @@ func ForTool(tool string) Generator {
 	switch tool {
 	case "terraform", "opentofu":
 		return &HCLGenerator{tool: tool}
+	case "pulumi":
+		return &PulumiGenerator{}
 	case "ansible":
 		return &YAMLGenerator{}
 	default:

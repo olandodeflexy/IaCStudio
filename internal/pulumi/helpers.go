@@ -6,6 +6,7 @@ import (
 	"strings"
 	"unicode"
 
+	"github.com/iac-studio/iac-studio/internal/catalog"
 	"github.com/iac-studio/iac-studio/internal/parser"
 )
 
@@ -29,6 +30,16 @@ func detectProviders(resources []parser.Resource) (aws, gcp, azure bool) {
 		}
 	}
 	return aws, gcp, azure
+}
+
+func pulumiConnectsVia() map[string]map[string]string {
+	connectsVia := make(map[string]map[string]string)
+	for _, resource := range catalog.GetCatalog("terraform").Resources {
+		if len(resource.ConnectsVia) > 0 {
+			connectsVia[resource.Type] = resource.ConnectsVia
+		}
+	}
+	return connectsVia
 }
 
 // terraformToPulumi maps a Terraform resource type to the Pulumi
@@ -58,44 +69,44 @@ func terraformToPulumi(tfType string) string {
 // would rot faster than the scaffold can benefit.
 var pulumiTypeOverrides = map[string]string{
 	// AWS — networking
-	"aws_vpc":             "aws.ec2.Vpc",
-	"aws_subnet":          "aws.ec2.Subnet",
+	"aws_vpc":              "aws.ec2.Vpc",
+	"aws_subnet":           "aws.ec2.Subnet",
 	"aws_internet_gateway": "aws.ec2.InternetGateway",
-	"aws_nat_gateway":     "aws.ec2.NatGateway",
-	"aws_route_table":     "aws.ec2.RouteTable",
-	"aws_security_group":  "aws.ec2.SecurityGroup",
+	"aws_nat_gateway":      "aws.ec2.NatGateway",
+	"aws_route_table":      "aws.ec2.RouteTable",
+	"aws_security_group":   "aws.ec2.SecurityGroup",
 	// AWS — compute
 	"aws_instance":        "aws.ec2.Instance",
 	"aws_lambda_function": "aws.lambda.Function",
 	"aws_ecs_cluster":     "aws.ecs.Cluster",
 	"aws_eks_cluster":     "aws.eks.Cluster",
 	// AWS — storage / data
-	"aws_s3_bucket":        "aws.s3.Bucket",
-	"aws_ebs_volume":       "aws.ebs.Volume",
-	"aws_ecr_repository":   "aws.ecr.Repository",
-	"aws_db_instance":      "aws.rds.Instance",
-	"aws_dynamodb_table":   "aws.dynamodb.Table",
+	"aws_s3_bucket":           "aws.s3.Bucket",
+	"aws_ebs_volume":          "aws.ebs.Volume",
+	"aws_ecr_repository":      "aws.ecr.Repository",
+	"aws_db_instance":         "aws.rds.Instance",
+	"aws_dynamodb_table":      "aws.dynamodb.Table",
 	"aws_elasticache_cluster": "aws.elasticache.Cluster",
 	// AWS — security / IAM
-	"aws_iam_role":            "aws.iam.Role",
-	"aws_iam_policy":          "aws.iam.Policy",
-	"aws_kms_key":             "aws.kms.Key",
+	"aws_iam_role":              "aws.iam.Role",
+	"aws_iam_policy":            "aws.iam.Policy",
+	"aws_kms_key":               "aws.kms.Key",
 	"aws_secretsmanager_secret": "aws.secretsmanager.Secret",
 	// AWS — lb
 	"aws_lb":              "aws.lb.LoadBalancer",
 	"aws_lb_target_group": "aws.lb.TargetGroup",
 	// GCP
-	"google_compute_network": "gcp.compute.Network",
-	"google_compute_subnetwork": "gcp.compute.Subnetwork",
-	"google_compute_instance": "gcp.compute.Instance",
-	"google_container_cluster": "gcp.container.Cluster",
-	"google_storage_bucket":   "gcp.storage.Bucket",
+	"google_compute_network":       "gcp.compute.Network",
+	"google_compute_subnetwork":    "gcp.compute.Subnetwork",
+	"google_compute_instance":      "gcp.compute.Instance",
+	"google_container_cluster":     "gcp.container.Cluster",
+	"google_storage_bucket":        "gcp.storage.Bucket",
 	"google_sql_database_instance": "gcp.sql.DatabaseInstance",
 	// Azure (azure-native uses service.Resource, not PascalCased TF suffix)
-	"azurerm_resource_group":   "azure.resources.ResourceGroup",
-	"azurerm_virtual_network":  "azure.network.VirtualNetwork",
-	"azurerm_subnet":           "azure.network.Subnet",
-	"azurerm_storage_account":  "azure.storage.StorageAccount",
+	"azurerm_resource_group":        "azure.resources.ResourceGroup",
+	"azurerm_virtual_network":       "azure.network.VirtualNetwork",
+	"azurerm_subnet":                "azure.network.Subnet",
+	"azurerm_storage_account":       "azure.storage.StorageAccount",
 	"azurerm_linux_virtual_machine": "azure.compute.VirtualMachine",
 }
 
@@ -357,6 +368,34 @@ func preservesLiteralKeys(parentKey string) bool {
 func isTaggableAWS(tfType string) bool {
 	_, ok := taggableAWSResources[tfType]
 	return ok
+}
+
+func isTSReferenceExpr(s string) bool {
+	parts := strings.Split(strings.TrimSpace(s), ".")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if !isTSIdentifier(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isTSIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_', r == '$':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // taggableAWSResources lists AWS resource types that accept the flat
