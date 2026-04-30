@@ -4,8 +4,10 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 
+	"github.com/iac-studio/iac-studio/internal/catalog"
 	"github.com/iac-studio/iac-studio/internal/parser"
 )
 
@@ -29,6 +31,29 @@ func detectProviders(resources []parser.Resource) (aws, gcp, azure bool) {
 		}
 	}
 	return aws, gcp, azure
+}
+
+var (
+	pulumiConnectsViaOnce  sync.Once
+	pulumiConnectsViaCache map[string]map[string]string
+)
+
+func pulumiConnectsVia() map[string]map[string]string {
+	pulumiConnectsViaOnce.Do(func() {
+		connectsVia := make(map[string]map[string]string)
+		for _, resource := range catalog.GetCatalog("terraform").Resources {
+			if len(resource.ConnectsVia) == 0 {
+				continue
+			}
+			fields := make(map[string]string, len(resource.ConnectsVia))
+			for field, targetType := range resource.ConnectsVia {
+				fields[field] = targetType
+			}
+			connectsVia[resource.Type] = fields
+		}
+		pulumiConnectsViaCache = connectsVia
+	})
+	return pulumiConnectsViaCache
 }
 
 // terraformToPulumi maps a Terraform resource type to the Pulumi
@@ -58,44 +83,44 @@ func terraformToPulumi(tfType string) string {
 // would rot faster than the scaffold can benefit.
 var pulumiTypeOverrides = map[string]string{
 	// AWS — networking
-	"aws_vpc":             "aws.ec2.Vpc",
-	"aws_subnet":          "aws.ec2.Subnet",
+	"aws_vpc":              "aws.ec2.Vpc",
+	"aws_subnet":           "aws.ec2.Subnet",
 	"aws_internet_gateway": "aws.ec2.InternetGateway",
-	"aws_nat_gateway":     "aws.ec2.NatGateway",
-	"aws_route_table":     "aws.ec2.RouteTable",
-	"aws_security_group":  "aws.ec2.SecurityGroup",
+	"aws_nat_gateway":      "aws.ec2.NatGateway",
+	"aws_route_table":      "aws.ec2.RouteTable",
+	"aws_security_group":   "aws.ec2.SecurityGroup",
 	// AWS — compute
 	"aws_instance":        "aws.ec2.Instance",
 	"aws_lambda_function": "aws.lambda.Function",
 	"aws_ecs_cluster":     "aws.ecs.Cluster",
 	"aws_eks_cluster":     "aws.eks.Cluster",
 	// AWS — storage / data
-	"aws_s3_bucket":        "aws.s3.Bucket",
-	"aws_ebs_volume":       "aws.ebs.Volume",
-	"aws_ecr_repository":   "aws.ecr.Repository",
-	"aws_db_instance":      "aws.rds.Instance",
-	"aws_dynamodb_table":   "aws.dynamodb.Table",
+	"aws_s3_bucket":           "aws.s3.Bucket",
+	"aws_ebs_volume":          "aws.ebs.Volume",
+	"aws_ecr_repository":      "aws.ecr.Repository",
+	"aws_db_instance":         "aws.rds.Instance",
+	"aws_dynamodb_table":      "aws.dynamodb.Table",
 	"aws_elasticache_cluster": "aws.elasticache.Cluster",
 	// AWS — security / IAM
-	"aws_iam_role":            "aws.iam.Role",
-	"aws_iam_policy":          "aws.iam.Policy",
-	"aws_kms_key":             "aws.kms.Key",
+	"aws_iam_role":              "aws.iam.Role",
+	"aws_iam_policy":            "aws.iam.Policy",
+	"aws_kms_key":               "aws.kms.Key",
 	"aws_secretsmanager_secret": "aws.secretsmanager.Secret",
 	// AWS — lb
 	"aws_lb":              "aws.lb.LoadBalancer",
 	"aws_lb_target_group": "aws.lb.TargetGroup",
 	// GCP
-	"google_compute_network": "gcp.compute.Network",
-	"google_compute_subnetwork": "gcp.compute.Subnetwork",
-	"google_compute_instance": "gcp.compute.Instance",
-	"google_container_cluster": "gcp.container.Cluster",
-	"google_storage_bucket":   "gcp.storage.Bucket",
+	"google_compute_network":       "gcp.compute.Network",
+	"google_compute_subnetwork":    "gcp.compute.Subnetwork",
+	"google_compute_instance":      "gcp.compute.Instance",
+	"google_container_cluster":     "gcp.container.Cluster",
+	"google_storage_bucket":        "gcp.storage.Bucket",
 	"google_sql_database_instance": "gcp.sql.DatabaseInstance",
 	// Azure (azure-native uses service.Resource, not PascalCased TF suffix)
-	"azurerm_resource_group":   "azure.resources.ResourceGroup",
-	"azurerm_virtual_network":  "azure.network.VirtualNetwork",
-	"azurerm_subnet":           "azure.network.Subnet",
-	"azurerm_storage_account":  "azure.storage.StorageAccount",
+	"azurerm_resource_group":        "azure.resources.ResourceGroup",
+	"azurerm_virtual_network":       "azure.network.VirtualNetwork",
+	"azurerm_subnet":                "azure.network.Subnet",
+	"azurerm_storage_account":       "azure.storage.StorageAccount",
 	"azurerm_linux_virtual_machine": "azure.compute.VirtualMachine",
 }
 
@@ -302,6 +327,12 @@ func tsPropValue(v any, parentKey string) string {
 		return fmt.Sprintf("%v", x)
 	case string:
 		return fmt.Sprintf("%q", x)
+	case []string:
+		items := make([]string, 0, len(x))
+		for _, el := range x {
+			items = append(items, tsPropValue(el, parentKey))
+		}
+		return "[" + strings.Join(items, ", ") + "]"
 	case []any:
 		items := make([]string, 0, len(x))
 		for _, el := range x {
@@ -327,6 +358,99 @@ func tsPropValue(v any, parentKey string) string {
 		return "{ " + strings.Join(items, ", ") + " }"
 	}
 	return fmt.Sprintf("%q", fmt.Sprint(v))
+}
+
+func tsConnectionPropValue(v any, parentKey string) string {
+	switch x := v.(type) {
+	case string:
+		if isTSReferenceExpr(x) {
+			return x
+		}
+	case []string:
+		if refs, ok := tsReferenceArray(x); ok {
+			return refs
+		}
+	case []any:
+		values := make([]string, 0, len(x))
+		for _, item := range x {
+			s, ok := item.(string)
+			if !ok {
+				return tsPropValue(v, parentKey)
+			}
+			values = append(values, s)
+		}
+		if refs, ok := tsReferenceArray(values); ok {
+			return refs
+		}
+	}
+	return tsPropValue(v, parentKey)
+}
+
+func tsReferenceArray(values []string) (string, bool) {
+	refs := make([]string, 0, len(values))
+	for _, value := range values {
+		if !isTSReferenceExpr(value) {
+			return "", false
+		}
+		refs = append(refs, value)
+	}
+	return "[" + strings.Join(refs, ", ") + "]", true
+}
+
+func edgeTargetVars(edgeTarget any, varsByName map[string]string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	add := func(targetName string) {
+		if targetName == "" {
+			return
+		}
+		varName := varsByName[targetName]
+		if varName == "" || seen[varName] {
+			return
+		}
+		seen[varName] = true
+		out = append(out, varName)
+	}
+	switch v := edgeTarget.(type) {
+	case string:
+		add(v)
+	case []string:
+		for _, targetName := range v {
+			add(targetName)
+		}
+	case []any:
+		for _, targetName := range v {
+			if s, ok := targetName.(string); ok {
+				add(s)
+			}
+		}
+	default:
+		add(fmt.Sprint(v))
+	}
+	return out
+}
+
+func renderConnectionRefs(field string, targetVars []string) string {
+	refs := make([]string, 0, len(targetVars))
+	for _, targetVar := range targetVars {
+		if targetVar != "" {
+			refs = append(refs, targetVar+".id")
+		}
+	}
+	if len(refs) == 0 {
+		return ""
+	}
+	if len(refs) > 1 || isListConnectionField(field) {
+		return "[" + strings.Join(refs, ", ") + "]"
+	}
+	return refs[0]
+}
+
+func isListConnectionField(field string) bool {
+	return strings.HasSuffix(field, "_ids") ||
+		field == "roles" ||
+		field == "security_groups" ||
+		field == "subnets"
 }
 
 // preservesLiteralKeys reports whether a map value whose parent key
@@ -357,6 +481,34 @@ func preservesLiteralKeys(parentKey string) bool {
 func isTaggableAWS(tfType string) bool {
 	_, ok := taggableAWSResources[tfType]
 	return ok
+}
+
+func isTSReferenceExpr(s string) bool {
+	parts := strings.Split(strings.TrimSpace(s), ".")
+	if len(parts) < 2 {
+		return false
+	}
+	for _, part := range parts {
+		if !isTSIdentifier(part) {
+			return false
+		}
+	}
+	return true
+}
+
+func isTSIdentifier(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i, r := range s {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r == '_', r == '$':
+		case i > 0 && r >= '0' && r <= '9':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // taggableAWSResources lists AWS resource types that accept the flat

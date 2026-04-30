@@ -118,6 +118,41 @@ func TestSyncCodeWritesMainFile(t *testing.T) {
 	}
 }
 
+func TestSyncCodeInvalidatesLayeredEnvPlan(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	envDir := filepath.Join(projectDir, "environments", "dev")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env: %v", err)
+	}
+	invalidatePlan(projectDir, envDir)
+	recordPlan(projectDir)
+	recordPlan(envDir)
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	body := `{"file":"environments/dev/main.tf","code":"resource \"aws_vpc\" \"main\" {}\n"}`
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/sync?tool=terraform",
+		"application/json",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("code sync should 200, got %d", resp.StatusCode)
+	}
+	if hasPlan(projectDir) {
+		t.Fatal("root plan gate should be invalidated after sync")
+	}
+	if hasPlan(envDir) {
+		t.Fatal("env plan gate should be invalidated after layered sync")
+	}
+}
+
 func TestSyncCodeRejectsFileOutsideProject(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo")
@@ -141,6 +176,41 @@ func TestSyncCodeRejectsFileOutsideProject(t *testing.T) {
 
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Fatalf("code sync with escaping file should 400, got %d", resp.StatusCode)
+	}
+}
+
+func TestSyncResourcesInvalidatesLayeredEnvPlan(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	envDir := filepath.Join(projectDir, "environments", "dev")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir env: %v", err)
+	}
+	invalidatePlan(projectDir, envDir)
+	recordPlan(projectDir)
+	recordPlan(envDir)
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	body := `{"resources":[{"id":"aws_vpc.main","type":"aws_vpc","name":"main","file":"environments/dev/main.tf","properties":{"cidr_block":"10.0.0.0/16"}}]}`
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/sync?tool=terraform",
+		"application/json",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("sync should 200, got %d", resp.StatusCode)
+	}
+	if hasPlan(projectDir) {
+		t.Fatal("root plan gate should be invalidated after resource sync")
+	}
+	if hasPlan(envDir) {
+		t.Fatal("env plan gate should be invalidated after layered resource sync")
 	}
 }
 

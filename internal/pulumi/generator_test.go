@@ -31,13 +31,13 @@ func TestGenerateProject_ProducesFullLayout(t *testing.T) {
 	}
 
 	want := map[string]bool{
-		"Pulumi.yaml":     false,
-		"Pulumi.dev.yaml": false,
+		"Pulumi.yaml":      false,
+		"Pulumi.dev.yaml":  false,
 		"Pulumi.prod.yaml": false,
-		"package.json":    false,
-		"tsconfig.json":   false,
-		"index.ts":        false,
-		".gitignore":      false,
+		"package.json":     false,
+		"tsconfig.json":    false,
+		"index.ts":         false,
+		".gitignore":       false,
 	}
 	for _, f := range files {
 		want[f.Path] = true
@@ -153,10 +153,10 @@ func TestRenderPackageJSON_IncludesProviderSDKsInUse(t *testing.T) {
 
 func TestTerraformToPulumi_Overrides(t *testing.T) {
 	cases := map[string]string{
-		"aws_vpc":           "aws.ec2.Vpc",
-		"aws_s3_bucket":     "aws.s3.Bucket",
-		"aws_lambda_function": "aws.lambda.Function",
-		"google_storage_bucket": "gcp.storage.Bucket",
+		"aws_vpc":                 "aws.ec2.Vpc",
+		"aws_s3_bucket":           "aws.s3.Bucket",
+		"aws_lambda_function":     "aws.lambda.Function",
+		"google_storage_bucket":   "gcp.storage.Bucket",
 		"azurerm_virtual_network": "azure.network.VirtualNetwork",
 	}
 	for tf, want := range cases {
@@ -171,9 +171,9 @@ func TestTerraformToPulumi_FallbackCompiles(t *testing.T) {
 	// (<ns> as any).<pkg>.<Type> shape so the TS compiler accepts
 	// them even when the guessed subpackage is wrong.
 	cases := map[string]string{
-		"aws_weirdthing_newservice":    "(aws as any).",
-		"google_bogus_service":         "(gcp as any).",
-		"azurerm_fictional_thing":      "(azure as any).",
+		"aws_weirdthing_newservice": "(aws as any).",
+		"google_bogus_service":      "(gcp as any).",
+		"azurerm_fictional_thing":   "(azure as any).",
 	}
 	for in, wantPrefix := range cases {
 		got := terraformToPulumi(in)
@@ -235,9 +235,9 @@ func TestRenderProgram_SanitizesHyphenatedProjectNames(t *testing.T) {
 
 func TestSanitizeTSIdent(t *testing.T) {
 	cases := map[string]string{
-		"webServer":      "webServer",
-		"acme-infraSeed": "acme_infraSeed",
-		"1_starts_digit": "_1_starts_digit",
+		"webServer":       "webServer",
+		"acme-infraSeed":  "acme_infraSeed",
+		"1_starts_digit":  "_1_starts_digit",
 		"name with space": "name_with_space",
 		"":                "_",
 	}
@@ -283,17 +283,17 @@ func TestRenderStackYaml_AzureHonorsCfgRegion(t *testing.T) {
 
 func TestYamlScalar(t *testing.T) {
 	cases := map[string]string{
-		"simple":                  "simple",
-		"":                        `""`,
-		"has:colon":               `"has:colon"`,
-		"has#hash":                `"has#hash"`,
-		"with\nnewline":           `"with\nnewline"`,
-		"true":                    `"true"`,   // reserved bool
-		"null":                    `"null"`,   // reserved null
-		" leadingspace":           `" leadingspace"`,
-		"trailingspace ":          `"trailingspace "`,
-		`has"quote`:               `"has\"quote"`,
-		`back\slash`:              `"back\\slash"`,
+		"simple":         "simple",
+		"":               `""`,
+		"has:colon":      `"has:colon"`,
+		"has#hash":       `"has#hash"`,
+		"with\nnewline":  `"with\nnewline"`,
+		"true":           `"true"`, // reserved bool
+		"null":           `"null"`, // reserved null
+		" leadingspace":  `" leadingspace"`,
+		"trailingspace ": `"trailingspace "`,
+		`has"quote`:      `"has\"quote"`,
+		`back\slash`:     `"back\\slash"`,
 	}
 	for in, want := range cases {
 		if got := yamlScalar(in); got != want {
@@ -367,6 +367,81 @@ func TestRenderProgram_DedupesSharedNamesAcrossTypes(t *testing.T) {
 	}
 }
 
+func TestRenderProgram_UsesCanvasEdgeTargets(t *testing.T) {
+	prog := renderProgram(ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{
+			{ID: "aws_vpc.primary", Type: "aws_vpc", Name: "primary",
+				Properties: map[string]any{"cidr_block": "10.0.0.0/16"}},
+			{ID: "aws_vpc.secondary", Type: "aws_vpc", Name: "secondary",
+				Properties: map[string]any{"cidr_block": "10.1.0.0/16"}},
+			{ID: "aws_subnet.app", Type: "aws_subnet", Name: "app",
+				Properties: map[string]any{
+					"cidr_block":    "10.1.1.0/24",
+					"__edge_vpc_id": "secondary",
+				}},
+		},
+	})
+	mustContain(t, prog, `vpcId: secondary.id`)
+	if strings.Contains(prog, `vpcId: primary.id`) {
+		t.Fatalf("subnet should reference explicit edge target, got:\n%s", prog)
+	}
+}
+
+func TestRenderProgram_RendersPluralEdgeTargetsAsArray(t *testing.T) {
+	prog := renderProgram(ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{
+			{ID: "aws_security_group.web", Type: "aws_security_group", Name: "web",
+				Properties: map[string]any{"vpc_id": "main.id"}},
+			{ID: "aws_security_group.admin", Type: "aws_security_group", Name: "admin",
+				Properties: map[string]any{"vpc_id": "main.id"}},
+			{ID: "aws_instance.app", Type: "aws_instance", Name: "app",
+				Properties: map[string]any{
+					"ami":                           "ami-123",
+					"instance_type":                 "t3.micro",
+					"vpc_security_group_ids":        []any{"literal-sg"},
+					"__edge_vpc_security_group_ids": []string{"web", "admin"},
+				}},
+		},
+	})
+	mustContain(t, prog, `vpcSecurityGroupIds: [web.id, admin.id]`)
+	if strings.Contains(prog, `vpcSecurityGroupIds: ["literal-sg"]`) {
+		t.Fatalf("edge targets should override literal security group ids:\n%s", prog)
+	}
+}
+
+func TestRenderProgram_PreservesParsedConnectionReferences(t *testing.T) {
+	prog := renderProgram(ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{
+			{ID: "aws_vpc.main", Type: "aws_vpc", Name: "main"},
+			{ID: "aws_subnet.app", Type: "aws_subnet", Name: "app",
+				Properties: map[string]any{"vpc_id": "main.id"}},
+		},
+	})
+	mustContain(t, prog, `vpcId: main.id`)
+	if strings.Contains(prog, `vpcId: "main.id"`) {
+		t.Fatalf("parsed connection reference should not be quoted:\n%s", prog)
+	}
+}
+
+func TestRenderProgram_PreservesParsedConnectionReferenceArrays(t *testing.T) {
+	prog := renderProgram(ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{
+			{ID: "aws_security_group.web", Type: "aws_security_group", Name: "web"},
+			{ID: "aws_security_group.admin", Type: "aws_security_group", Name: "admin"},
+			{ID: "aws_instance.app", Type: "aws_instance", Name: "app",
+				Properties: map[string]any{"vpc_security_group_ids": []any{"web.id", "admin.id"}}},
+		},
+	})
+	mustContain(t, prog, `vpcSecurityGroupIds: [web.id, admin.id]`)
+	if strings.Contains(prog, `"web.id"`) || strings.Contains(prog, `"admin.id"`) {
+		t.Fatalf("parsed connection reference array should not quote refs:\n%s", prog)
+	}
+}
+
 func TestTsPropValue_CamelCasesNestedPropertyKeys(t *testing.T) {
 	// Terraform-style nested block — keys should camelCase so Pulumi
 	// sees 'networkAcl' + 'cidrBlocks' instead of the snake_case
@@ -388,8 +463,8 @@ func TestTsPropValue_PreservesTagAndLabelKeys(t *testing.T) {
 	// tags/labels keys ARE the tag name — a camelCase rewrite would
 	// silently change the infrastructure-level tag identifier.
 	got := tsPropValue(map[string]any{
-		"Owner":      "team_alpha",
-		"ManagedBy":  "iac-studio",
+		"Owner":       "team_alpha",
+		"ManagedBy":   "iac-studio",
 		"cost_center": "platform",
 	}, "tags")
 	for _, key := range []string{`"Owner"`, `"ManagedBy"`, `"cost_center"`} {

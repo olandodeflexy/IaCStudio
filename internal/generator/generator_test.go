@@ -136,6 +136,43 @@ func TestHCLGenerator_EdgeOverrideWinsOverParsedLiteral(t *testing.T) {
 	}
 }
 
+func TestHCLGenerator_PluralEdgeTargetsRenderAsListReferences(t *testing.T) {
+	gen := &HCLGenerator{tool: "terraform"}
+
+	code, err := gen.Generate([]parser.Resource{
+		{
+			Type:       "aws_security_group",
+			Name:       "web",
+			Properties: map[string]interface{}{"vpc_id": "aws_vpc.main.id"},
+		},
+		{
+			Type:       "aws_security_group",
+			Name:       "admin",
+			Properties: map[string]interface{}{"vpc_id": "aws_vpc.main.id"},
+		},
+		{
+			Type: "aws_instance",
+			Name: "app",
+			Properties: map[string]interface{}{
+				"ami":                           "ami-123",
+				"instance_type":                 "t3.micro",
+				"vpc_security_group_ids":        []interface{}{"sg-literal"},
+				"__edge_vpc_security_group_ids": []string{"web", "admin"},
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("Generate failed: %v", err)
+	}
+
+	if !strings.Contains(code, "vpc_security_group_ids = [aws_security_group.web.id, aws_security_group.admin.id]") {
+		t.Fatalf("plural edge targets were not emitted as a reference list:\n%s", code)
+	}
+	if strings.Contains(code, "sg-literal") || strings.Contains(code, "__edge_vpc_security_group_ids") {
+		t.Fatalf("literal override or edge marker leaked:\n%s", code)
+	}
+}
+
 func TestHCLGenerator_GenerateEmpty(t *testing.T) {
 	gen := &HCLGenerator{tool: "terraform"}
 	code, err := gen.Generate([]parser.Resource{})
@@ -230,6 +267,7 @@ func TestForTool(t *testing.T) {
 	}{
 		{"terraform", ".tf"},
 		{"opentofu", ".tf"},
+		{"pulumi", ".ts"},
 		{"ansible", ".yml"},
 		{"unknown", ".tf"}, // defaults to HCL
 	}

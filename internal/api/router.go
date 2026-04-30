@@ -25,6 +25,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/importer"
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/project"
+	pulumigen "github.com/iac-studio/iac-studio/internal/pulumi"
 	"github.com/iac-studio/iac-studio/internal/registry"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/scaffold"
@@ -235,6 +236,223 @@ func generateForSync(gen generator.Generator, resources []parser.Resource, inclu
 		}
 	}
 	return gen.Generate(resources)
+}
+
+type syncEdge struct {
+	From  string `json:"from"`  // source node ID
+	To    string `json:"to"`    // target node ID
+	Field string `json:"field"` // connection field (e.g., "vpc_id")
+}
+
+type syncRequest struct {
+	Resources []parser.Resource `json:"resources"`
+	Code      *string           `json:"code,omitempty"`
+	File      string            `json:"file,omitempty"`
+	Edges     []syncEdge        `json:"edges"`
+}
+
+func materializeSyncEdges(resources []parser.Resource, edges []syncEdge) {
+	if len(edges) == 0 {
+		return
+	}
+	idIndex := make(map[string]int)
+	for i, r := range resources {
+		idIndex[r.ID] = i
+	}
+	for _, edge := range edges {
+		fromIdx, fromOK := idIndex[edge.From]
+		toIdx, toOK := idIndex[edge.To]
+		if fromOK && toOK {
+			if resources[fromIdx].Properties == nil {
+				resources[fromIdx].Properties = make(map[string]interface{})
+			}
+			key := "__edge_" + edge.Field
+			target := resources[toIdx].Name
+			if existing, ok := resources[fromIdx].Properties[key]; ok {
+				resources[fromIdx].Properties[key] = appendSyncEdgeTarget(existing, target)
+				continue
+			}
+			resources[fromIdx].Properties[key] = target
+		}
+	}
+}
+
+func appendSyncEdgeTarget(existing interface{}, target string) interface{} {
+	switch v := existing.(type) {
+	case string:
+		if v == target {
+			return v
+		}
+		return []string{v, target}
+	case []string:
+		for _, existingTarget := range v {
+			if existingTarget == target {
+				return v
+			}
+		}
+		return append(v, target)
+	case []interface{}:
+		for _, existingTarget := range v {
+			if s, ok := existingTarget.(string); ok && s == target {
+				return v
+			}
+		}
+		return append(v, target)
+	default:
+		return []string{target}
+	}
+}
+
+func pulumiEnvDir(projectPath, env string) (string, error) {
+	if env != "" {
+		return safeSubdir(projectPath, "environments", env)
+	}
+	if _, err := os.Stat(filepath.Join(projectPath, "Pulumi.yaml")); err == nil {
+		return projectPath, nil
+	}
+	entries, err := os.ReadDir(filepath.Join(projectPath, "environments"))
+	if err != nil {
+		return projectPath, nil
+	}
+	var envs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			envs = append(envs, entry.Name())
+		}
+	}
+	if len(envs) == 1 {
+		return safeSubdir(projectPath, "environments", envs[0])
+	}
+	if len(envs) > 1 {
+		return "", fmt.Errorf("env query parameter is required for layered pulumi projects")
+	}
+	return projectPath, nil
+}
+
+func invalidatePlan(projectPaths ...string) {
+	planGate.mu.Lock()
+	defer planGate.mu.Unlock()
+	for _, projectPath := range projectPaths {
+		delete(planGate.plans, projectPath)
+	}
+}
+
+func planInvalidationPaths(projectPath string, targets ...string) []string {
+	seen := map[string]bool{projectPath: true}
+	paths := []string{projectPath}
+	for _, target := range targets {
+		envDir, ok := envWorkdirForProjectFile(projectPath, target)
+		if !ok || seen[envDir] {
+			continue
+		}
+		seen[envDir] = true
+		paths = append(paths, envDir)
+	}
+	return paths
+}
+
+func envWorkdirForProjectFile(projectPath, target string) (string, bool) {
+	absTarget := target
+	if !filepath.IsAbs(absTarget) {
+		absTarget = filepath.Join(projectPath, target)
+	}
+	rel, err := filepath.Rel(projectPath, absTarget)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 3 || parts[0] != "environments" || parts[1] == "" {
+		return "", false
+	}
+	return filepath.Join(projectPath, "environments", parts[1]), true
+}
+
+func handlePulumiSync(w http.ResponseWriter, r *http.Request, fw *watcher.FileWatcher, projectPath string, body syncRequest) {
+	targetDir, err := pulumiEnvDir(projectPath, r.URL.Query().Get("env"))
+	if err != nil {
+		http.Error(w, "invalid env: "+err.Error(), 400)
+		return
+	}
+	targetFile, pathErr := safeProjectFile(targetDir, "index.ts", ".ts")
+	if pathErr != nil {
+		http.Error(w, "invalid pulumi index file: "+pathErr.Error(), 400)
+		return
+	}
+
+	if body.Code != nil {
+		target := body.File
+		if target == "" {
+			target = "index.ts"
+		}
+		safeTarget, codePathErr := safeProjectFile(targetDir, target, ".ts")
+		if codePathErr != nil {
+			http.Error(w, "invalid code file: "+codePathErr.Error(), 400)
+			return
+		}
+
+		fw.Pause(projectPath)
+		defer fw.Resume(projectPath)
+		invalidatePlan(projectPath, targetDir)
+
+		tmpFile := safeTarget + ".tmp"
+		if err := os.WriteFile(tmpFile, []byte(*body.Code), 0644); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		if err := os.Rename(tmpFile, safeTarget); err != nil {
+			_ = os.Remove(tmpFile)
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		responseFile, relErr := filepath.Rel(projectPath, safeTarget)
+		if relErr != nil || responseFile == "." || strings.HasPrefix(responseFile, "..") {
+			responseFile = filepath.Base(safeTarget)
+		}
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"file": responseFile,
+			"code": *body.Code,
+		})
+		return
+	}
+
+	resources := body.Resources
+	materializeSyncEdges(resources, body.Edges)
+
+	existing := ""
+	if data, err := os.ReadFile(targetFile); err == nil {
+		existing = string(data)
+	}
+	code, err := pulumigen.SyncProgram(existing, pulumigen.ProjectConfig{
+		Name:      pulumigen.ProjectNameFromDir(targetDir),
+		Resources: resources,
+	})
+	if err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+
+	fw.Pause(projectPath)
+	defer fw.Resume(projectPath)
+	invalidatePlan(projectPath, targetDir)
+
+	tmpFile := targetFile + ".tmp"
+	if err := os.WriteFile(tmpFile, []byte(code), 0644); err != nil {
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	if err := os.Rename(tmpFile, targetFile); err != nil {
+		_ = os.Remove(tmpFile)
+		http.Error(w, err.Error(), 500)
+		return
+	}
+	responseFile, relErr := filepath.Rel(projectPath, targetFile)
+	if relErr != nil || responseFile == "." || strings.HasPrefix(responseFile, "..") {
+		responseFile = filepath.Base(targetFile)
+	}
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"file": responseFile,
+		"code": code,
+	})
 }
 
 // planGate tracks which projects have had a recent plan run.
@@ -481,14 +699,18 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		// Pulumi parsing isn't implemented — parser.ForTool falls
-		// back to HCL and would silently return zero resources for an
-		// index.ts project, leading the user to believe the canvas is
-		// in sync when it isn't. Reject explicitly until a TS-AST
-		// parser lands; flat HCL/Ansible projects keep their existing
-		// behaviour.
 		if tool == "pulumi" {
-			http.Error(w, "pulumi resource parsing is not supported yet — edit index.ts directly", 400)
+			targetDir, envErr := pulumiEnvDir(projectPath, r.URL.Query().Get("env"))
+			if envErr != nil {
+				http.Error(w, "invalid env: "+envErr.Error(), 400)
+				return
+			}
+			resources, err := (&pulumigen.TSParser{}).ParseDir(targetDir)
+			if err != nil {
+				http.Error(w, err.Error(), 500)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(resources)
 			return
 		}
 
@@ -510,30 +732,14 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		// Pulumi generator is project-shaped (per-env directories with
-		// index.ts/Pulumi.yaml), not single-file like HCL. Calling
-		// generator.ForTool here would fall through to HCL and write
-		// main.tf at the project root — silently shadowing the
-		// scaffolded environments/<env>/index.ts. Reject until an
-		// AST-aware sync that round-trips through TS lands.
-		if tool == "pulumi" {
-			http.Error(w, "pulumi sync is not supported yet — edit environments/<env>/index.ts directly", 400)
-			return
-		}
-
 		limitBody(w, r)
-		var body struct {
-			Resources []parser.Resource `json:"resources"`
-			Code      *string           `json:"code,omitempty"`
-			File      string            `json:"file,omitempty"`
-			Edges     []struct {
-				From  string `json:"from"`  // source node ID
-				To    string `json:"to"`    // target node ID
-				Field string `json:"field"` // connection field (e.g., "vpc_id")
-			} `json:"edges"`
-		}
+		var body syncRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid request body", 400)
+			return
+		}
+		if tool == "pulumi" {
+			handlePulumiSync(w, r, fw, projectPath, body)
 			return
 		}
 
@@ -557,9 +763,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			defer fw.Resume(projectPath)
 
 			// Invalidate plan gate — code changed, previous plan is stale
-			planGate.mu.Lock()
-			delete(planGate.plans, projectPath)
-			planGate.mu.Unlock()
+			invalidatePlan(planInvalidationPaths(projectPath, safeTarget)...)
 
 			tmpFile := safeTarget + ".tmp"
 			if err := os.WriteFile(tmpFile, []byte(*body.Code), 0644); err != nil {
@@ -586,24 +790,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 		// Materialize edges into resource properties so the generator knows
 		// exactly which target instance to reference (not just "first of type").
-		if len(body.Edges) > 0 {
-			// Build node ID -> resource index
-			idIndex := make(map[string]int)
-			for i, r := range resources {
-				idIndex[r.ID] = i
-			}
-			for _, edge := range body.Edges {
-				fromIdx, fromOK := idIndex[edge.From]
-				toIdx, toOK := idIndex[edge.To]
-				if fromOK && toOK {
-					if resources[fromIdx].Properties == nil {
-						resources[fromIdx].Properties = make(map[string]interface{})
-					}
-					// Store the exact target name so the generator references the right resource
-					resources[fromIdx].Properties["__edge_"+edge.Field] = resources[toIdx].Name
-				}
-			}
-		}
+		materializeSyncEdges(resources, body.Edges)
 
 		code, err := gen.Generate(resources)
 		if err != nil {
@@ -614,11 +801,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// Pause watcher to avoid echo
 		fw.Pause(projectPath)
 		defer fw.Resume(projectPath)
-
-		// Invalidate plan gate — code changed, previous plan is stale
-		planGate.mu.Lock()
-		delete(planGate.plans, projectPath)
-		planGate.mu.Unlock()
 
 		// Group resources by source file so we write back to original files.
 		// Resources without a source file go to main.tf/main.yml.
@@ -645,6 +827,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			}
 			fileGroups[mainFile] = resources
 		}
+
+		// Invalidate plan gate — code changed, previous plan is stale
+		targets := make([]string, 0, len(fileGroups))
+		for file := range fileGroups {
+			targets = append(targets, file)
+		}
+		invalidatePlan(planInvalidationPaths(projectPath, targets...)...)
 
 		// Read preserved blocks from existing files (variables, outputs, etc.)
 		p := parser.ForTool(tool)
