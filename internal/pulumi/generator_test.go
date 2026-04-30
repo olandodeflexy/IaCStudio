@@ -388,6 +388,29 @@ func TestRenderProgram_UsesCanvasEdgeTargets(t *testing.T) {
 	}
 }
 
+func TestRenderProgram_RendersPluralEdgeTargetsAsArray(t *testing.T) {
+	prog := renderProgram(ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{
+			{ID: "aws_security_group.web", Type: "aws_security_group", Name: "web",
+				Properties: map[string]any{"vpc_id": "main.id"}},
+			{ID: "aws_security_group.admin", Type: "aws_security_group", Name: "admin",
+				Properties: map[string]any{"vpc_id": "main.id"}},
+			{ID: "aws_instance.app", Type: "aws_instance", Name: "app",
+				Properties: map[string]any{
+					"ami":                           "ami-123",
+					"instance_type":                 "t3.micro",
+					"vpc_security_group_ids":        []any{"literal-sg"},
+					"__edge_vpc_security_group_ids": []string{"web", "admin"},
+				}},
+		},
+	})
+	mustContain(t, prog, `vpcSecurityGroupIds: [web.id, admin.id]`)
+	if strings.Contains(prog, `vpcSecurityGroupIds: ["literal-sg"]`) {
+		t.Fatalf("edge targets should override literal security group ids:\n%s", prog)
+	}
+}
+
 func TestRenderProgram_PreservesParsedConnectionReferences(t *testing.T) {
 	prog := renderProgram(ProjectConfig{
 		Name: "acme",
@@ -400,6 +423,22 @@ func TestRenderProgram_PreservesParsedConnectionReferences(t *testing.T) {
 	mustContain(t, prog, `vpcId: main.id`)
 	if strings.Contains(prog, `vpcId: "main.id"`) {
 		t.Fatalf("parsed connection reference should not be quoted:\n%s", prog)
+	}
+}
+
+func TestRenderProgram_PreservesParsedConnectionReferenceArrays(t *testing.T) {
+	prog := renderProgram(ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{
+			{ID: "aws_security_group.web", Type: "aws_security_group", Name: "web"},
+			{ID: "aws_security_group.admin", Type: "aws_security_group", Name: "admin"},
+			{ID: "aws_instance.app", Type: "aws_instance", Name: "app",
+				Properties: map[string]any{"vpc_security_group_ids": []any{"web.id", "admin.id"}}},
+		},
+	})
+	mustContain(t, prog, `vpcSecurityGroupIds: [web.id, admin.id]`)
+	if strings.Contains(prog, `"web.id"`) || strings.Contains(prog, `"admin.id"`) {
+		t.Fatalf("parsed connection reference array should not quote refs:\n%s", prog)
 	}
 }
 

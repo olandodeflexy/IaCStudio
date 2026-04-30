@@ -266,8 +266,40 @@ func materializeSyncEdges(resources []parser.Resource, edges []syncEdge) {
 			if resources[fromIdx].Properties == nil {
 				resources[fromIdx].Properties = make(map[string]interface{})
 			}
-			resources[fromIdx].Properties["__edge_"+edge.Field] = resources[toIdx].Name
+			key := "__edge_" + edge.Field
+			target := resources[toIdx].Name
+			if existing, ok := resources[fromIdx].Properties[key]; ok {
+				resources[fromIdx].Properties[key] = appendSyncEdgeTarget(existing, target)
+				continue
+			}
+			resources[fromIdx].Properties[key] = target
 		}
+	}
+}
+
+func appendSyncEdgeTarget(existing interface{}, target string) interface{} {
+	switch v := existing.(type) {
+	case string:
+		if v == target {
+			return v
+		}
+		return []string{v, target}
+	case []string:
+		for _, existingTarget := range v {
+			if existingTarget == target {
+				return v
+			}
+		}
+		return append(v, target)
+	case []interface{}:
+		for _, existingTarget := range v {
+			if s, ok := existingTarget.(string); ok && s == target {
+				return v
+			}
+		}
+		return append(v, target)
+	default:
+		return []string{target}
 	}
 }
 

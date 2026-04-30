@@ -400,16 +400,23 @@ func renderProgram(cfg ProjectConfig) string {
 		connections := connectsVia[r.Type]
 		if len(connections) > 0 {
 			for field, targetType := range connections {
-				targetVar := firstVarByType[targetType]
 				if edgeTarget, ok := r.Properties["__edge_"+field]; ok {
-					targetVar = varByTypeName[targetType][fmt.Sprintf("%v", edgeTarget)]
+					targetVars := edgeTargetVars(edgeTarget, varByTypeName[targetType])
+					value := renderConnectionRefs(field, targetVars)
+					if value == "" {
+						continue
+					}
+					b.WriteString(fmt.Sprintf("    %s: %s,\n", toCamelCase(field), value))
+					emittedFields[field] = true
+					continue
 				} else if _, hasLiteral := r.Properties[field]; hasLiteral {
 					continue
 				}
+				targetVar := firstVarByType[targetType]
 				if targetVar == "" {
 					continue
 				}
-				b.WriteString(fmt.Sprintf("    %s: %s.id,\n", toCamelCase(field), targetVar))
+				b.WriteString(fmt.Sprintf("    %s: %s,\n", toCamelCase(field), renderConnectionRefs(field, []string{targetVar})))
 				emittedFields[field] = true
 			}
 		}
@@ -430,9 +437,7 @@ func renderProgram(cfg ProjectConfig) string {
 			}
 			value := tsPropValue(r.Properties[k], k)
 			if _, isConnection := connections[k]; isConnection {
-				if raw, ok := r.Properties[k].(string); ok && isTSReferenceExpr(raw) {
-					value = raw
-				}
+				value = tsConnectionPropValue(r.Properties[k], k)
 			}
 			b.WriteString(fmt.Sprintf("    %s: %s,\n", toCamelCase(k), value))
 		}

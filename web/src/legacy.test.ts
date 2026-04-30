@@ -46,4 +46,51 @@ describe('generateLocalCode pulumi preview', () => {
     expect(code).toContain('vpcId: main.id');
     expect(code).not.toContain('vpcId: "literal-vpc-id"');
   });
+
+  it('renders repeated plural Pulumi edges as arrays', () => {
+    const edges: Edge[] = [
+      {
+        id: 'app->web:vpc_security_group_ids',
+        from: 'app',
+        to: 'web',
+        fromType: 'aws_instance',
+        toType: 'aws_security_group',
+        field: 'vpc_security_group_ids',
+        label: 'Security group',
+      },
+      {
+        id: 'app->admin:vpc_security_group_ids',
+        from: 'app',
+        to: 'admin',
+        fromType: 'aws_instance',
+        toType: 'aws_security_group',
+        field: 'vpc_security_group_ids',
+        label: 'Security group',
+      },
+    ];
+
+    const code = generateLocalCode('pulumi', [
+      {
+        id: 'web',
+        type: 'aws_security_group',
+        name: 'web',
+        properties: {},
+      },
+      {
+        id: 'admin',
+        type: 'aws_security_group',
+        name: 'admin',
+        properties: {},
+      },
+      {
+        id: 'app',
+        type: 'aws_instance',
+        name: 'app',
+        properties: { ami: 'ami-123', vpc_security_group_ids: ['sg-literal'] },
+      },
+    ], edges);
+
+    expect(code).toContain('vpcSecurityGroupIds: [web.id, admin.id]');
+    expect(code).not.toContain('vpcSecurityGroupIds: ["sg-literal"]');
+  });
 });

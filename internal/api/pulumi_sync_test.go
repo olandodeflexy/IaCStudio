@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -111,5 +112,33 @@ func TestPulumiSyncWritesEnvIndexAndPreservesHelpers(t *testing.T) {
 	}
 	if !strings.Contains(got, `new aws.s3.Bucket("logs"`) {
 		t.Fatalf("new bucket was not written:\n%s", got)
+	}
+}
+
+func TestMaterializeSyncEdgesPreservesMultipleTargets(t *testing.T) {
+	resources := []parser.Resource{
+		{
+			ID:         "aws_instance.app",
+			Type:       "aws_instance",
+			Name:       "app",
+			Properties: map[string]any{},
+		},
+		{ID: "aws_security_group.web", Type: "aws_security_group", Name: "web"},
+		{ID: "aws_security_group.admin", Type: "aws_security_group", Name: "admin"},
+	}
+
+	materializeSyncEdges(resources, []syncEdge{
+		{From: "aws_instance.app", To: "aws_security_group.web", Field: "vpc_security_group_ids"},
+		{From: "aws_instance.app", To: "aws_security_group.admin", Field: "vpc_security_group_ids"},
+		{From: "aws_instance.app", To: "aws_security_group.web", Field: "vpc_security_group_ids"},
+	})
+
+	got, ok := resources[0].Properties["__edge_vpc_security_group_ids"].([]string)
+	if !ok {
+		t.Fatalf("expected []string edge targets, got %#v", resources[0].Properties["__edge_vpc_security_group_ids"])
+	}
+	want := []string{"web", "admin"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("edge targets = %#v, want %#v", got, want)
 	}
 }

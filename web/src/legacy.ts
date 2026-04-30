@@ -195,6 +195,10 @@ function uniqueTSIdentifier(base: string, used: Set<string>): string {
   return candidate;
 }
 
+function isListConnectionField(field: string): boolean {
+  return field.endsWith('_ids') || ['roles', 'security_groups', 'subnets'].includes(field);
+}
+
 // generateLocalCode mirrors the Go backend's HCL/YAML emitter so the
 // preview stays in sync while the user is adding resources. The backend
 // is authoritative on save; this is purely a UX affordance (no
@@ -223,11 +227,14 @@ export function generateLocalCode(tool: string, nodes: any[], edges: Edge[]): st
       }
     });
 
-    const edgesByFrom = new Map<string, Edge[]>();
+    const edgesByFrom = new Map<string, Map<string, Edge[]>>();
     edges.forEach((edge) => {
-      const list = edgesByFrom.get(edge.from) || [];
+      if (!edge.field || edge.field === 'depends_on') return;
+      const byField = edgesByFrom.get(edge.from) || new Map<string, Edge[]>();
+      const list = byField.get(edge.field) || [];
       list.push(edge);
-      edgesByFrom.set(edge.from, list);
+      byField.set(edge.field, list);
+      edgesByFrom.set(edge.from, byField);
     });
 
     nodes.forEach((n) => {
@@ -235,13 +242,15 @@ export function generateLocalCode(tool: string, nodes: any[], edges: Edge[]): st
       const varName = (n.id && varByNodeId.get(n.id)) || tsIdentifier(name, n.type);
       c += `const ${varName} = new ${pulumiType(n.type)}(${JSON.stringify(name)}, {\n`;
       const emittedFields = new Set<string>();
-      (n.id ? edgesByFrom.get(n.id) || [] : []).forEach((edge) => {
-        if (!edge.field || edge.field === 'depends_on') return;
-        const target = nodeById.get(edge.to);
-        const targetVar = varByNodeId.get(edge.to);
-        if (!target || !targetVar) return;
-        c += `    ${toCamelCase(edge.field)}: ${targetVar}.id,\n`;
-        emittedFields.add(edge.field);
+      (n.id ? edgesByFrom.get(n.id) || new Map<string, Edge[]>() : new Map<string, Edge[]>()).forEach((fieldEdges, field) => {
+        const targetVars = Array.from(new Set(fieldEdges
+          .map((edge) => nodeById.has(edge.to) ? varByNodeId.get(edge.to) : undefined)
+          .filter((targetVar): targetVar is string => Boolean(targetVar))));
+        if (targetVars.length === 0) return;
+        const refs = targetVars.map((targetVar) => `${targetVar}.id`);
+        const value = refs.length > 1 || isListConnectionField(field) ? `[${refs.join(', ')}]` : refs[0];
+        c += `    ${toCamelCase(field)}: ${value},\n`;
+        emittedFields.add(field);
       });
       Object.entries(n.properties || {}).forEach(([k, v]) => {
         if (emittedFields.has(k) || k.startsWith('__')) return;

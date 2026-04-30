@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"sync"
 	"unicode"
 
 	"github.com/iac-studio/iac-studio/internal/catalog"
@@ -32,14 +33,27 @@ func detectProviders(resources []parser.Resource) (aws, gcp, azure bool) {
 	return aws, gcp, azure
 }
 
+var (
+	pulumiConnectsViaOnce  sync.Once
+	pulumiConnectsViaCache map[string]map[string]string
+)
+
 func pulumiConnectsVia() map[string]map[string]string {
-	connectsVia := make(map[string]map[string]string)
-	for _, resource := range catalog.GetCatalog("terraform").Resources {
-		if len(resource.ConnectsVia) > 0 {
-			connectsVia[resource.Type] = resource.ConnectsVia
+	pulumiConnectsViaOnce.Do(func() {
+		connectsVia := make(map[string]map[string]string)
+		for _, resource := range catalog.GetCatalog("terraform").Resources {
+			if len(resource.ConnectsVia) == 0 {
+				continue
+			}
+			fields := make(map[string]string, len(resource.ConnectsVia))
+			for field, targetType := range resource.ConnectsVia {
+				fields[field] = targetType
+			}
+			connectsVia[resource.Type] = fields
 		}
-	}
-	return connectsVia
+		pulumiConnectsViaCache = connectsVia
+	})
+	return pulumiConnectsViaCache
 }
 
 // terraformToPulumi maps a Terraform resource type to the Pulumi
@@ -313,6 +327,12 @@ func tsPropValue(v any, parentKey string) string {
 		return fmt.Sprintf("%v", x)
 	case string:
 		return fmt.Sprintf("%q", x)
+	case []string:
+		items := make([]string, 0, len(x))
+		for _, el := range x {
+			items = append(items, tsPropValue(el, parentKey))
+		}
+		return "[" + strings.Join(items, ", ") + "]"
 	case []any:
 		items := make([]string, 0, len(x))
 		for _, el := range x {
@@ -338,6 +358,99 @@ func tsPropValue(v any, parentKey string) string {
 		return "{ " + strings.Join(items, ", ") + " }"
 	}
 	return fmt.Sprintf("%q", fmt.Sprint(v))
+}
+
+func tsConnectionPropValue(v any, parentKey string) string {
+	switch x := v.(type) {
+	case string:
+		if isTSReferenceExpr(x) {
+			return x
+		}
+	case []string:
+		if refs, ok := tsReferenceArray(x); ok {
+			return refs
+		}
+	case []any:
+		values := make([]string, 0, len(x))
+		for _, item := range x {
+			s, ok := item.(string)
+			if !ok {
+				return tsPropValue(v, parentKey)
+			}
+			values = append(values, s)
+		}
+		if refs, ok := tsReferenceArray(values); ok {
+			return refs
+		}
+	}
+	return tsPropValue(v, parentKey)
+}
+
+func tsReferenceArray(values []string) (string, bool) {
+	refs := make([]string, 0, len(values))
+	for _, value := range values {
+		if !isTSReferenceExpr(value) {
+			return "", false
+		}
+		refs = append(refs, value)
+	}
+	return "[" + strings.Join(refs, ", ") + "]", true
+}
+
+func edgeTargetVars(edgeTarget any, varsByName map[string]string) []string {
+	var out []string
+	seen := make(map[string]bool)
+	add := func(targetName string) {
+		if targetName == "" {
+			return
+		}
+		varName := varsByName[targetName]
+		if varName == "" || seen[varName] {
+			return
+		}
+		seen[varName] = true
+		out = append(out, varName)
+	}
+	switch v := edgeTarget.(type) {
+	case string:
+		add(v)
+	case []string:
+		for _, targetName := range v {
+			add(targetName)
+		}
+	case []any:
+		for _, targetName := range v {
+			if s, ok := targetName.(string); ok {
+				add(s)
+			}
+		}
+	default:
+		add(fmt.Sprint(v))
+	}
+	return out
+}
+
+func renderConnectionRefs(field string, targetVars []string) string {
+	refs := make([]string, 0, len(targetVars))
+	for _, targetVar := range targetVars {
+		if targetVar != "" {
+			refs = append(refs, targetVar+".id")
+		}
+	}
+	if len(refs) == 0 {
+		return ""
+	}
+	if len(refs) > 1 || isListConnectionField(field) {
+		return "[" + strings.Join(refs, ", ") + "]"
+	}
+	return refs[0]
+}
+
+func isListConnectionField(field string) bool {
+	return strings.HasSuffix(field, "_ids") ||
+		field == "roles" ||
+		field == "security_groups" ||
+		field == "subnets"
 }
 
 // preservesLiteralKeys reports whether a map value whose parent key
