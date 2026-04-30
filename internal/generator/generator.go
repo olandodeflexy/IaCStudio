@@ -109,16 +109,19 @@ func (g *HCLGenerator) generate(resources []parser.Resource, includeProviders bo
 				}
 				// Use the first instance. When edges are sent via sync, the
 				// correct target will be in Properties["__edge_<field>"].
-				targetName := instances[0]
+				targetNames := []string{instances[0]}
 				if edgeTarget, ok := res.Properties["__edge_"+field]; ok {
-					targetName = fmt.Sprintf("%v", edgeTarget)
+					targetNames = edgeTargetNames(edgeTarget)
 				} else if _, hasLiteral := res.Properties[field]; hasLiteral {
 					// Preserve explicit values unless an explicit canvas edge
 					// overrides the field.
 					continue
 				}
+				if len(targetNames) == 0 {
+					continue
+				}
 
-				ref := resolveReference(res.Type, field, targetType, targetName)
+				ref := resolveConnectionReferences(res.Type, field, targetType, targetNames)
 				b.WriteString(fmt.Sprintf("  %s = %s\n", field, ref))
 				emittedFields[field] = true
 			}
@@ -183,6 +186,51 @@ func resolveReference(sourceType, field, targetType, targetName string) string {
 	return ref + ".id"
 }
 
+func resolveConnectionReferences(sourceType, field, targetType string, targetNames []string) string {
+	refs := make([]string, 0, len(targetNames))
+	seen := make(map[string]bool)
+	for _, targetName := range targetNames {
+		if targetName == "" || seen[targetName] {
+			continue
+		}
+		seen[targetName] = true
+		refs = append(refs, resolveReference(sourceType, field, targetType, targetName))
+	}
+	if len(refs) == 0 {
+		return ""
+	}
+	if len(refs) > 1 || isListConnectionField(field) {
+		return "[" + strings.Join(refs, ", ") + "]"
+	}
+	return refs[0]
+}
+
+func edgeTargetNames(edgeTarget interface{}) []string {
+	switch v := edgeTarget.(type) {
+	case string:
+		return []string{v}
+	case []string:
+		return v
+	case []interface{}:
+		out := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok && s != "" {
+				out = append(out, s)
+			}
+		}
+		return out
+	default:
+		return []string{fmt.Sprintf("%v", v)}
+	}
+}
+
+func isListConnectionField(field string) bool {
+	return strings.HasSuffix(field, "_ids") ||
+		field == "roles" ||
+		field == "security_groups" ||
+		field == "subnets"
+}
+
 // writeHCLValue writes a single key = value line with proper type handling.
 func writeHCLValue(b *strings.Builder, k string, v interface{}) {
 	switch val := v.(type) {
@@ -198,6 +246,15 @@ func writeHCLValue(b *strings.Builder, k string, v interface{}) {
 		b.WriteString(fmt.Sprintf("  %s = %d\n", k, val))
 	case int64:
 		b.WriteString(fmt.Sprintf("  %s = %d\n", k, val))
+	case []string:
+		b.WriteString(fmt.Sprintf("  %s = [", k))
+		for i, item := range val {
+			if i > 0 {
+				b.WriteString(", ")
+			}
+			writeHCLInlineValue(b, item)
+		}
+		b.WriteString("]\n")
 	case []interface{}:
 		b.WriteString(fmt.Sprintf("  %s = [", k))
 		for i, item := range val {

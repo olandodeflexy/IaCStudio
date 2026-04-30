@@ -14,6 +14,7 @@ import { SwimlaneCanvas } from './components/Canvas';
 import { VisionDropzone } from './components/VisionDropzone';
 import { S } from './styles';
 import type { LayeredProject, LayeredModule } from './types';
+import { envForTool, shouldParseResourcesFromDisk } from './projectLoad';
 import {
   TOOLS,
   FALLBACK_RESOURCES,
@@ -71,16 +72,6 @@ const normalizeLayeredProject = (state: any): LayeredProject | null => {
 
   return { layout: 'layered-v1', environments, modules };
 };
-
-const shouldParseResourcesFromDisk = (state: any, selectedTool: string) => {
-  if (selectedTool === 'pulumi') return true;
-  if (!state?.resources || state.resources.length === 0) return true;
-  return state.layout === 'layered-v1' && state.resources.some((resource: any) => !resource.file);
-};
-
-const envForTool = (selectedTool: string, layered: LayeredProject | null) => (
-  selectedTool === 'pulumi' ? layered?.environments[0] : undefined
-);
 
 export default function App() {
   // Restore active project from localStorage on mount
@@ -227,7 +218,7 @@ export default function App() {
         const selectedTool = state?.tool || saved.current.tool;
         const selectedLayered = normalizeLayeredProject(extractLayoutMeta(state));
         setTool(selectedTool);
-        if (shouldParseResourcesFromDisk(state, selectedTool)) {
+        if (shouldParseResourcesFromDisk(state)) {
           api.getResources(saved.current.projectId, selectedTool, envForTool(selectedTool, selectedLayered)).then(applyParsedResources).catch(() => {});
         }
       }).catch(() => {});
@@ -265,7 +256,7 @@ export default function App() {
       const selectedTool = state?.tool || proj.tool || 'terraform';
       const selectedLayered = normalizeLayeredProject(extractLayoutMeta(state));
       setTool(selectedTool);
-      if (shouldParseResourcesFromDisk(state, selectedTool)) {
+      if (shouldParseResourcesFromDisk(state)) {
         const parsed = await api.getResources(proj.name, selectedTool, envForTool(selectedTool, selectedLayered));
         applyParsedResources(parsed);
       }
