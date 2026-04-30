@@ -337,6 +337,36 @@ func invalidatePlan(projectPaths ...string) {
 	}
 }
 
+func planInvalidationPaths(projectPath string, targets ...string) []string {
+	seen := map[string]bool{projectPath: true}
+	paths := []string{projectPath}
+	for _, target := range targets {
+		envDir, ok := envWorkdirForProjectFile(projectPath, target)
+		if !ok || seen[envDir] {
+			continue
+		}
+		seen[envDir] = true
+		paths = append(paths, envDir)
+	}
+	return paths
+}
+
+func envWorkdirForProjectFile(projectPath, target string) (string, bool) {
+	absTarget := target
+	if !filepath.IsAbs(absTarget) {
+		absTarget = filepath.Join(projectPath, target)
+	}
+	rel, err := filepath.Rel(projectPath, absTarget)
+	if err != nil || rel == "." || strings.HasPrefix(rel, "..") {
+		return "", false
+	}
+	parts := strings.Split(filepath.ToSlash(rel), "/")
+	if len(parts) < 3 || parts[0] != "environments" || parts[1] == "" {
+		return "", false
+	}
+	return filepath.Join(projectPath, "environments", parts[1]), true
+}
+
 func handlePulumiSync(w http.ResponseWriter, r *http.Request, fw *watcher.FileWatcher, projectPath string, body syncRequest) {
 	targetDir, err := pulumiEnvDir(projectPath, r.URL.Query().Get("env"))
 	if err != nil {
@@ -733,7 +763,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			defer fw.Resume(projectPath)
 
 			// Invalidate plan gate — code changed, previous plan is stale
-			invalidatePlan(projectPath)
+			invalidatePlan(planInvalidationPaths(projectPath, safeTarget)...)
 
 			tmpFile := safeTarget + ".tmp"
 			if err := os.WriteFile(tmpFile, []byte(*body.Code), 0644); err != nil {
@@ -772,9 +802,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		fw.Pause(projectPath)
 		defer fw.Resume(projectPath)
 
-		// Invalidate plan gate — code changed, previous plan is stale
-		invalidatePlan(projectPath)
-
 		// Group resources by source file so we write back to original files.
 		// Resources without a source file go to main.tf/main.yml.
 		fileGroups := make(map[string][]parser.Resource)
@@ -800,6 +827,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			}
 			fileGroups[mainFile] = resources
 		}
+
+		// Invalidate plan gate — code changed, previous plan is stale
+		targets := make([]string, 0, len(fileGroups))
+		for file := range fileGroups {
+			targets = append(targets, file)
+		}
+		invalidatePlan(planInvalidationPaths(projectPath, targets...)...)
 
 		// Read preserved blocks from existing files (variables, outputs, etc.)
 		p := parser.ForTool(tool)

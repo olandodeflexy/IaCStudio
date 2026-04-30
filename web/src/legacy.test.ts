@@ -17,6 +17,26 @@ describe('generateLocalCode pulumi preview', () => {
     expect(code).not.toContain('.resources.');
   });
 
+  it('uses the same common Pulumi type overrides as the backend preview', () => {
+    const code = generateLocalCode('pulumi', [
+      {
+        id: 'table',
+        type: 'aws_dynamodb_table',
+        name: 'state',
+        properties: { hash_key: 'id' },
+      },
+      {
+        id: 'vm',
+        type: 'azurerm_linux_virtual_machine',
+        name: 'app',
+        properties: { size: 'Standard_B1s' },
+      },
+    ], []);
+
+    expect(code).toContain('new aws.dynamodb.Table("state"');
+    expect(code).toContain('new azure.compute.VirtualMachine("app"');
+  });
+
   it('renders edge references before literal Pulumi properties', () => {
     const edges: Edge[] = [{
       id: 'subnet->vpc:vpc_id',

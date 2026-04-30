@@ -67,6 +67,39 @@ const main = new aws.ec2.Vpc("main", {
 	}
 }
 
+func TestSyncProgram_PreservesTrailingCodeAfterExports(t *testing.T) {
+	existing := `import * as pulumi from "@pulumi/pulumi";
+import * as aws from "@pulumi/aws";
+
+const config = new pulumi.Config("acme");
+const environment = config.get("environment") ?? "dev";
+
+const main = new aws.ec2.Vpc("main", {
+    cidrBlock: "10.0.0.0/16",
+});
+
+// Exports — consumed by stack references + CI assertions.
+export const mainId = main.id;
+
+function afterExportsMustStay() {
+    return environment;
+}
+`
+
+	code, err := SyncProgram(existing, ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{
+			{ID: "aws_vpc.main", Type: "aws_vpc", Name: "main", Properties: map[string]any{"cidr_block": "10.0.0.0/16"}},
+			{ID: "aws_s3_bucket.logs", Type: "aws_s3_bucket", Name: "logs", Properties: map[string]any{"bucket": "acme-logs"}},
+		},
+	})
+	if err != nil {
+		t.Fatalf("SyncProgram: %v", err)
+	}
+	mustContain(t, code, "function afterExportsMustStay()")
+	mustContain(t, code, `export const logsId = logs.id;`)
+}
+
 func TestTSParser_ParseDirOnlyReadsTopLevelEntrypoint(t *testing.T) {
 	dir := t.TempDir()
 	rootProgram := RenderProgram(ProjectConfig{

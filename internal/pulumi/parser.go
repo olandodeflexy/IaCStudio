@@ -482,12 +482,18 @@ func normalizePulumiConstructor(constructor string) string {
 	return normalized
 }
 
-func terraformTypeByPulumi() map[string]string {
+var terraformTypeByPulumiCache = buildTerraformTypeByPulumi()
+
+func buildTerraformTypeByPulumi() map[string]string {
 	out := make(map[string]string, len(pulumiTypeOverrides))
 	for tfType, pulumiType := range pulumiTypeOverrides {
 		out[normalizePulumiConstructor(pulumiType)] = tfType
 	}
 	return out
+}
+
+func terraformTypeByPulumi() map[string]string {
+	return terraformTypeByPulumiCache
 }
 
 func camelToSnake(s string) string {

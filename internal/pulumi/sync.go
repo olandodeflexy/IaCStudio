@@ -52,14 +52,58 @@ func SyncProgram(existing string, cfg ProjectConfig) (string, error) {
 
 	start := decls[0].Start
 	end := decls[len(decls)-1].End
-	if exportIdx := strings.Index(existing[end:], "\n// Exports"); exportIdx >= 0 {
-		end = len(existing)
-	} else if trailing := strings.TrimSpace(existing[end:]); strings.HasPrefix(trailing, "export const ") {
-		end = len(existing)
-	}
+	end = generatedExportsEnd(existing, end)
 
 	prefix := mergeMissingImports(existing[:start], generated)
 	return strings.TrimRight(prefix, "\n") + "\n\n" + section + existing[end:], nil
+}
+
+func generatedExportsEnd(src string, bodyEnd int) int {
+	tail := src[bodyEnd:]
+	if exportIdx := strings.Index(tail, "\n// Exports"); exportIdx >= 0 {
+		return scanGeneratedExportsEnd(src, bodyEnd+exportIdx)
+	}
+	trimmedStart := bodyEnd + len(tail) - len(strings.TrimLeft(tail, "\n\r\t "))
+	if strings.HasPrefix(src[trimmedStart:], "export const ") {
+		return scanGeneratedExportsEnd(src, trimmedStart)
+	}
+	return bodyEnd
+}
+
+func scanGeneratedExportsEnd(src string, start int) int {
+	i := start
+	seenExports := false
+	seenMarker := false
+	for i < len(src) {
+		lineStart := i
+		lineEnd := strings.IndexByte(src[i:], '\n')
+		if lineEnd < 0 {
+			lineEnd = len(src)
+			i = len(src)
+		} else {
+			lineEnd = i + lineEnd
+			i = lineEnd + 1
+		}
+		trimmed := strings.TrimSpace(src[lineStart:lineEnd])
+		switch {
+		case trimmed == "":
+			if seenExports {
+				return lineStart
+			}
+			continue
+		case strings.HasPrefix(trimmed, "// Exports"):
+			seenMarker = true
+			continue
+		case strings.HasPrefix(trimmed, "export const "):
+			seenExports = true
+			continue
+		case seenMarker || seenExports:
+			return lineStart
+		default:
+			return start
+		}
+	}
+	return len(src)
 }
 
 func managedSectionFromGenerated(generated string) (string, error) {

@@ -31,11 +31,17 @@ func ProjectNameFromDir(dir string) string {
 		}
 	}
 	name = strings.Trim(b.String(), "-_")
-	if name == "" || name[0] < 'a' || name[0] > 'z' {
+	if name == "" {
+		name = "iac-studio"
+	} else if name[0] < 'a' || name[0] > 'z' {
 		name = fmt.Sprintf("iac-%s", name)
 	}
 	if len(name) > 100 {
 		name = name[:100]
+	}
+	name = strings.Trim(name, "-_")
+	if name == "" {
+		name = "iac-studio"
 	}
 	return name
 }
