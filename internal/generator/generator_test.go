@@ -267,6 +267,7 @@ func TestForTool(t *testing.T) {
 	}{
 		{"terraform", ".tf"},
 		{"opentofu", ".tf"},
+		{"pulumi", ".ts"},
 		{"ansible", ".yml"},
 		{"unknown", ".tf"}, // defaults to HCL
 	}
