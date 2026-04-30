@@ -1,6 +1,7 @@
 package pulumi
 
 import (
+	"regexp"
 	"strings"
 )
 
@@ -100,9 +101,11 @@ func mergeMissingImports(prefix, generated string) string {
 	if len(imports) == 0 {
 		return prefix
 	}
+	existing := importKeys(prefix)
 	var missing []string
 	for _, imp := range imports {
-		if !strings.Contains(prefix, imp) {
+		key := importKey(imp)
+		if key == "" || !existing[key] {
 			missing = append(missing, imp)
 		}
 	}
@@ -126,6 +129,27 @@ func mergeMissingImports(prefix, generated string) string {
 	next = append(next, missing...)
 	next = append(next, lines[insertAt:]...)
 	return strings.Join(next, "\n")
+}
+
+var importLineRE = regexp.MustCompile(`^\s*import\s+(.+?)\s+from\s+['"]([^'"]+)['"]\s*;?\s*$`)
+
+func importKeys(src string) map[string]bool {
+	keys := make(map[string]bool)
+	for _, line := range strings.Split(src, "\n") {
+		if key := importKey(line); key != "" {
+			keys[key] = true
+		}
+	}
+	return keys
+}
+
+func importKey(line string) string {
+	match := importLineRE.FindStringSubmatch(line)
+	if len(match) != 3 {
+		return ""
+	}
+	binding := strings.Join(strings.Fields(match[1]), " ")
+	return binding + "|" + match[2]
 }
 
 func importLines(src string) []string {

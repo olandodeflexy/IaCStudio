@@ -89,10 +89,78 @@ function toPascalCase(value: string): string {
 
 function pulumiType(type: string): string {
   if (PULUMI_TYPE_OVERRIDES[type]) return PULUMI_TYPE_OVERRIDES[type];
-  if (type.startsWith('aws_')) return `(aws as any).resources.${toPascalCase(type.slice(4))}`;
-  if (type.startsWith('google_')) return `(gcp as any).resources.${toPascalCase(type.slice(7))}`;
-  if (type.startsWith('azurerm_')) return `(azure as any).resources.${toPascalCase(type.slice(8))}`;
+  if (type.startsWith('aws_')) {
+    const rest = type.slice(4);
+    return `(aws as any).${guessAWSPackage(rest)}.${toPascalCase(rest)}`;
+  }
+  if (type.startsWith('google_')) {
+    const rest = type.slice(7);
+    return `(gcp as any).${guessGCPPackage(rest)}.${toPascalCase(rest)}`;
+  }
+  if (type.startsWith('azurerm_')) {
+    const rest = type.slice(8);
+    return `(azure as any).${guessAzurePackage(rest)}.${toPascalCase(rest)}`;
+  }
   return toPascalCase(type);
+}
+
+function guessAWSPackage(rest: string): string {
+  const head = rest.split('_')[0];
+  const byHead: Record<string, string> = {
+    s3: 's3',
+    ec2: 'ec2',
+    vpc: 'ec2',
+    subnet: 'ec2',
+    rds: 'rds',
+    dynamodb: 'dynamodb',
+    lambda: 'lambda',
+    iam: 'iam',
+    kms: 'kms',
+    eks: 'eks',
+    ecs: 'ecs',
+    ecr: 'ecr',
+    lb: 'lb',
+    elb: 'elb',
+    cloudwatch: 'cloudwatch',
+    sns: 'sns',
+    sqs: 'sqs',
+    apigateway: 'apigateway',
+  };
+  return byHead[head] || 'ec2';
+}
+
+function guessGCPPackage(rest: string): string {
+  const head = rest.split('_')[0];
+  const byHead: Record<string, string> = {
+    storage: 'storage',
+    compute: 'compute',
+    container: 'container',
+    sql: 'sql',
+    pubsub: 'pubsub',
+    bigquery: 'bigquery',
+  };
+  return byHead[head] || 'compute';
+}
+
+function guessAzurePackage(rest: string): string {
+  const head = rest.split('_')[0];
+  const byHead: Record<string, string> = {
+    resource: 'resources',
+    storage: 'storage',
+    virtual: 'network',
+    subnet: 'network',
+    network: 'network',
+    key: 'keyvault',
+    linux: 'compute',
+    windows: 'compute',
+    container: 'containerservice',
+    managed: 'containerservice',
+    postgresql: 'dbforpostgresql',
+    mysql: 'dbformysql',
+    redis: 'cache',
+    app: 'web',
+  };
+  return byHead[head] || 'resources';
 }
 
 function tsValue(value: any, parentKey = ''): string {
@@ -115,6 +183,18 @@ function tsIdentifier(value: string, fallback: string): string {
   return /^[0-9]/.test(raw) ? `_${raw}` : raw;
 }
 
+function uniqueTSIdentifier(base: string, used: Set<string>): string {
+  const root = base || 'resource';
+  let candidate = root;
+  let suffix = 2;
+  while (used.has(candidate)) {
+    candidate = `${root}${suffix}`;
+    suffix += 1;
+  }
+  used.add(candidate);
+  return candidate;
+}
+
 // generateLocalCode mirrors the Go backend's HCL/YAML emitter so the
 // preview stays in sync while the user is adding resources. The backend
 // is authoritative on save; this is purely a UX affordance (no
@@ -130,10 +210,41 @@ export function generateLocalCode(tool: string, nodes: any[], edges: Edge[]): st
     if (hasAzure) c += 'import * as azure from "@pulumi/azure-native";\n';
     c += '\nconst config = new pulumi.Config("iac-studio");\n';
     c += 'const environment = config.get("environment") ?? "dev";\n\n';
+
+    const usedNames = new Set<string>();
+    const varByNodeId = new Map<string, string>();
+    const nodeById = new Map<string, any>();
     nodes.forEach((n) => {
       const name = n.name || n.type.replace(/^(aws_|google_|azurerm_)/, '');
-      c += `const ${tsIdentifier(name, n.type)} = new ${pulumiType(n.type)}(${JSON.stringify(name)}, {\n`;
+      const varName = uniqueTSIdentifier(tsIdentifier(name, n.type), usedNames);
+      if (n.id) {
+        varByNodeId.set(n.id, varName);
+        nodeById.set(n.id, n);
+      }
+    });
+
+    const edgesByFrom = new Map<string, Edge[]>();
+    edges.forEach((edge) => {
+      const list = edgesByFrom.get(edge.from) || [];
+      list.push(edge);
+      edgesByFrom.set(edge.from, list);
+    });
+
+    nodes.forEach((n) => {
+      const name = n.name || n.type.replace(/^(aws_|google_|azurerm_)/, '');
+      const varName = (n.id && varByNodeId.get(n.id)) || tsIdentifier(name, n.type);
+      c += `const ${varName} = new ${pulumiType(n.type)}(${JSON.stringify(name)}, {\n`;
+      const emittedFields = new Set<string>();
+      (n.id ? edgesByFrom.get(n.id) || [] : []).forEach((edge) => {
+        if (!edge.field || edge.field === 'depends_on') return;
+        const target = nodeById.get(edge.to);
+        const targetVar = varByNodeId.get(edge.to);
+        if (!target || !targetVar) return;
+        c += `    ${toCamelCase(edge.field)}: ${targetVar}.id,\n`;
+        emittedFields.add(edge.field);
+      });
       Object.entries(n.properties || {}).forEach(([k, v]) => {
+        if (emittedFields.has(k) || k.startsWith('__')) return;
         c += `    ${toCamelCase(k)}: ${tsValue(v, k)},\n`;
       });
       c += '});\n\n';

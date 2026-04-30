@@ -1066,7 +1066,9 @@ export default function App() {
 
   const ct = TOOLS[tool] || TOOLS.terraform;
   const selected = nodes.find(n => n.id === selectedNode);
-  const codeFileLabel = tool === 'pulumi' && pulumiEnv ? `environments/${pulumiEnv}/index.ts` : `main${ct.ext}`;
+  const codeFileLabel = tool === 'pulumi'
+    ? (pulumiEnv ? `environments/${pulumiEnv}/index.ts` : 'index.ts')
+    : `main${ct.ext}`;
 
   // ─── Main UI ───
   return (

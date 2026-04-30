@@ -1,6 +1,8 @@
 package pulumi
 
 import (
+	"os"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -62,6 +64,99 @@ const main = new aws.ec2.Vpc("main", {
 	}
 	if len(parsed) != 2 {
 		t.Fatalf("want 2 parsed resources after sync, got %d", len(parsed))
+	}
+}
+
+func TestTSParser_ParseDirOnlyReadsTopLevelEntrypoint(t *testing.T) {
+	dir := t.TempDir()
+	rootProgram := RenderProgram(ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{{
+			ID:         "aws_vpc.main",
+			Type:       "aws_vpc",
+			Name:       "main",
+			Properties: map[string]any{"cidr_block": "10.0.0.0/16"},
+		}},
+	})
+	if err := os.WriteFile(filepath.Join(dir, "index.ts"), []byte(rootProgram), 0o600); err != nil {
+		t.Fatalf("write root index.ts: %v", err)
+	}
+	nestedDir := filepath.Join(dir, "node_modules", "pkg")
+	if err := os.MkdirAll(nestedDir, 0o755); err != nil {
+		t.Fatalf("mkdir nested node_modules: %v", err)
+	}
+	nestedProgram := RenderProgram(ProjectConfig{
+		Name: "nested",
+		Resources: []parser.Resource{{
+			ID:         "aws_s3_bucket.logs",
+			Type:       "aws_s3_bucket",
+			Name:       "logs",
+			Properties: map[string]any{"bucket": "ignored"},
+		}},
+	})
+	if err := os.WriteFile(filepath.Join(nestedDir, "index.ts"), []byte(nestedProgram), 0o600); err != nil {
+		t.Fatalf("write nested index.ts: %v", err)
+	}
+
+	resources, err := (&TSParser{}).ParseDir(dir)
+	if err != nil {
+		t.Fatalf("ParseDir: %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("want only top-level resource, got %d: %+v", len(resources), resources)
+	}
+	if resources[0].Type != "aws_vpc" || resources[0].Name != "main" {
+		t.Fatalf("ParseDir read wrong resource: %+v", resources[0])
+	}
+	if resources[0].File != filepath.Join(dir, "index.ts") {
+		t.Fatalf("resource file = %q, want top-level index.ts", resources[0].File)
+	}
+}
+
+func TestParseTSStringLiteral_SingleQuoteEscapes(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{src: `'\n'`, want: "\n"},
+		{src: `'\\n'`, want: `\n`},
+		{src: `'it\'s'`, want: "it's"},
+	}
+	for _, tc := range cases {
+		got, ok := parseTSStringLiteral(tc.src)
+		if !ok {
+			t.Fatalf("parseTSStringLiteral(%q) did not parse", tc.src)
+		}
+		if got != tc.want {
+			t.Errorf("parseTSStringLiteral(%q) = %q, want %q", tc.src, got, tc.want)
+		}
+	}
+}
+
+func TestSyncProgram_DedupesEquivalentImports(t *testing.T) {
+	existing := `import * as pulumi from '@pulumi/pulumi';
+import  *  as  aws from '@pulumi/aws';
+
+const config = new pulumi.Config("acme");
+`
+
+	code, err := SyncProgram(existing, ProjectConfig{
+		Name: "acme",
+		Resources: []parser.Resource{{
+			ID:         "aws_vpc.main",
+			Type:       "aws_vpc",
+			Name:       "main",
+			Properties: map[string]any{"cidr_block": "10.0.0.0/16"},
+		}},
+	})
+	if err != nil {
+		t.Fatalf("SyncProgram: %v", err)
+	}
+	if strings.Count(code, "@pulumi/aws") != 1 {
+		t.Fatalf("expected one aws import after sync, got:\n%s", code)
+	}
+	if strings.Count(code, "@pulumi/pulumi") != 1 {
+		t.Fatalf("expected one pulumi import after sync, got:\n%s", code)
 	}
 }
 

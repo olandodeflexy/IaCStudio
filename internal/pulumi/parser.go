@@ -23,28 +23,21 @@ import (
 type TSParser struct{}
 
 func (p *TSParser) ParseDir(dir string) ([]parser.Resource, error) {
-	var resources []parser.Resource
-	var parseErrors []string
-	err := filepath.Walk(dir, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return err
-		}
-		if filepath.Base(path) != "index.ts" {
-			return nil
-		}
-		parsed, parseErr := p.ParseFile(path)
-		if parseErr != nil {
-			parseErrors = append(parseErrors, fmt.Sprintf("%s: %v", path, parseErr))
-			return nil
-		}
-		resources = append(resources, parsed...)
-		return nil
-	})
+	entrypoint := filepath.Join(dir, "index.ts")
+	info, err := os.Stat(entrypoint)
 	if err != nil {
-		return resources, err
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("pulumi typescript entrypoint not found: %s", entrypoint)
+		}
+		return nil, err
 	}
-	if len(parseErrors) > 0 {
-		return resources, fmt.Errorf("pulumi typescript parse errors:\n  %s", strings.Join(parseErrors, "\n  "))
+	if info.IsDir() {
+		return nil, fmt.Errorf("pulumi typescript entrypoint is a directory: %s", entrypoint)
+	}
+
+	resources, parseErr := p.ParseFile(entrypoint)
+	if parseErr != nil {
+		return resources, fmt.Errorf("pulumi typescript parse errors:\n  %s: %w", entrypoint, parseErr)
 	}
 	return resources, nil
 }
@@ -352,9 +345,7 @@ func parseTSStringLiteral(src string) (string, bool) {
 		unquoted, err := strconv.Unquote(src)
 		return unquoted, err == nil
 	case '\'':
-		inner := src[1 : len(src)-1]
-		replacer := strings.NewReplacer(`\\`, `\`, `\'`, `'`, `\n`, "\n", `\r`, "\r", `\t`, "\t")
-		return replacer.Replace(inner), true
+		return unescapeSingleQuotedString(src[1 : len(src)-1]), true
 	case '`':
 		inner := src[1 : len(src)-1]
 		if strings.Contains(inner, "${") {
@@ -364,6 +355,48 @@ func parseTSStringLiteral(src string) (string, bool) {
 	default:
 		return "", false
 	}
+}
+
+func unescapeSingleQuotedString(inner string) string {
+	var b strings.Builder
+	escaped := false
+	for _, r := range inner {
+		if !escaped {
+			if r == '\\' {
+				escaped = true
+				continue
+			}
+			b.WriteRune(r)
+			continue
+		}
+		switch r {
+		case '\\':
+			b.WriteRune('\\')
+		case '\'':
+			b.WriteRune('\'')
+		case 'n':
+			b.WriteRune('\n')
+		case 'r':
+			b.WriteRune('\r')
+		case 't':
+			b.WriteRune('\t')
+		case 'b':
+			b.WriteRune('\b')
+		case 'f':
+			b.WriteRune('\f')
+		case 'v':
+			b.WriteRune('\v')
+		case '0':
+			b.WriteRune(0)
+		default:
+			b.WriteRune(r)
+		}
+		escaped = false
+	}
+	if escaped {
+		b.WriteRune('\\')
+	}
+	return b.String()
 }
 
 func skipSpace(src string, pos int) int {
