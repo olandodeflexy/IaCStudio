@@ -30,6 +30,7 @@ func TestLayeredPulumi_RendersPerEnvProject(t *testing.T) {
 		"policies/crossguard/PulumiPolicy.yaml",
 		"policies/crossguard/index.ts",
 		"policies/crossguard/package.json",
+		"policies/crossguard/tsconfig.json",
 		"scripts/init.sh",
 		"scripts/plan.sh",
 		"scripts/apply.sh",
