@@ -62,6 +62,25 @@ describe('PolicyStudioPanel', () => {
     expect(screen.getByText(/Blocking/)).toBeInTheDocument();
   });
 
+  it('passes layered Pulumi env to the policy API', async () => {
+    const client = {
+      listPolicyEngines: vi.fn().mockResolvedValue([{ name: 'crossguard', available: true }]),
+      runPolicy: vi.fn().mockResolvedValue({ results: [], findings: [], blocking: false }),
+    };
+    render(<PolicyStudioPanel projectName="demo" tool="pulumi" env="dev" client={client} />);
+
+    await waitFor(() => expect(client.listPolicyEngines).toHaveBeenCalled());
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Run policies/ }));
+    });
+
+    expect(client.runPolicy).toHaveBeenCalledWith('demo', {
+      engines: ['crossguard'],
+      tool: 'pulumi',
+      env: 'dev',
+    });
+  });
+
   it('surfaces client errors inline', async () => {
     const client = {
       listPolicyEngines: vi.fn().mockRejectedValue(new Error('network down')),

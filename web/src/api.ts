@@ -248,12 +248,8 @@ export const api = {
   // review. For pulumi layered-v1 projects, pass env so the runner
   // executes inside environments/<env> and threads --stack <env> to
   // pulumi (otherwise the workspace-selected stack is targeted, which
-  // can be wrong). Pass acknowledged:true to override the policy gate
-  // — required for pulumi today since server-side policy evaluation
-  // is unimplemented for it (the backend returns
-  // {error:"policy_unsupported"} on the first apply attempt; surface
-  // that to the user as an explicit confirmation prompt before the
-  // retry sets acknowledged).
+  // can be wrong). Pass acknowledged:true only when the user has reviewed
+  // blocking policy findings and still wants to override the gate.
   async runCommand(
     projectName: string,
     tool: string,
@@ -457,7 +453,7 @@ export const api = {
   },
   async runPolicy(
     projectName: string,
-    req: { engines?: string[]; tool?: string; plan_json?: string } = {},
+    req: { engines?: string[]; tool?: string; plan_json?: string; env?: string } = {},
   ): Promise<PolicyRunResponse> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/policy/run`, {
       method: 'POST',

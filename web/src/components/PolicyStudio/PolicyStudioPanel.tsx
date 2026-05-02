@@ -8,6 +8,7 @@ import { FindingsList } from '../Findings/FindingsList';
 export interface PolicyStudioPanelProps {
   projectName: string;
   tool?: string;
+  env?: string;
   // Allow the host to swap the client — we pass the default `api`
   // module but tests inject a stub that resolves canned responses.
   client?: Pick<typeof api, 'listPolicyEngines' | 'runPolicy'>;
@@ -21,6 +22,7 @@ export interface PolicyStudioPanelProps {
 export function PolicyStudioPanel({
   projectName,
   tool = 'terraform',
+  env,
   client = api,
 }: PolicyStudioPanelProps) {
   const [engines, setEngines] = useState<{ name: string; available: boolean }[]>([]);
@@ -55,7 +57,9 @@ export function PolicyStudioPanel({
     setError(null);
     try {
       const names = engines.filter((e) => selected[e.name]).map((e) => e.name);
-      const response = await client.runPolicy(projectName, { engines: names, tool });
+      const req: { engines: string[]; tool: string; env?: string } = { engines: names, tool };
+      if (env) req.env = env;
+      const response = await client.runPolicy(projectName, req);
       setResult(response);
     } catch (err) {
       setError(String(err));

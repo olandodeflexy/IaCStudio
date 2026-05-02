@@ -7,7 +7,8 @@
 //   - the built-in Go rules engine (fast, no dependencies, walks resources);
 //   - OPA/Rego evaluated in-process (walks plan JSON);
 //   - Conftest shelled out (also walks plan JSON, against the same Rego files);
-//   - HashiCorp Sentinel shelled out (walks plan JSON via tfplan/v2 import).
+//   - HashiCorp Sentinel shelled out (walks plan JSON via tfplan/v2 import);
+//   - Pulumi CrossGuard shelled out through `pulumi preview --policy-pack`.
 //
 // Engines that don't apply to a given input return an empty Result without
 // error — for example, the Sentinel adapter returns nothing when no .sentinel
@@ -44,23 +45,23 @@ func (s Severity) IsBlocking() bool { return s == SeverityError }
 // It carries enough context for the UI to deep-link to the offending policy
 // file (Engine + PolicyFile) and the offending HCL resource (Resource).
 type Finding struct {
-	Engine     string   `json:"engine"`               // "builtin" | "opa" | "conftest" | "sentinel"
-	PolicyID   string   `json:"policy_id"`            // stable id ("aws-s3-encryption", "terraform.tags.deny", …)
-	PolicyName string   `json:"policy_name"`          // human-readable name
+	Engine     string   `json:"engine"`      // "builtin" | "opa" | "conftest" | "sentinel" | "crossguard"
+	PolicyID   string   `json:"policy_id"`   // stable id ("aws-s3-encryption", "terraform.tags.deny", …)
+	PolicyName string   `json:"policy_name"` // human-readable name
 	Severity   Severity `json:"severity"`
-	Category   string   `json:"category,omitempty"`   // tagging|encryption|networking|access|naming|cost|compliance
-	Resource   string   `json:"resource,omitempty"`   // "aws_s3_bucket.data" if known
+	Category   string   `json:"category,omitempty"` // tagging|encryption|networking|access|naming|cost|compliance
+	Resource   string   `json:"resource,omitempty"` // "aws_s3_bucket.data" if known
 	Message    string   `json:"message"`
-	Suggestion string   `json:"suggestion,omitempty"` // optional remediation hint
+	Suggestion string   `json:"suggestion,omitempty"`  // optional remediation hint
 	PolicyFile string   `json:"policy_file,omitempty"` // path to the source rule file (Rego/Sentinel)
 }
 
 // Result is what one engine returns from a single Evaluate call.
 type Result struct {
 	Engine    string    `json:"engine"`
-	Available bool      `json:"available"`           // false → engine present but not runnable (e.g. binary missing)
+	Available bool      `json:"available"` // false → engine present but not runnable (e.g. binary missing)
 	Findings  []Finding `json:"findings,omitempty"`
-	Error     string    `json:"error,omitempty"`     // surface-able error (binary missing, parse failure, etc.)
+	Error     string    `json:"error,omitempty"` // surface-able error (binary missing, parse failure, etc.)
 }
 
 // HasBlocking returns true when at least one finding has error severity.
@@ -75,7 +76,8 @@ func (r Result) HasBlocking() bool {
 
 // EvalInput is the data every engine receives. Engines pick whichever fields
 // they care about and ignore the rest — the built-in walks Resources, OPA and
-// Conftest walk PlanJSON, Sentinel walks PlanJSON via its own importer.
+// Conftest walk PlanJSON, Sentinel walks PlanJSON via its own importer, and
+// CrossGuard runs Pulumi preview against local policy packs.
 type EvalInput struct {
 	// ProjectDir is the absolute path to the project root. Engines that load
 	// policy bundles from disk (OPA, Conftest, Sentinel) resolve their files
@@ -92,7 +94,7 @@ type EvalInput struct {
 }
 
 // PolicyEngine is the contract every adapter implements. Concrete engines
-// live in internal/policy/engines/{builtin,opa,conftest,sentinel}.
+// live in internal/policy/engines/{builtin,opa,conftest,sentinel,crossguard}.
 type PolicyEngine interface {
 	// Name returns the stable identifier ("builtin", "opa", "conftest", …).
 	Name() string

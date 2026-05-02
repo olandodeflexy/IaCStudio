@@ -6,10 +6,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/iac-studio/iac-studio/internal/policy/engines"
+	"github.com/iac-studio/iac-studio/internal/policy/engines/crossguard"
 )
 
 // scaffoldPolicyProject writes a tiny project tree with the given HCL + an
@@ -74,7 +76,7 @@ func TestPolicyEnginesEndpointReportsAvailability(t *testing.T) {
 	for _, e := range out {
 		names[e.Name] = e.Available
 	}
-	for _, want := range []string{"builtin", "opa", "conftest", "sentinel"} {
+	for _, want := range []string{"builtin", "opa", "conftest", "sentinel", "crossguard"} {
 		if _, ok := names[want]; !ok {
 			t.Errorf("engine %q missing from response: %+v", want, out)
 		}
@@ -185,4 +187,99 @@ func TestPolicyRunUnknownFilterIsQuiet(t *testing.T) {
 	if len(got.Results) != 1 || got.Results[0].Engine != "builtin" {
 		t.Errorf("expected only builtin, got: %+v", got.Results)
 	}
+}
+
+// TestPolicyRunPulumiEnvRunsCrossGuard verifies Policy Studio can evaluate a
+// layered Pulumi environment by rebasing into environments/<env> before the
+// CrossGuard adapter runs.
+func TestPolicyRunPulumiEnvRunsCrossGuard(t *testing.T) {
+	orig := crossguard.Binary
+	t.Cleanup(func() { crossguard.Binary = orig })
+	crossguard.Binary = fakePolicyPulumi(t, `Policy Violations:
+    [mandatory]  iac-studio v0.0.1  required-owner-tag (seed: aws:s3/bucket:Bucket)
+    Resource should define an Owner tag.
+`, 1)
+
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	envDir := filepath.Join(project, "environments", "dev")
+	packDir := filepath.Join(project, "policies", "crossguard")
+	for _, dir := range []string{envDir, packDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(project, ".iac-studio.json"), []byte(`{"tool":"pulumi","layout":"layered-v1"}`), 0o644); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "Pulumi.yaml"), []byte("name: demo-dev\nruntime: nodejs\n"), 0o644); err != nil {
+		t.Fatalf("write Pulumi.yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "Pulumi.dev.yaml"), []byte("config: {}\n"), 0o644); err != nil {
+		t.Fatalf("write stack yaml: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(packDir, "PulumiPolicy.yaml"), []byte("name: iac-studio\nruntime: nodejs\n"), 0o644); err != nil {
+		t.Fatalf("write policy pack: %v", err)
+	}
+
+	srv := httptest.NewServer(policyMux(root))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{
+		"engines": []string{"crossguard"},
+		"tool":    "pulumi",
+		"env":     "dev",
+	})
+	resp, err := http.Post(srv.URL+"/api/projects/demo/policy/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var got policyRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Results) != 1 || got.Results[0].Engine != "crossguard" {
+		t.Fatalf("expected a single crossguard result, got %+v", got.Results)
+	}
+	if len(got.Findings) != 1 {
+		t.Fatalf("expected one CrossGuard finding, got %+v", got)
+	}
+	if !got.Blocking {
+		t.Fatal("mandatory CrossGuard finding should be blocking")
+	}
+}
+
+func fakePolicyPulumi(t *testing.T, stdout string, exitCode int) string {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell-scripted fake binary not supported on Windows")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "pulumi")
+	script := "#!/usr/bin/env bash\ncat <<'IAC_EOF'\n" + stdout + "\nIAC_EOF\nexit " + policyItoa(exitCode) + "\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("write fake pulumi: %v", err)
+	}
+	return path
+}
+
+func policyItoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var digits []byte
+	for n > 0 {
+		digits = append([]byte{byte('0' + n%10)}, digits...)
+		n /= 10
+	}
+	if neg {
+		digits = append([]byte{'-'}, digits...)
+	}
+	return string(digits)
 }

@@ -980,23 +980,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 			if !req.Acknowledged {
-				// Pulumi has no parser or plan-JSON path today, so the
-				// builtin policies see zero resources and plan-based
-				// engines have no input — every Pulumi mutating
-				// command would silently bypass policy. Fail closed:
-				// require the caller to opt in with acknowledged:true
-				// so the override is explicit + audit-trailable. When
-				// a Pulumi parser/policy adapter lands this branch
-				// goes away.
-				if req.Tool == "pulumi" {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusConflict)
-					_ = json.NewEncoder(w).Encode(map[string]any{
-						"error":  "policy_unsupported",
-						"detail": "policy evaluation is not implemented for pulumi yet — re-submit with acknowledged:true to proceed without server-side policy checks",
-					})
-					return
-				}
 				// Walk every available engine against the project so we can
 				// surface blocking findings before the apply runs. On any
 				// error (engine crash, missing binary, malformed plan) we

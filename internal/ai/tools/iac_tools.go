@@ -241,7 +241,7 @@ func newWriteHCLTool(deps IaCToolDeps) Tool {
 func newRunPolicyTool(deps IaCToolDeps) Tool {
 	return New(
 		"run_policy",
-		"Evaluate every configured policy engine (builtin, OPA, Conftest, Sentinel) against the current project. Returns findings grouped by engine and a blocking flag when any error-severity finding exists.",
+		"Evaluate every configured policy engine (builtin, OPA, Conftest, Sentinel, CrossGuard) against the current project. Returns findings grouped by engine and a blocking flag when any error-severity finding exists.",
 		`{"type": "object", "properties": {}}`,
 		func(ctx context.Context, raw json.RawMessage) (any, error) {
 			resources := parseResources(deps.ProjectDir)

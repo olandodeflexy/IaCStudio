@@ -86,6 +86,7 @@ func sanitizeGCPLabel(v string) string {
 //
 //	environments/{env}/{index.ts, Pulumi.yaml, Pulumi.<env>.yaml,
 //	                    package.json, tsconfig.json, .gitignore}
+//	policies/crossguard/{PulumiPolicy.yaml,index.ts,package.json,tsconfig.json}
 //	scripts/{init,plan,apply,destroy}.sh
 //	README.md, .iac-studio.json, .gitignore
 //
@@ -100,8 +101,8 @@ func sanitizeGCPLabel(v string) string {
 // they belong in a later commit that ships a component helper library.
 type LayeredPulumiBlueprint struct{}
 
-func (b *LayeredPulumiBlueprint) ID() string          { return "layered-pulumi" }
-func (b *LayeredPulumiBlueprint) Name() string        { return "Layered Pulumi (TypeScript)" }
+func (b *LayeredPulumiBlueprint) ID() string   { return "layered-pulumi" }
+func (b *LayeredPulumiBlueprint) Name() string { return "Layered Pulumi (TypeScript)" }
 func (b *LayeredPulumiBlueprint) Description() string {
 	return "Multi-environment Pulumi TypeScript project with per-stack configs and lifecycle scripts. Parallel to the layered-terraform blueprint but uses Pulumi instead of HCL."
 }
@@ -235,6 +236,7 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 		Path:    ".iac-studio.json",
 		Content: append(descriptor, '\n'),
 	})
+	files = append(files, pulumiCrossGuardPolicyFiles()...)
 	files = append(files, pulumiLifecycleScripts()...)
 	files = append(files, File{
 		Path:    ".gitignore",
@@ -362,6 +364,68 @@ func seedResourcesFor(cloud, projectName, env, owner, region string) []parser.Re
 	return nil
 }
 
+func pulumiCrossGuardPolicyFiles() []File {
+	policyYaml := `name: iac-studio-crossguard
+runtime: nodejs
+description: IaC Studio baseline policy pack for Pulumi projects.
+`
+	packageJSON := `{
+  "name": "iac-studio-crossguard",
+  "version": "0.1.0",
+  "private": true,
+  "dependencies": {
+    "@pulumi/policy": "^1.17.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.0.0"
+  }
+}
+`
+	tsconfig := `{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "commonjs",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true
+  }
+}
+`
+	indexTS := `import { PolicyPack, ResourceValidationArgs, ReportViolation } from "@pulumi/policy";
+
+function hasOwnerMetadata(props: Record<string, unknown>): boolean {
+  const tags = props.tags as Record<string, unknown> | undefined;
+  if (tags && typeof tags.Owner === "string" && tags.Owner.trim() !== "") {
+    return true;
+  }
+  const labels = props.labels as Record<string, unknown> | undefined;
+  return !!(labels && typeof labels.owner === "string" && labels.owner.trim() !== "");
+}
+
+new PolicyPack("iac-studio-crossguard", {
+  policies: [{
+    name: "required-owner-tag",
+    description: "Resources should define an Owner tag or owner label.",
+    enforcementLevel: "advisory",
+    validateResource: (args: ResourceValidationArgs, reportViolation: ReportViolation) => {
+      if (args.type === "pulumi:pulumi:Stack") {
+        return;
+      }
+      if (!hasOwnerMetadata(args.props as Record<string, unknown>)) {
+        reportViolation(args.name + " should define an Owner tag or owner label.");
+      }
+    },
+  }],
+});
+`
+	return []File{
+		{Path: "policies/crossguard/PulumiPolicy.yaml", Content: []byte(policyYaml)},
+		{Path: "policies/crossguard/package.json", Content: []byte(packageJSON)},
+		{Path: "policies/crossguard/tsconfig.json", Content: []byte(tsconfig)},
+		{Path: "policies/crossguard/index.ts", Content: []byte(indexTS)},
+	}
+}
+
 // pulumiLifecycleScripts emits scripts/{init,plan,apply,destroy}.sh
 // that wrap the Pulumi CLI with the per-env cd boilerplate. Matches
 // the shape of the layered-terraform scripts so muscle memory carries
@@ -377,6 +441,10 @@ set -euo pipefail
 # install' in the project root (suitable for flat Pulumi layouts);
 # layered users should run this script directly for now.
 cd "$(dirname "$0")/.."
+if [ -f policies/crossguard/package.json ]; then
+  echo "→ npm install in policies/crossguard"
+  (cd policies/crossguard && npm install)
+fi
 for dir in environments/*/; do
   echo "→ npm install in $dir"
   (cd "$dir" && npm install)
@@ -422,6 +490,7 @@ func renderPulumiProjectReadme(name, cloud string, envs []string) string {
 	fmt.Fprintf(&b, "Pulumi TypeScript project scaffolded by IaC Studio, targeting **%s**.\n\n", cloud)
 	b.WriteString("## Layout\n\n")
 	b.WriteString("- `environments/{env}/` — one self-contained Pulumi project per environment.\n")
+	b.WriteString("- `policies/crossguard/` — local CrossGuard policy pack run by Policy Studio and apply gates.\n")
 	b.WriteString("- `scripts/{init,plan,apply,destroy}.sh` — lifecycle wrappers that cd into the selected environment and run the Pulumi CLI.\n\n")
 	b.WriteString("## Bootstrap\n\n")
 	b.WriteString("```bash\n")

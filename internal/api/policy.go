@@ -11,6 +11,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/parser"
 	"github.com/iac-studio/iac-studio/internal/policy/engines"
 	"github.com/iac-studio/iac-studio/internal/policy/engines/conftest"
+	"github.com/iac-studio/iac-studio/internal/policy/engines/crossguard"
 	"github.com/iac-studio/iac-studio/internal/policy/engines/opa"
 	"github.com/iac-studio/iac-studio/internal/policy/engines/sentinel"
 )
@@ -24,6 +25,7 @@ func defaultPolicyEngines() []engines.PolicyEngine {
 		opa.New(),
 		conftest.New(),
 		sentinel.New(),
+		crossguard.New(),
 	}
 }
 
@@ -40,6 +42,10 @@ type policyRunRequest struct {
 	// Tool selects the parser to use for the resource walk. Defaults to
 	// terraform.
 	Tool string `json:"tool,omitempty"`
+	// Env names a layered-v1 environment. When set, policy evaluation runs in
+	// environments/<env>, which is where layered Pulumi projects keep
+	// Pulumi.yaml and stack config.
+	Env string `json:"env,omitempty"`
 }
 
 // policyRunResponse returns per-engine Result plus a merged Findings list
@@ -93,6 +99,19 @@ func registerPolicyRoutes(mux *http.ServeMux, projectsDir string) {
 			return
 		}
 
+		tool := req.Tool
+		if tool == "" {
+			tool = "terraform"
+		}
+		if req.Env != "" {
+			subPath, subErr := safeSubdir(projectPath, "environments", req.Env)
+			if subErr != nil {
+				http.Error(w, "invalid env: "+subErr.Error(), 400)
+				return
+			}
+			projectPath = subPath
+		}
+
 		planJSON := []byte(req.PlanJSON)
 		if len(planJSON) == 0 {
 			// Fall back to <project>/tfplan.json which the layered-terraform
@@ -101,11 +120,6 @@ func registerPolicyRoutes(mux *http.ServeMux, projectsDir string) {
 			if data, err := os.ReadFile(filepath.Join(projectPath, "tfplan.json")); err == nil {
 				planJSON = data
 			}
-		}
-
-		tool := req.Tool
-		if tool == "" {
-			tool = "terraform"
 		}
 		var resources []parser.Resource
 		if p := parser.ForTool(tool); p != nil {
