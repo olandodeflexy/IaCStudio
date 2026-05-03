@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -25,7 +26,7 @@ func fakePulumiBinary(t *testing.T, stdout string, exitCode int, logPath string)
 	script := "#!/usr/bin/env bash\n" +
 		logLine +
 		"cat <<'IAC_EOF'\n" + stdout + "\nIAC_EOF\n" +
-		"exit " + itoa(exitCode) + "\n"
+		"exit " + strconv.Itoa(exitCode) + "\n"
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
 		t.Fatalf("write fake pulumi: %v", err)
 	}
@@ -34,25 +35,6 @@ func fakePulumiBinary(t *testing.T, stdout string, exitCode int, logPath string)
 
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var digits []byte
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	if neg {
-		digits = append([]byte{'-'}, digits...)
-	}
-	return string(digits)
 }
 
 func scaffoldPulumiProject(t *testing.T) string {
