@@ -2,6 +2,25 @@
 
 const BASE = '';
 
+export interface ApiErrorPayload {
+  error?: string;
+  detail?: string;
+  findings?: PolicyFinding[];
+}
+
+export class ApiError extends Error {
+  status: number;
+  payload?: ApiErrorPayload;
+
+  constructor(status: number, fallback: string, payload?: ApiErrorPayload) {
+    super(payload?.detail || payload?.error || fallback || `HTTP ${status}`);
+    this.name = 'ApiError';
+    this.status = status;
+    this.payload = payload;
+    Object.setPrototypeOf(this, ApiError.prototype);
+  }
+}
+
 export interface ToolInfo {
   name: string;
   binary: string;
@@ -72,7 +91,15 @@ export interface CatalogResource {
 async function check(res: Response): Promise<Response> {
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(text || `HTTP ${res.status}`);
+    let payload: ApiErrorPayload | undefined;
+    if (text.trim().startsWith('{')) {
+      try {
+        payload = JSON.parse(text) as ApiErrorPayload;
+      } catch {
+        payload = undefined;
+      }
+    }
+    throw new ApiError(res.status, text || res.statusText, payload);
   }
   return res;
 }
@@ -248,12 +275,8 @@ export const api = {
   // review. For pulumi layered-v1 projects, pass env so the runner
   // executes inside environments/<env> and threads --stack <env> to
   // pulumi (otherwise the workspace-selected stack is targeted, which
-  // can be wrong). Pass acknowledged:true to override the policy gate
-  // — required for pulumi today since server-side policy evaluation
-  // is unimplemented for it (the backend returns
-  // {error:"policy_unsupported"} on the first apply attempt; surface
-  // that to the user as an explicit confirmation prompt before the
-  // retry sets acknowledged).
+  // can be wrong). Pass acknowledged:true only when the user has reviewed
+  // blocking policy findings and still wants to override the gate.
   async runCommand(
     projectName: string,
     tool: string,
@@ -457,7 +480,7 @@ export const api = {
   },
   async runPolicy(
     projectName: string,
-    req: { engines?: string[]; tool?: string; plan_json?: string } = {},
+    req: { engines?: string[]; tool?: string; plan_json?: string; env?: string } = {},
   ): Promise<PolicyRunResponse> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/policy/run`, {
       method: 'POST',
