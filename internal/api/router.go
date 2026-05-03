@@ -329,6 +329,122 @@ func pulumiEnvDir(projectPath, env string) (string, error) {
 	return projectPath, nil
 }
 
+type projectToolDescriptor struct {
+	Layout           string            `json:"layout"`
+	Tool             string            `json:"tool"`
+	Environments     []string          `json:"environments"`
+	EnvironmentTools map[string]string `json:"environment_tools"`
+}
+
+func readProjectToolDescriptor(projectPath string) (projectToolDescriptor, error) {
+	var descriptor projectToolDescriptor
+	data, err := os.ReadFile(filepath.Join(projectPath, ".iac-studio.json"))
+	if err != nil {
+		return descriptor, err
+	}
+	if err := json.Unmarshal(data, &descriptor); err != nil {
+		return descriptor, err
+	}
+	return descriptor, nil
+}
+
+func concreteTool(tool string) bool {
+	switch tool {
+	case "terraform", "opentofu", "pulumi", "ansible":
+		return true
+	default:
+		return false
+	}
+}
+
+func effectiveProjectTool(projectPath, requestedTool, env string) string {
+	requestedDefaulted := false
+	if requestedTool == "" {
+		requestedTool = "terraform"
+		requestedDefaulted = true
+	}
+	descriptor, err := readProjectToolDescriptor(projectPath)
+	if err != nil {
+		return requestedTool
+	}
+	if env != "" {
+		if tool := descriptor.EnvironmentTools[env]; concreteTool(tool) {
+			return tool
+		}
+	}
+	if requestedDefaulted && descriptor.Tool != "" {
+		return descriptor.Tool
+	}
+	if requestedTool != "multi" {
+		return requestedTool
+	}
+	if concreteTool(descriptor.Tool) {
+		return descriptor.Tool
+	}
+	return requestedTool
+}
+
+func parseProjectResources(projectPath, tool, env string) ([]parser.Resource, error) {
+	if tool == "multi" && env == "" {
+		return parseHybridProjectResources(projectPath)
+	}
+	if tool == "pulumi" {
+		targetDir, envErr := pulumiEnvDir(projectPath, env)
+		if envErr != nil {
+			return nil, envErr
+		}
+		return (&pulumigen.TSParser{}).ParseDir(targetDir)
+	}
+	p := parser.ForTool(tool)
+	targetDir := projectPath
+	if env != "" {
+		subPath, err := safeSubdir(projectPath, "environments", env)
+		if err != nil {
+			return nil, err
+		}
+		targetDir = subPath
+	}
+	return p.ParseDir(targetDir)
+}
+
+func parseHybridProjectResources(projectPath string) ([]parser.Resource, error) {
+	descriptor, err := readProjectToolDescriptor(projectPath)
+	if err != nil {
+		return parser.ForTool("terraform").ParseDir(projectPath)
+	}
+	if len(descriptor.EnvironmentTools) == 0 {
+		return parser.ForTool("terraform").ParseDir(projectPath)
+	}
+	envs := descriptor.Environments
+	if len(envs) == 0 {
+		for env := range descriptor.EnvironmentTools {
+			envs = append(envs, env)
+		}
+	}
+	var resources []parser.Resource
+	for _, env := range envs {
+		tool := descriptor.EnvironmentTools[env]
+		if !concreteTool(tool) {
+			continue
+		}
+		envDir, subErr := safeSubdir(projectPath, "environments", env)
+		if subErr != nil {
+			return nil, fmt.Errorf("%s: %w", env, subErr)
+		}
+		var parsed []parser.Resource
+		if tool == "pulumi" {
+			parsed, err = (&pulumigen.TSParser{}).ParseDir(envDir)
+		} else {
+			parsed, err = parser.ForTool(tool).ParseDir(envDir)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("parse %s environment %q: %w", tool, env, err)
+		}
+		resources = append(resources, parsed...)
+	}
+	return resources, nil
+}
+
 func invalidatePlan(projectPaths ...string) {
 	planGate.mu.Lock()
 	defer planGate.mu.Unlock()
@@ -367,8 +483,8 @@ func envWorkdirForProjectFile(projectPath, target string) (string, bool) {
 	return filepath.Join(projectPath, "environments", parts[1]), true
 }
 
-func handlePulumiSync(w http.ResponseWriter, r *http.Request, fw *watcher.FileWatcher, projectPath string, body syncRequest) {
-	targetDir, err := pulumiEnvDir(projectPath, r.URL.Query().Get("env"))
+func handlePulumiSync(w http.ResponseWriter, fw *watcher.FileWatcher, projectPath, env string, body syncRequest) {
+	targetDir, err := pulumiEnvDir(projectPath, env)
 	if err != nil {
 		http.Error(w, "invalid env: "+err.Error(), 400)
 		return
@@ -693,31 +809,21 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// Parse project files and return resource graph
 	mux.HandleFunc("GET /api/projects/{name}/resources", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
-		tool := r.URL.Query().Get("tool")
+		requestedTool := r.URL.Query().Get("tool")
+		env := r.URL.Query().Get("env")
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
-		if tool == "pulumi" {
-			targetDir, envErr := pulumiEnvDir(projectPath, r.URL.Query().Get("env"))
-			if envErr != nil {
-				http.Error(w, "invalid env: "+envErr.Error(), 400)
-				return
-			}
-			resources, err := (&pulumigen.TSParser{}).ParseDir(targetDir)
-			if err != nil {
-				http.Error(w, err.Error(), 500)
-				return
-			}
-			_ = json.NewEncoder(w).Encode(resources)
-			return
-		}
-
-		p := parser.ForTool(tool)
-		resources, err := p.ParseDir(projectPath)
+		tool := effectiveProjectTool(projectPath, requestedTool, env)
+		resources, err := parseProjectResources(projectPath, tool, env)
 		if err != nil {
-			http.Error(w, err.Error(), 500)
+			status := http.StatusInternalServerError
+			if strings.Contains(err.Error(), "subdir") || strings.Contains(err.Error(), "env query parameter") {
+				status = http.StatusBadRequest
+			}
+			http.Error(w, err.Error(), status)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(resources)
@@ -726,7 +832,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// Sync resources from UI to disk
 	mux.HandleFunc("POST /api/projects/{name}/sync", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
-		tool := r.URL.Query().Get("tool")
+		requestedTool := r.URL.Query().Get("tool")
+		env := r.URL.Query().Get("env")
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
@@ -738,19 +845,35 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, "invalid request body", 400)
 			return
 		}
+		tool := effectiveProjectTool(projectPath, requestedTool, env)
+		if tool == "multi" {
+			http.Error(w, "env query parameter is required for hybrid project sync", 400)
+			return
+		}
 		if tool == "pulumi" {
-			handlePulumiSync(w, r, fw, projectPath, body)
+			handlePulumiSync(w, fw, projectPath, env, body)
 			return
 		}
 
 		gen := generator.ForTool(tool)
 		ext := gen.FileExtension()
 		allowedExts := allowedGeneratedExtensions(tool, ext)
+		syncWorkdir := projectPath
+		if env != "" {
+			subPath, subErr := safeSubdir(projectPath, "environments", env)
+			if subErr != nil {
+				http.Error(w, "invalid env: "+subErr.Error(), 400)
+				return
+			}
+			syncWorkdir = subPath
+		}
 
 		if body.Code != nil {
 			target := body.File
 			if target == "" {
-				target = filepath.Join(projectPath, "main"+ext)
+				target = filepath.Join(syncWorkdir, "main"+ext)
+			} else if env != "" && !filepath.IsAbs(target) && !strings.Contains(filepath.ToSlash(target), "/") {
+				target = filepath.Join(syncWorkdir, target)
 			}
 			safeTarget, pathErr := safeProjectFile(projectPath, target, allowedExts...)
 			if pathErr != nil {
@@ -808,7 +931,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		for _, r := range resources {
 			target := r.File
 			if target == "" {
-				target = filepath.Join(projectPath, "main"+ext)
+				target = filepath.Join(syncWorkdir, "main"+ext)
 			}
 			safeTarget, pathErr := safeProjectFile(projectPath, target, allowedExts...)
 			if pathErr != nil {
@@ -820,7 +943,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 		// If all resources have no file origin, write to main file
 		if len(fileGroups) == 0 {
-			mainFile, pathErr := safeProjectFile(projectPath, filepath.Join(projectPath, "main"+ext), allowedExts...)
+			mainFile, pathErr := safeProjectFile(projectPath, filepath.Join(syncWorkdir, "main"+ext), allowedExts...)
 			if pathErr != nil {
 				http.Error(w, "invalid main file: "+pathErr.Error(), 400)
 				return
@@ -840,7 +963,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		preservedByFile := make(map[string][]parser.PreservedBlock)
 		projectHasProvider := false
 		if hclParser, ok := p.(*parser.HCLParser); ok && tool != "ansible" {
-			existingFiles, _ := filepath.Glob(filepath.Join(projectPath, "*.tf"))
+			existingFiles, _ := filepath.Glob(filepath.Join(syncWorkdir, "*.tf"))
 			for _, f := range existingFiles {
 				result, err := hclParser.ParseFileFull(f)
 				if err != nil || result == nil {
@@ -862,7 +985,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 		// Write each file atomically (temp file + rename)
 		var mainCode string
-		rootMainFile, pathErr := safeProjectFile(projectPath, filepath.Join(projectPath, "main"+ext), allowedExts...)
+		rootMainFile, pathErr := safeProjectFile(projectPath, filepath.Join(syncWorkdir, "main"+ext), allowedExts...)
 		if pathErr != nil {
 			http.Error(w, "invalid main file: "+pathErr.Error(), 400)
 			return
@@ -907,7 +1030,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		}
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"file": filepath.Join(projectPath, "main"+ext),
+			"file": filepath.Join(syncWorkdir, "main"+ext),
 			"code": mainCode,
 		})
 	})
@@ -938,6 +1061,12 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
+			return
+		}
+
+		effectiveTool := effectiveProjectTool(projectPath, req.Tool, req.Env)
+		if effectiveTool == "multi" {
+			http.Error(w, "env is required when running commands for hybrid projects", 400)
 			return
 		}
 
@@ -985,7 +1114,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				// error (engine crash, missing binary, malformed plan) we
 				// fall through to execution — apply should not be gated by
 				// a broken policy engine.
-				if findings, blocking := evaluateBlockingPolicies(r.Context(), projectPath, req.Tool); blocking {
+				if findings, blocking := evaluateBlockingPolicies(r.Context(), projectPath, effectiveTool); blocking {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusConflict)
 					_ = json.NewEncoder(w).Encode(map[string]any{
@@ -996,7 +1125,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 					return
 				}
 			} else {
-				log.Printf("apply gate: policy findings acknowledged by client for %s (command=%s tool=%s)", name, req.Command, req.Tool)
+				log.Printf("apply gate: policy findings acknowledged by client for %s (command=%s tool=%s)", name, req.Command, effectiveTool)
 			}
 		}
 
@@ -1005,7 +1134,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// a request-scoped context and kill the command. SafeRunner applies its
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
-			result, err := run.Execute(context.Background(), projectPath, req.Tool, req.Command, req.Env)
+			result, err := run.Execute(context.Background(), projectPath, effectiveTool, req.Command, req.Env)
 			// Only record a successful plan — failed/cancelled plans don't count.
 			// 'preview' is Pulumi's equivalent of terraform plan; without it
 			// here, a pulumi up following a successful preview would be

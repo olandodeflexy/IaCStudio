@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { envForTool, shouldParseResourcesFromDisk } from './projectLoad';
+import { envForResourceLoad, envForTool, shouldParseResourcesFromDisk, toolForEnv } from './projectLoad';
 
 describe('project load helpers', () => {
   it('does not force Pulumi disk parsing when saved canvas resources exist', () => {
@@ -23,6 +23,18 @@ describe('project load helpers', () => {
 
   it('uses the first layered environment for Pulumi resource parsing', () => {
     expect(envForTool('pulumi', { environments: ['dev', 'prod'] })).toBe('dev');
+    expect(envForTool('pulumi', { environments: ['dev', 'prod'] }, 'prod')).toBe('prod');
     expect(envForTool('terraform', { environments: ['dev'] })).toBeUndefined();
+  });
+
+  it('lets hybrid resource parsing cover every environment', () => {
+    const layered = {
+      environments: ['dev', 'prod'],
+      environmentTools: { dev: 'pulumi', prod: 'terraform' },
+    };
+    expect(envForResourceLoad('multi', layered)).toBeUndefined();
+    expect(envForTool('multi', layered, 'prod')).toBe('prod');
+    expect(toolForEnv('multi', layered, 'dev')).toBe('pulumi');
+    expect(toolForEnv('multi', layered, 'prod')).toBe('terraform');
   });
 });

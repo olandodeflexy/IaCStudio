@@ -29,6 +29,10 @@ describe('defaultLayeredClassifier (layered-v1 scaffold)', () => {
       environment: 'prod',
       module: 'root',
     });
+    expect(classify(make('pulumi', 'environments/dev/index.ts'))).toEqual({
+      environment: 'dev',
+      module: 'root',
+    });
   });
 
   it('omits "root" when the caller does not register it', () => {

@@ -12,6 +12,7 @@ export const TOOLS: Record<string, { name: string; icon: string; color: string; 
   opentofu: { name: 'OpenTofu', icon: 'TO', color: '#F2B447', ext: '.tf' },
   pulumi: { name: 'Pulumi', icon: 'PU', color: '#8A63D2', ext: '.ts' },
   ansible: { name: 'Ansible', icon: 'AN', color: '#D95757', ext: '.yml' },
+  multi: { name: 'Hybrid', icon: 'HY', color: '#66B7D8', ext: '.tf' },
 };
 
 // Fallback resource list for when the backend catalog is unreachable —
