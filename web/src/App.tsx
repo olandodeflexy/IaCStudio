@@ -652,10 +652,11 @@ export default function App() {
         const findings = err.payload?.findings ?? [];
         const blockingCount = findings.filter(f => f.severity === 'error').length;
         const summary = summarizePolicyFindings(findings);
+        const summaryLines = summary.split('\n');
         setTerminalOutput(prev => [
           ...prev,
           `Policy blocked ${command}: ${blockingCount} blocking finding${blockingCount === 1 ? '' : 's'}`,
-          summary,
+          ...summaryLines,
         ]);
         if (!confirm(`Policy checks blocked "${command}".\n\n${summary}\n\nRun it anyway and acknowledge these findings?`)) {
           return;
