@@ -114,6 +114,26 @@ func TestHybridResourcesParseEveryEnvironmentWithItsTool(t *testing.T) {
 	}
 }
 
+func TestResourcesRejectInvalidEnvAsBadRequest(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/projects/demo/resources?tool=terraform&env=..")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("invalid env should 400, got %d", resp.StatusCode)
+	}
+}
+
 func TestHybridSyncResolvesEnvironmentTool(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo")

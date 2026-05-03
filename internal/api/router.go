@@ -445,6 +445,19 @@ func parseHybridProjectResources(projectPath string) ([]parser.Resource, error) 
 	return resources, nil
 }
 
+func resourceParseErrorStatus(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	msg := err.Error()
+	if strings.Contains(msg, "subdir") ||
+		strings.Contains(msg, "env query parameter") ||
+		strings.Contains(msg, "invalid path segment") {
+		return http.StatusBadRequest
+	}
+	return http.StatusInternalServerError
+}
+
 func invalidatePlan(projectPaths ...string) {
 	planGate.mu.Lock()
 	defer planGate.mu.Unlock()
@@ -819,11 +832,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		tool := effectiveProjectTool(projectPath, requestedTool, env)
 		resources, err := parseProjectResources(projectPath, tool, env)
 		if err != nil {
-			status := http.StatusInternalServerError
-			if strings.Contains(err.Error(), "subdir") || strings.Contains(err.Error(), "env query parameter") {
-				status = http.StatusBadRequest
-			}
-			http.Error(w, err.Error(), status)
+			http.Error(w, err.Error(), resourceParseErrorStatus(err))
 			return
 		}
 		_ = json.NewEncoder(w).Encode(resources)

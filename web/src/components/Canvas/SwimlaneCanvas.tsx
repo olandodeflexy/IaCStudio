@@ -61,7 +61,7 @@ export function defaultLayeredClassifier(envs: string[], modules: string[]) {
   const modSet = new Set(modules);
   return (r: Resource) => {
     if (!r.file) return null;
-    const parts = r.file.split('/');
+    const parts = r.file.replace(/\\/g, '/').split('/');
 
     // modules/<mod>/...  → shared template, hide from the per-env view.
     const modIdx = parts.indexOf('modules');

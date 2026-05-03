@@ -58,4 +58,11 @@ describe('defaultLayeredClassifier (layered-v1 scaffold)', () => {
       module: 'compute',
     });
   });
+
+  it('handles Windows-style path separators', () => {
+    expect(classify(make('h', String.raw`projects\demo\environments\dev\index.ts`))).toEqual({
+      environment: 'dev',
+      module: 'root',
+    });
+  });
 });

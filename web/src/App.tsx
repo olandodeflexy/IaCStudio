@@ -97,7 +97,7 @@ const normalizeLayeredProject = (state: any): LayeredProject | null => {
 
 const resourceEnv = (resource: { file?: string }) => {
   if (!resource.file) return null;
-  const parts = resource.file.split('/');
+  const parts = resource.file.replace(/\\/g, '/').split('/');
   const envIdx = parts.indexOf('environments');
   return envIdx >= 0 && parts.length > envIdx + 1 ? parts[envIdx + 1] : null;
 };
