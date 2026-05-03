@@ -2,6 +2,25 @@
 
 const BASE = '';
 
+export interface ApiErrorPayload {
+  error?: string;
+  detail?: string;
+  findings?: PolicyFinding[];
+}
+
+export class ApiError extends Error {
+  status: number;
+  payload?: ApiErrorPayload;
+
+  constructor(status: number, fallback: string, payload?: ApiErrorPayload) {
+    super(payload?.detail || payload?.error || fallback || `HTTP ${status}`);
+    this.name = 'ApiError';
+    this.status = status;
+    this.payload = payload;
+    Object.setPrototypeOf(this, ApiError.prototype);
+  }
+}
+
 export interface ToolInfo {
   name: string;
   binary: string;
@@ -72,7 +91,15 @@ export interface CatalogResource {
 async function check(res: Response): Promise<Response> {
   if (!res.ok) {
     const text = await res.text().catch(() => res.statusText);
-    throw new Error(text || `HTTP ${res.status}`);
+    let payload: ApiErrorPayload | undefined;
+    if (text.trim().startsWith('{')) {
+      try {
+        payload = JSON.parse(text) as ApiErrorPayload;
+      } catch {
+        payload = undefined;
+      }
+    }
+    throw new ApiError(res.status, text || res.statusText, payload);
   }
   return res;
 }

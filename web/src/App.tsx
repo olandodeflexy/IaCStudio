@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { api, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, ImportResult } from './api';
+import { api, ApiError, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, ImportResult, type PolicyFinding } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -27,6 +27,22 @@ import {
 
 type CanvasMode = 'freeform' | 'swimlane';
 const EMPTY_CODE_PLACEHOLDER = 'Add resources from the palette or write code here';
+
+const summarizePolicyFindings = (findings: PolicyFinding[]) => {
+  if (findings.length === 0) return 'No finding details were returned.';
+  const shown = findings.slice(0, 5).map((f, i) => {
+    const target = f.resource ? ` on ${f.resource}` : '';
+    return `${i + 1}. [${f.engine}] ${f.policy_id}${target}: ${f.message}`;
+  });
+  if (findings.length > shown.length) {
+    shown.push(`...and ${findings.length - shown.length} more.`);
+  }
+  return shown.join('\n');
+};
+
+const isPolicyBlockedError = (err: unknown): err is ApiError => (
+  err instanceof ApiError && err.status === 409 && err.payload?.error === 'policy_blocked'
+);
 
 const extractLayoutMeta = (state: any) => {
   if (!state?.layout) return null;
@@ -632,6 +648,28 @@ export default function App() {
       approved: needsApproval,
       env: pulumiEnv,
     }).catch(err => {
+      if (needsApproval && isPolicyBlockedError(err)) {
+        const findings = err.payload?.findings ?? [];
+        const blockingCount = findings.filter(f => f.severity === 'error').length;
+        const summary = summarizePolicyFindings(findings);
+        setTerminalOutput(prev => [
+          ...prev,
+          `Policy blocked ${command}: ${blockingCount} blocking finding${blockingCount === 1 ? '' : 's'}`,
+          summary,
+        ]);
+        if (!confirm(`Policy checks blocked "${command}".\n\n${summary}\n\nRun it anyway and acknowledge these findings?`)) {
+          return;
+        }
+        setTerminalOutput(prev => [...prev, `$ ${command} --acknowledged`, '']);
+        api.runCommand(projectId, tool, command, {
+          approved: true,
+          env: pulumiEnv,
+          acknowledged: true,
+        }).catch(overrideErr => {
+          setTerminalOutput(prev => [...prev, `Error: ${overrideErr.message}`]);
+        });
+        return;
+      }
       setTerminalOutput(prev => [...prev, `Error: ${err.message}`]);
     });
   };
