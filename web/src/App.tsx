@@ -180,14 +180,17 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
   const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
-  const showEnvironmentSelector = Boolean(layeredProject && (tool === 'pulumi' || tool === 'multi' || layeredProject.environmentTools));
+  const showEnvironmentSelector = Boolean(layeredProject && (tool === 'multi' || layeredProject.environmentTools));
   const pulumiEnv = envForTool(tool || '', layeredProject, activeEnvironment);
   const activeTool = toolForEnv(tool || '', layeredProject, pulumiEnv);
   const concreteTool = activeTool && activeTool !== 'multi'
     ? activeTool
     : (tool && tool !== 'multi' ? tool : 'terraform');
+  const activeResourceFile = concreteTool === 'pulumi'
+    ? (pulumiEnv ? `environments/${pulumiEnv}/index.ts` : undefined)
+    : (tool === 'multi' && pulumiEnv ? `environments/${pulumiEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : undefined);
   const activeEnvNodes = useMemo(
-    () => resourcesForEnv(nodes, tool === 'multi' ? pulumiEnv : undefined),
+    () => resourcesForEnv(nodes, (tool === 'multi' || tool === 'pulumi') ? pulumiEnv : undefined),
     [nodes, pulumiEnv, tool],
   );
   const activeEnvEdges = useMemo(
@@ -479,14 +482,23 @@ export default function App() {
   const syncTimer = useRef<ReturnType<typeof setTimeout>>();
   const hasCreatedProject = useRef(false);
   const initialLoadDone = useRef(false);
+  const syncScope = `${projectId}:${tool || ''}:${pulumiEnv || ''}`;
+  const lastSyncScope = useRef('');
   useEffect(() => {
     if (!tool || !hasCreatedProject.current || !projectId) return;
     // Skip the first sync after opening a project — the restored state
     // doesn't need to be written back immediately (it came from disk).
     if (!initialLoadDone.current) {
       initialLoadDone.current = true;
+      lastSyncScope.current = syncScope;
       return;
     }
+    if (lastSyncScope.current && lastSyncScope.current !== syncScope) {
+      lastSyncScope.current = syncScope;
+      clearTimeout(syncTimer.current);
+      return;
+    }
+    lastSyncScope.current = syncScope;
     clearTimeout(syncTimer.current);
     syncTimer.current = setTimeout(() => {
       isSyncing.current = true;
@@ -494,7 +506,7 @@ export default function App() {
         setTimeout(() => { isSyncing.current = false; }, 1500);
       });
     }, 2000);
-  }, [activeEnvEdges, activeEnvNodes, tool, projectId, pulumiEnv]);
+  }, [activeEnvEdges, activeEnvNodes, projectId, pulumiEnv, syncScope, tool]);
 
   // ─── Handlers ───
 
@@ -506,6 +518,7 @@ export default function App() {
       label: resourceDef.label,
       icon: resourceDef.icon,
       properties: { ...(resourceDef.defaults || {}) },
+      file: activeResourceFile,
       x: 100 + Math.random() * 280,
       y: 80 + Math.random() * 180,
     };
@@ -536,7 +549,7 @@ export default function App() {
       return [...prev, node];
     });
     setSelectedNode(node.id);
-  }, [catalogResources]);
+  }, [activeResourceFile, catalogResources]);
 
   const removeNode = useCallback((id: string) => {
     setNodes(prev => prev.filter(n => n.id !== id));

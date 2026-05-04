@@ -390,8 +390,11 @@ func effectiveProjectTool(projectPath, requestedTool, env string) string {
 }
 
 func parseProjectResources(projectPath, tool, env string) ([]parser.Resource, error) {
-	if tool == "multi" && env == "" {
-		return parseHybridProjectResources(projectPath)
+	if tool == "multi" {
+		if env == "" {
+			return parseHybridProjectResources(projectPath)
+		}
+		return nil, fmt.Errorf("unresolved hybrid tool for env %q", env)
 	}
 	if tool == "pulumi" {
 		targetDir, envErr := pulumiEnvDir(projectPath, env)
@@ -458,7 +461,8 @@ func resourceParseErrorStatus(err error) int {
 	msg := err.Error()
 	if strings.Contains(msg, "subdir") ||
 		strings.Contains(msg, "env query parameter") ||
-		strings.Contains(msg, "invalid path segment") {
+		strings.Contains(msg, "invalid path segment") ||
+		strings.Contains(msg, "unresolved hybrid tool") {
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError

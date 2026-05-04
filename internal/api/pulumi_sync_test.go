@@ -125,6 +125,21 @@ func TestEffectiveProjectToolIgnoresUnknownDescriptorTool(t *testing.T) {
 	}
 }
 
+func TestParseProjectResourcesRejectsUnresolvedHybridEnv(t *testing.T) {
+	projectDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectDir, "environments", "dev"), 0o755); err != nil {
+		t.Fatalf("mkdir env: %v", err)
+	}
+
+	_, err := parseProjectResources(projectDir, "multi", "dev")
+	if err == nil {
+		t.Fatal("expected unresolved hybrid tool error, got nil")
+	}
+	if status := resourceParseErrorStatus(err); status != http.StatusBadRequest {
+		t.Fatalf("unresolved hybrid tool status = %d, want 400", status)
+	}
+}
+
 func TestHybridResourcesSortsDescriptorMapEnvironments(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo")
