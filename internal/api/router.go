@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -357,6 +358,10 @@ func concreteTool(tool string) bool {
 	}
 }
 
+func descriptorTool(tool string) bool {
+	return tool == "multi" || concreteTool(tool)
+}
+
 func effectiveProjectTool(projectPath, requestedTool, env string) string {
 	requestedDefaulted := false
 	if requestedTool == "" {
@@ -372,7 +377,7 @@ func effectiveProjectTool(projectPath, requestedTool, env string) string {
 			return tool
 		}
 	}
-	if requestedDefaulted && descriptor.Tool != "" {
+	if requestedDefaulted && descriptorTool(descriptor.Tool) {
 		return descriptor.Tool
 	}
 	if requestedTool != "multi" {
@@ -420,6 +425,7 @@ func parseHybridProjectResources(projectPath string) ([]parser.Resource, error) 
 		for env := range descriptor.EnvironmentTools {
 			envs = append(envs, env)
 		}
+		sort.Strings(envs)
 	}
 	var resources []parser.Resource
 	for _, env := range envs {
@@ -456,6 +462,10 @@ func resourceParseErrorStatus(err error) int {
 		return http.StatusBadRequest
 	}
 	return http.StatusInternalServerError
+}
+
+func simpleRelativeFileName(target string) bool {
+	return target != "" && !filepath.IsAbs(target) && !strings.ContainsAny(target, `/\`)
 }
 
 func invalidatePlan(projectPaths ...string) {
@@ -881,7 +891,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			target := body.File
 			if target == "" {
 				target = filepath.Join(syncWorkdir, "main"+ext)
-			} else if env != "" && !filepath.IsAbs(target) && !strings.Contains(filepath.ToSlash(target), "/") {
+			} else if env != "" && simpleRelativeFileName(target) {
 				target = filepath.Join(syncWorkdir, target)
 			}
 			safeTarget, pathErr := safeProjectFile(projectPath, target, allowedExts...)
@@ -941,6 +951,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			target := r.File
 			if target == "" {
 				target = filepath.Join(syncWorkdir, "main"+ext)
+			} else if env != "" && simpleRelativeFileName(target) {
+				target = filepath.Join(syncWorkdir, target)
 			}
 			safeTarget, pathErr := safeProjectFile(projectPath, target, allowedExts...)
 			if pathErr != nil {

@@ -180,6 +180,7 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
   const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
+  const showEnvironmentSelector = Boolean(layeredProject && (tool === 'pulumi' || tool === 'multi' || layeredProject.environmentTools));
   const pulumiEnv = envForTool(tool || '', layeredProject, activeEnvironment);
   const activeTool = toolForEnv(tool || '', layeredProject, pulumiEnv);
   const concreteTool = activeTool && activeTool !== 'multi'
@@ -1419,7 +1420,7 @@ export default function App() {
           onClick={() => { setSelectedNode(null); setSelectedEdge(null); }}>
           {layeredProject && (
             <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 10, display: 'flex', gap: 6, padding: 4, background: 'var(--bg-elev-1)', border: '1px solid var(--border-main)', borderRadius: 8 }}>
-              {layeredProject.environments.map(env => {
+              {showEnvironmentSelector && layeredProject.environments.map(env => {
                 const envTool = layeredProject.environmentTools?.[env];
                 return (
                   <button
