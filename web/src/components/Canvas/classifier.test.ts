@@ -29,6 +29,10 @@ describe('defaultLayeredClassifier (layered-v1 scaffold)', () => {
       environment: 'prod',
       module: 'root',
     });
+    expect(classify(make('pulumi', 'environments/dev/index.ts'))).toEqual({
+      environment: 'dev',
+      module: 'root',
+    });
   });
 
   it('omits "root" when the caller does not register it', () => {
@@ -52,6 +56,13 @@ describe('defaultLayeredClassifier (layered-v1 scaffold)', () => {
     expect(classify(make('g', 'projects/demo/environments/stage/compute.tf'))).toEqual({
       environment: 'stage',
       module: 'compute',
+    });
+  });
+
+  it('handles Windows-style path separators', () => {
+    expect(classify(make('h', String.raw`projects\demo\environments\dev\index.ts`))).toEqual({
+      environment: 'dev',
+      module: 'root',
     });
   });
 });

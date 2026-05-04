@@ -18,6 +18,7 @@ func TestLoadAndSavePreservesLayeredMetadata(t *testing.T) {
   "tool": "terraform",
   "cloud": "aws",
   "environments": ["dev", "prod"],
+  "environment_tools": {"dev": "pulumi", "prod": "terraform"},
   "modules": ["networking", "compute"],
   "tags": {"ManagedBy": "iac-studio"}
 }`)
@@ -39,6 +40,9 @@ func TestLoadAndSavePreservesLayeredMetadata(t *testing.T) {
 	if state.Layout != "layered-v1" {
 		t.Fatalf("expected layered layout, got %q", state.Layout)
 	}
+	if state.EnvTools["dev"] != "pulumi" || state.EnvTools["prod"] != "terraform" {
+		t.Fatalf("expected environment tool map to be preserved, got %+v", state.EnvTools)
+	}
 	if !bytes.Contains(state.Modules, []byte(`"networking"`)) {
 		t.Fatalf("expected raw module metadata to be preserved, got %s", string(state.Modules))
 	}
@@ -54,6 +58,7 @@ func TestLoadAndSavePreservesLayeredMetadata(t *testing.T) {
 	for _, needle := range [][]byte{
 		[]byte(`"layout": "layered-v1"`),
 		[]byte(`"environments": [`),
+		[]byte(`"environment_tools": {`),
 		[]byte(`"networking"`),
 		[]byte(`"tags": {`),
 	} {

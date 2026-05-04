@@ -99,9 +99,10 @@ func registerPolicyRoutes(mux *http.ServeMux, projectsDir string) {
 			return
 		}
 
-		tool := req.Tool
-		if tool == "" {
-			tool = "terraform"
+		tool := effectiveProjectTool(projectPath, req.Tool, req.Env)
+		if tool == "multi" {
+			http.Error(w, "env is required when running policy for hybrid projects", 400)
+			return
 		}
 		if req.Env != "" {
 			subPath, subErr := safeSubdir(projectPath, "environments", req.Env)

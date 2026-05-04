@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { api, ApiError, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, ImportResult, type PolicyFinding } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
@@ -14,7 +14,7 @@ import { SwimlaneCanvas } from './components/Canvas';
 import { VisionDropzone } from './components/VisionDropzone';
 import { S } from './styles';
 import type { LayeredProject, LayeredModule } from './types';
-import { envForTool, shouldParseResourcesFromDisk } from './projectLoad';
+import { envForResourceLoad, envForTool, shouldParseResourcesFromDisk, toolForEnv } from './projectLoad';
 import {
   TOOLS,
   FALLBACK_RESOURCES,
@@ -47,7 +47,7 @@ const isPolicyBlockedError = (err: unknown): err is ApiError => (
 const extractLayoutMeta = (state: any) => {
   if (!state?.layout) return null;
   const meta: Record<string, any> = {};
-  for (const key of ['layout', 'blueprint', 'project_name', 'cloud', 'environments', 'modules', 'tags']) {
+  for (const key of ['layout', 'blueprint', 'project_name', 'cloud', 'environments', 'environment_tools', 'modules', 'tags']) {
     if (state[key] !== undefined) meta[key] = state[key];
   }
   return meta;
@@ -59,6 +59,12 @@ const normalizeLayeredProject = (state: any): LayeredProject | null => {
     ? state.environments.filter((env: unknown): env is string => typeof env === 'string' && env.length > 0)
     : [];
   if (environments.length === 0) return null;
+  const environmentTools = state.environment_tools && typeof state.environment_tools === 'object'
+    ? Object.fromEntries(
+        Object.entries(state.environment_tools)
+          .filter(([env, envTool]) => environments.includes(env) && typeof envTool === 'string' && envTool.length > 0)
+      ) as Record<string, string>
+    : undefined;
 
   const rawModules = Array.isArray(state.modules) ? state.modules : [];
   const modules: LayeredModule[] = rawModules
@@ -86,7 +92,27 @@ const normalizeLayeredProject = (state: any): LayeredProject | null => {
     modules.unshift({ name: 'root', path: 'environments', environments });
   }
 
-  return { layout: 'layered-v1', environments, modules };
+  return { layout: 'layered-v1', environments, environmentTools, modules };
+};
+
+const resourceEnv = (resource: { file?: string }) => {
+  if (!resource.file) return null;
+  const parts = resource.file.replace(/\\/g, '/').split('/');
+  const envIdx = parts.indexOf('environments');
+  return envIdx >= 0 && parts.length > envIdx + 1 ? parts[envIdx + 1] : null;
+};
+
+const resourcesForEnv = <T extends { id: string; file?: string }>(resources: T[], env?: string) => {
+  if (!env) return resources;
+  return resources.filter(resource => {
+    const envFromFile = resourceEnv(resource);
+    return !envFromFile || envFromFile === env;
+  });
+};
+
+const edgesForResources = (allEdges: Edge[], resources: { id: string }[]) => {
+  const ids = new Set(resources.map(resource => resource.id));
+  return allEdges.filter(edge => ids.has(edge.from) && ids.has(edge.to));
 };
 
 export default function App() {
@@ -130,6 +156,7 @@ export default function App() {
   const [rightTab, setRightTab] = useState<'inspect' | 'policy' | 'scan' | 'modules'>('inspect');
   const [projectLayoutMeta, setProjectLayoutMeta] = useState<Record<string, any> | null>(null);
   const [layeredProject, setLayeredProject] = useState<LayeredProject | null>(null);
+  const [activeEnvironment, setActiveEnvironment] = useState<string | null>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>('freeform');
 
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
@@ -153,7 +180,23 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
   const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
-  const pulumiEnv = envForTool(tool || '', layeredProject);
+  const showEnvironmentSelector = Boolean(layeredProject && (tool === 'multi' || layeredProject.environmentTools));
+  const pulumiEnv = envForTool(tool || '', layeredProject, activeEnvironment);
+  const activeTool = toolForEnv(tool || '', layeredProject, pulumiEnv);
+  const concreteTool = activeTool && activeTool !== 'multi'
+    ? activeTool
+    : (tool && tool !== 'multi' ? tool : 'terraform');
+  const activeResourceFile = concreteTool === 'pulumi'
+    ? (pulumiEnv ? `environments/${pulumiEnv}/index.ts` : undefined)
+    : (tool === 'multi' && pulumiEnv ? `environments/${pulumiEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : undefined);
+  const activeEnvNodes = useMemo(
+    () => resourcesForEnv(nodes, (tool === 'multi' || tool === 'pulumi') ? pulumiEnv : undefined),
+    [nodes, pulumiEnv, tool],
+  );
+  const activeEnvEdges = useMemo(
+    () => edgesForResources(edges, activeEnvNodes),
+    [activeEnvNodes, edges],
+  );
 
   const buildPersistedState = useCallback(() => ({
     ...(projectLayoutMeta || {}),
@@ -172,6 +215,11 @@ export default function App() {
     const layered = normalizeLayeredProject(meta);
     setProjectLayoutMeta(meta);
     setLayeredProject(layered);
+    setActiveEnvironment(current => {
+      if (!layered) return null;
+      if (current && layered.environments.includes(current)) return current;
+      return layered.environments[0];
+    });
     setCanvasMode(layered ? 'swimlane' : 'freeform');
 
     if (state?.resources?.length > 0) {
@@ -235,7 +283,7 @@ export default function App() {
         const selectedLayered = normalizeLayeredProject(extractLayoutMeta(state));
         setTool(selectedTool);
         if (shouldParseResourcesFromDisk(state)) {
-          api.getResources(saved.current.projectId, selectedTool, envForTool(selectedTool, selectedLayered)).then(applyParsedResources).catch(() => {});
+          api.getResources(saved.current.projectId, selectedTool, envForResourceLoad(selectedTool, selectedLayered)).then(applyParsedResources).catch(() => {});
         }
       }).catch(() => {});
     }
@@ -273,7 +321,7 @@ export default function App() {
       const selectedLayered = normalizeLayeredProject(extractLayoutMeta(state));
       setTool(selectedTool);
       if (shouldParseResourcesFromDisk(state)) {
-        const parsed = await api.getResources(proj.name, selectedTool, envForTool(selectedTool, selectedLayered));
+        const parsed = await api.getResources(proj.name, selectedTool, envForResourceLoad(selectedTool, selectedLayered));
         applyParsedResources(parsed);
       }
       setNotification(`Opened project: ${proj.name}`);
@@ -282,6 +330,7 @@ export default function App() {
       // No saved state — start fresh
       setProjectLayoutMeta(null);
       setLayeredProject(null);
+      setActiveEnvironment(null);
       setCanvasMode('freeform');
     }
   }, [applyParsedResources, applyProjectState]);
@@ -411,12 +460,12 @@ export default function App() {
   // Fetch resource catalog from backend when tool changes
   useEffect(() => {
     if (!tool) return;
-    api.getCatalog(tool).then(cat => {
+    api.getCatalog(concreteTool).then(cat => {
       setCatalogResources(cat.resources || []);
     }).catch(() => {
       setCatalogResources(FALLBACK_RESOURCES);
     });
-  }, [tool]);
+  }, [concreteTool, tool]);
 
   // Generate code preview whenever nodes change
   useEffect(() => {
@@ -424,31 +473,51 @@ export default function App() {
       setSyncCode('');
       return;
     }
-    const code = generateLocalCode(tool, nodes, edges);
+    const code = generateLocalCode(concreteTool, activeEnvNodes, activeEnvEdges);
     setSyncCode(code);
-  }, [nodes, edges, tool]);
+  }, [activeEnvEdges, activeEnvNodes, concreteTool, tool]);
 
   // Sync to disk (debounced) — syncs even when nodes is empty so that
   // deleting the last resource clears the generated file on disk.
   const syncTimer = useRef<ReturnType<typeof setTimeout>>();
+  const pendingSync = useRef<{ projectId: string; tool: string; nodes: Resource[]; edges: Edge[]; env?: string } | null>(null);
   const hasCreatedProject = useRef(false);
   const initialLoadDone = useRef(false);
+  const syncScope = `${projectId}:${tool || ''}:${pulumiEnv || ''}`;
+  const lastSyncScope = useRef('');
+  const flushPendingSync = useCallback(() => {
+    const snapshot = pendingSync.current;
+    if (!snapshot) return;
+    pendingSync.current = null;
+    syncTimer.current = undefined;
+    isSyncing.current = true;
+    api.syncToDisk(snapshot.projectId, snapshot.tool, snapshot.nodes, snapshot.edges, snapshot.env).catch(() => {}).finally(() => {
+      setTimeout(() => { isSyncing.current = false; }, 1500);
+    });
+  }, []);
   useEffect(() => {
     if (!tool || !hasCreatedProject.current || !projectId) return;
     // Skip the first sync after opening a project — the restored state
     // doesn't need to be written back immediately (it came from disk).
     if (!initialLoadDone.current) {
       initialLoadDone.current = true;
+      lastSyncScope.current = syncScope;
       return;
     }
+    if (lastSyncScope.current && lastSyncScope.current !== syncScope) {
+      clearTimeout(syncTimer.current);
+      syncTimer.current = undefined;
+      flushPendingSync();
+      lastSyncScope.current = syncScope;
+      return;
+    }
+    lastSyncScope.current = syncScope;
     clearTimeout(syncTimer.current);
+    pendingSync.current = { projectId, tool, nodes: activeEnvNodes, edges: activeEnvEdges, env: pulumiEnv };
     syncTimer.current = setTimeout(() => {
-      isSyncing.current = true;
-      api.syncToDisk(projectId, tool, nodes, edges, pulumiEnv).catch(() => {}).finally(() => {
-        setTimeout(() => { isSyncing.current = false; }, 1500);
-      });
+      flushPendingSync();
     }, 2000);
-  }, [nodes, edges, tool, projectId, pulumiEnv]);
+  }, [activeEnvEdges, activeEnvNodes, flushPendingSync, projectId, pulumiEnv, syncScope, tool]);
 
   // ─── Handlers ───
 
@@ -460,6 +529,7 @@ export default function App() {
       label: resourceDef.label,
       icon: resourceDef.icon,
       properties: { ...(resourceDef.defaults || {}) },
+      file: activeResourceFile,
       x: 100 + Math.random() * 280,
       y: 80 + Math.random() * 180,
     };
@@ -490,7 +560,7 @@ export default function App() {
       return [...prev, node];
     });
     setSelectedNode(node.id);
-  }, [catalogResources]);
+  }, [activeResourceFile, catalogResources]);
 
   const removeNode = useCallback((id: string) => {
     setNodes(prev => prev.filter(n => n.id !== id));
@@ -748,7 +818,7 @@ export default function App() {
     setCodeSaving(true);
     isSyncing.current = true;
     try {
-      const fileName = tool === 'pulumi' ? 'index.ts' : `main${TOOLS[tool]?.ext || '.tf'}`;
+      const fileName = concreteTool === 'pulumi' ? 'index.ts' : `main${TOOLS[concreteTool]?.ext || '.tf'}`;
       await api.syncCodeToDisk(projectId, tool, value, fileName, pulumiEnv);
       setNotification(`Saved ${fileName}`);
       setTimeout(() => setNotification(null), 3000);
@@ -759,12 +829,13 @@ export default function App() {
       setCodeSaving(false);
       setTimeout(() => { isSyncing.current = false; }, 1500);
     }
-  }, [projectId, pulumiEnv, tool]);
+  }, [concreteTool, projectId, pulumiEnv, tool]);
 
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
     setProjectLayoutMeta(null);
     setLayeredProject(null);
+    setActiveEnvironment(null);
     setCanvasMode('freeform');
     // Lock the project ID at creation time so renaming the display input
     // can't silently redirect API calls to a different directory.
@@ -1038,6 +1109,7 @@ export default function App() {
                             setProjectId(projectName);
                             setProjectLayoutMeta(null);
                             setLayeredProject(null);
+                            setActiveEnvironment(null);
                             setCanvasMode('freeform');
                             hasCreatedProject.current = true;
                             initialLoadDone.current = true;
@@ -1087,11 +1159,11 @@ export default function App() {
     );
   }
 
-  const ct = TOOLS[tool] || TOOLS.terraform;
+  const ct = TOOLS[tool] || TOOLS[concreteTool] || TOOLS.terraform;
   const selected = nodes.find(n => n.id === selectedNode);
-  const codeFileLabel = tool === 'pulumi'
+  const codeFileLabel = concreteTool === 'pulumi'
     ? (pulumiEnv ? `environments/${pulumiEnv}/index.ts` : 'index.ts')
-    : `main${ct.ext}`;
+    : (tool === 'multi' && pulumiEnv ? `environments/${pulumiEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : `main${TOOLS[concreteTool]?.ext || ct.ext}`);
 
   // ─── Main UI ───
   return (
@@ -1112,7 +1184,7 @@ export default function App() {
             // Refresh saved projects list
             api.listProjectStates().then(setSavedProjects).catch(() => {});
             setTool(null); resetNodes([]); setEdges([]); setChatMessages([]); setTerminalOutput([]);
-            setProjectLayoutMeta(null); setLayeredProject(null); setCanvasMode('freeform');
+            setProjectLayoutMeta(null); setLayeredProject(null); setActiveEnvironment(null); setCanvasMode('freeform');
             initialLoadDone.current = false; hasCreatedProject.current = false;
           }}>←</button>
           <span style={{ ...S.badge, background: ct.color + '22', color: ct.color }}>{ct.icon} {ct.name}</span>
@@ -1372,6 +1444,19 @@ export default function App() {
           onClick={() => { setSelectedNode(null); setSelectedEdge(null); }}>
           {layeredProject && (
             <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 10, display: 'flex', gap: 6, padding: 4, background: 'var(--bg-elev-1)', border: '1px solid var(--border-main)', borderRadius: 8 }}>
+              {showEnvironmentSelector && layeredProject.environments.map(env => {
+                const envTool = layeredProject.environmentTools?.[env];
+                return (
+                  <button
+                    key={env}
+                    style={{ ...S.cmd, background: activeEnvironment === env ? ct.color + '22' : 'transparent', color: activeEnvironment === env ? ct.color : 'var(--text-muted)', padding: '5px 9px' }}
+                    onClick={(e) => { e.stopPropagation(); setActiveEnvironment(env); }}
+                    title={envTool ? `${env} uses ${envTool}` : env}
+                  >
+                    {envTool ? `${env} (${envTool})` : env}
+                  </button>
+                );
+              })}
               {(['swimlane', 'freeform'] as const).map(mode => (
                 <button
                   key={mode}
@@ -1647,7 +1732,7 @@ export default function App() {
                 )}
                 <CodeEditor
                   value={syncCode}
-                  filePath={tool === 'pulumi' ? 'index.ts' : `main${ct.ext}`}
+                  filePath={concreteTool === 'pulumi' ? 'index.ts' : `main${TOOLS[concreteTool]?.ext || ct.ext}`}
                   readOnly={false}
                   onChange={setSyncCode}
                   onSave={saveCodeToDisk}

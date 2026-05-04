@@ -20,6 +20,7 @@ type State struct {
 	ProjectName  string            `json:"project_name,omitempty"`
 	Cloud        string            `json:"cloud,omitempty"`
 	Environments []string          `json:"environments,omitempty"`
+	EnvTools     map[string]string `json:"environment_tools,omitempty"`
 	Modules      json.RawMessage   `json:"modules,omitempty"`
 	Tags         map[string]string `json:"tags,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
