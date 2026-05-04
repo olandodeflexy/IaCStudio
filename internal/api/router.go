@@ -1053,9 +1053,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		if mainCode == "" {
 			mainCode = code
 		}
+		responseFile, relErr := filepath.Rel(projectPath, rootMainFile)
+		if relErr != nil || responseFile == "." || strings.HasPrefix(responseFile, "..") {
+			responseFile = filepath.Base(rootMainFile)
+		}
 
 		_ = json.NewEncoder(w).Encode(map[string]interface{}{
-			"file": filepath.Join(syncWorkdir, "main"+ext),
+			"file": responseFile,
 			"code": mainCode,
 		})
 	})

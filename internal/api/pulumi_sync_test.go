@@ -227,6 +227,16 @@ func TestHybridResourceSyncResolvesSimpleRelativeFileUnderEnv(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("sync should 200, got %d", resp.StatusCode)
 	}
+	var got struct {
+		File string `json:"file"`
+		Code string `json:"code"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode sync response: %v", err)
+	}
+	if filepath.ToSlash(got.File) != "environments/prod/main.tf" {
+		t.Fatalf("sync response file = %q, want environments/prod/main.tf", got.File)
+	}
 	if _, err := os.Stat(filepath.Join(projectDir, "main.tf")); !os.IsNotExist(err) {
 		t.Fatalf("simple relative resource file should not write root main.tf, stat err=%v", err)
 	}

@@ -480,10 +480,21 @@ export default function App() {
   // Sync to disk (debounced) — syncs even when nodes is empty so that
   // deleting the last resource clears the generated file on disk.
   const syncTimer = useRef<ReturnType<typeof setTimeout>>();
+  const pendingSync = useRef<{ projectId: string; tool: string; nodes: Resource[]; edges: Edge[]; env?: string } | null>(null);
   const hasCreatedProject = useRef(false);
   const initialLoadDone = useRef(false);
   const syncScope = `${projectId}:${tool || ''}:${pulumiEnv || ''}`;
   const lastSyncScope = useRef('');
+  const flushPendingSync = useCallback(() => {
+    const snapshot = pendingSync.current;
+    if (!snapshot) return;
+    pendingSync.current = null;
+    syncTimer.current = undefined;
+    isSyncing.current = true;
+    api.syncToDisk(snapshot.projectId, snapshot.tool, snapshot.nodes, snapshot.edges, snapshot.env).catch(() => {}).finally(() => {
+      setTimeout(() => { isSyncing.current = false; }, 1500);
+    });
+  }, []);
   useEffect(() => {
     if (!tool || !hasCreatedProject.current || !projectId) return;
     // Skip the first sync after opening a project — the restored state
@@ -494,19 +505,19 @@ export default function App() {
       return;
     }
     if (lastSyncScope.current && lastSyncScope.current !== syncScope) {
-      lastSyncScope.current = syncScope;
       clearTimeout(syncTimer.current);
+      syncTimer.current = undefined;
+      flushPendingSync();
+      lastSyncScope.current = syncScope;
       return;
     }
     lastSyncScope.current = syncScope;
     clearTimeout(syncTimer.current);
+    pendingSync.current = { projectId, tool, nodes: activeEnvNodes, edges: activeEnvEdges, env: pulumiEnv };
     syncTimer.current = setTimeout(() => {
-      isSyncing.current = true;
-      api.syncToDisk(projectId, tool, activeEnvNodes, activeEnvEdges, pulumiEnv).catch(() => {}).finally(() => {
-        setTimeout(() => { isSyncing.current = false; }, 1500);
-      });
+      flushPendingSync();
     }, 2000);
-  }, [activeEnvEdges, activeEnvNodes, projectId, pulumiEnv, syncScope, tool]);
+  }, [activeEnvEdges, activeEnvNodes, flushPendingSync, projectId, pulumiEnv, syncScope, tool]);
 
   // ─── Handlers ───
 
