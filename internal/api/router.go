@@ -1072,6 +1072,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		projectRoot := projectPath
 
 		limitBody(w, r)
 		var req struct {
@@ -1099,18 +1100,19 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			return
 		}
 
-		// When Env is set, rebase projectPath into environments/<env>
+		// When Env is set, run from environments/<env>
 		// so the runner finds Pulumi.yaml / main.tf in the right
 		// working directory. The subdir must exist and be contained
 		// in projectPath — safeSubdir below rejects traversal and
 		// rejects paths that point at a file instead of a directory.
+		runPath := projectPath
 		if req.Env != "" {
 			subPath, subErr := safeSubdir(projectPath, "environments", req.Env)
 			if subErr != nil {
 				http.Error(w, "invalid env: "+subErr.Error(), 400)
 				return
 			}
-			projectPath = subPath
+			runPath = subPath
 		}
 
 		// Block apply/destroy unless:
@@ -1119,7 +1121,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// 3. No error-severity policy findings exist, OR the client sets
 		//    acknowledged:true after reading the findings.
 		if run.RequiresApproval(req.Command) {
-			if !hasPlan(projectPath) {
+			if !hasPlan(runPath) {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
 				_ = json.NewEncoder(w).Encode(map[string]string{
@@ -1143,7 +1145,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				// error (engine crash, missing binary, malformed plan) we
 				// fall through to execution — apply should not be gated by
 				// a broken policy engine.
-				if findings, blocking := evaluateBlockingPolicies(r.Context(), projectPath, effectiveTool); blocking {
+				if findings, blocking := evaluateBlockingPolicies(r.Context(), projectRoot, runPath, effectiveTool); blocking {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusConflict)
 					_ = json.NewEncoder(w).Encode(map[string]any{
@@ -1163,15 +1165,15 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// a request-scoped context and kill the command. SafeRunner applies its
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
-			result, err := run.Execute(context.Background(), projectPath, effectiveTool, req.Command, req.Env)
+			result, err := run.Execute(context.Background(), runPath, effectiveTool, req.Command, req.Env)
 			// Only record a successful plan — failed/cancelled plans don't count.
 			// 'preview' is Pulumi's equivalent of terraform plan; without it
 			// here, a pulumi up following a successful preview would be
-			// blocked with 'plan_required'. projectPath already reflects
-			// the env rebase so dev + prod track their plan state
+			// blocked with 'plan_required'. runPath reflects any env rebase
+			// so dev + prod track their plan state
 			// independently.
 			if err == nil && (req.Command == "plan" || req.Command == "preview" || req.Command == "check") {
-				recordPlan(projectPath)
+				recordPlan(runPath)
 			}
 			msg := map[string]interface{}{
 				"type":    "terminal",

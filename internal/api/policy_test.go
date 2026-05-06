@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -107,6 +108,9 @@ func TestPolicyRunBuiltinOnly(t *testing.T) {
 		t.Fatalf("POST: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("policy run should 200, got %d", resp.StatusCode)
+	}
 
 	var got policyRunResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
@@ -249,6 +253,111 @@ func TestPolicyRunPulumiEnvRunsCrossGuard(t *testing.T) {
 	}
 	if !got.Blocking {
 		t.Fatal("mandatory CrossGuard finding should be blocking")
+	}
+}
+
+func TestPolicyRunHybridTerraformEnvUsesRootPolicies(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	envDir := filepath.Join(project, "environments", "prod")
+	policyDir := filepath.Join(project, "policies", "opa")
+	for _, dir := range []string{envDir, policyDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(project, ".iac-studio.json"), []byte(`{
+  "layout": "layered-v1",
+  "tool": "multi",
+  "environments": ["prod"],
+  "environment_tools": {"prod": "terraform"}
+}`), 0o644); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "main.tf"), []byte(`# env-scoped terraform
+`), 0o644); err != nil {
+		t.Fatalf("write env main.tf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "tfplan.json"), []byte(`{"resource_changes":[]}`), 0o644); err != nil {
+		t.Fatalf("write env tfplan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(policyDir, "policy.rego"), []byte(`package iacstudio.test
+
+deny[msg] {
+  msg := "root policy denied env plan"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write root rego: %v", err)
+	}
+
+	srv := httptest.NewServer(policyMux(root))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{
+		"engines": []string{"opa"},
+		"tool":    "multi",
+		"env":     "prod",
+	})
+	resp, err := http.Post(srv.URL+"/api/projects/demo/policy/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var got policyRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Results) != 1 || got.Results[0].Engine != "opa" {
+		t.Fatalf("expected a single opa result, got %+v", got.Results)
+	}
+	if len(got.Findings) != 1 {
+		t.Fatalf("expected root OPA policy finding for env plan, got %+v", got)
+	}
+	if !got.Blocking {
+		t.Fatal("root OPA deny finding should be blocking")
+	}
+}
+
+func TestEvaluateBlockingPoliciesUsesRootPoliciesAndEnvPlan(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	envDir := filepath.Join(project, "environments", "prod")
+	policyDir := filepath.Join(project, "policies", "opa")
+	for _, dir := range []string{envDir, policyDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "main.tf"), []byte(`# env-scoped terraform
+`), 0o644); err != nil {
+		t.Fatalf("write env main.tf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "tfplan.json"), []byte(`{"resource_changes":[]}`), 0o644); err != nil {
+		t.Fatalf("write env tfplan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(policyDir, "policy.rego"), []byte(`package iacstudio.test
+
+deny[msg] {
+  msg := "root policy denied env apply"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write root rego: %v", err)
+	}
+
+	findings, blocking := evaluateBlockingPolicies(context.Background(), project, envDir, "terraform")
+	if !blocking {
+		t.Fatalf("expected root policy to block env apply, findings=%+v", findings)
+	}
+	hasOPA := false
+	for _, finding := range findings {
+		if finding.Engine == "opa" && strings.Contains(finding.Message, "root policy denied env apply") {
+			hasOPA = true
+			break
+		}
+	}
+	if !hasOPA {
+		t.Fatalf("expected OPA finding from root policy, got %+v", findings)
 	}
 }
 
