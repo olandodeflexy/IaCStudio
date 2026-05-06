@@ -15,6 +15,10 @@ export const TOOLS: Record<string, { name: string; icon: string; color: string; 
   multi: { name: 'Hybrid', icon: 'HY', color: '#66B7D8', ext: '.tf' },
 };
 
+export const PROJECT_CREATION_TOOLS = Object.fromEntries(
+  Object.entries(TOOLS).filter(([key]) => key !== 'multi')
+) as Record<string, { name: string; icon: string; color: string; ext: string }>;
+
 // Fallback resource list for when the backend catalog is unreachable —
 // keeps the palette usable offline so the user isn't stuck on an empty
 // sidebar.

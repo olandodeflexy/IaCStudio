@@ -17,6 +17,7 @@ import type { LayeredProject, LayeredModule } from './types';
 import { envForResourceLoad, envForTool, shouldParseResourcesFromDisk, toolForEnv } from './projectLoad';
 import {
   TOOLS,
+  PROJECT_CREATION_TOOLS,
   FALLBACK_RESOURCES,
   uid,
   edgeId,
@@ -53,18 +54,26 @@ const extractLayoutMeta = (state: any) => {
   return meta;
 };
 
-const normalizeLayeredProject = (state: any): LayeredProject | null => {
+export const normalizeLayeredProject = (state: any): LayeredProject | null => {
   if (state?.layout !== 'layered-v1') return null;
   const environments = Array.isArray(state.environments)
     ? state.environments.filter((env: unknown): env is string => typeof env === 'string' && env.length > 0)
     : [];
   if (environments.length === 0) return null;
-  const environmentTools = state.environment_tools && typeof state.environment_tools === 'object'
-    ? Object.fromEntries(
-        Object.entries(state.environment_tools)
-          .filter(([env, envTool]) => environments.includes(env) && typeof envTool === 'string' && envTool.length > 0)
-      ) as Record<string, string>
-    : undefined;
+  const rawEnvironmentTools = state.environment_tools;
+  let environmentTools: Record<string, string> | undefined;
+  if (
+    rawEnvironmentTools &&
+    typeof rawEnvironmentTools === 'object' &&
+    !Array.isArray(rawEnvironmentTools) &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(rawEnvironmentTools))
+  ) {
+    const entries = Object.entries(rawEnvironmentTools)
+      .filter(([env, envTool]) => environments.includes(env) && typeof envTool === 'string' && envTool.length > 0);
+    if (entries.length > 0) {
+      environmentTools = Object.fromEntries(entries) as Record<string, string>;
+    }
+  }
 
   const rawModules = Array.isArray(state.modules) ? state.modules : [];
   const modules: LayeredModule[] = rawModules
@@ -181,17 +190,17 @@ export default function App() {
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
   const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
   const showEnvironmentSelector = Boolean(layeredProject && (tool === 'multi' || layeredProject.environmentTools));
-  const pulumiEnv = envForTool(tool || '', layeredProject, activeEnvironment);
-  const activeTool = toolForEnv(tool || '', layeredProject, pulumiEnv);
+  const activeEnv = envForTool(tool || '', layeredProject, activeEnvironment);
+  const activeTool = toolForEnv(tool || '', layeredProject, activeEnv);
   const concreteTool = activeTool && activeTool !== 'multi'
     ? activeTool
     : (tool && tool !== 'multi' ? tool : 'terraform');
   const activeResourceFile = concreteTool === 'pulumi'
-    ? (pulumiEnv ? `environments/${pulumiEnv}/index.ts` : undefined)
-    : (tool === 'multi' && pulumiEnv ? `environments/${pulumiEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : undefined);
+    ? (activeEnv ? `environments/${activeEnv}/index.ts` : undefined)
+    : (tool === 'multi' && activeEnv ? `environments/${activeEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : undefined);
   const activeEnvNodes = useMemo(
-    () => resourcesForEnv(nodes, (tool === 'multi' || tool === 'pulumi') ? pulumiEnv : undefined),
-    [nodes, pulumiEnv, tool],
+    () => resourcesForEnv(nodes, (tool === 'multi' || tool === 'pulumi') ? activeEnv : undefined),
+    [nodes, activeEnv, tool],
   );
   const activeEnvEdges = useMemo(
     () => edgesForResources(edges, activeEnvNodes),
@@ -483,7 +492,7 @@ export default function App() {
   const pendingSync = useRef<{ projectId: string; tool: string; nodes: Resource[]; edges: Edge[]; env?: string } | null>(null);
   const hasCreatedProject = useRef(false);
   const initialLoadDone = useRef(false);
-  const syncScope = `${projectId}:${tool || ''}:${pulumiEnv || ''}`;
+  const syncScope = `${projectId}:${tool || ''}:${activeEnv || ''}`;
   const lastSyncScope = useRef('');
   const flushPendingSync = useCallback(() => {
     const snapshot = pendingSync.current;
@@ -513,11 +522,11 @@ export default function App() {
     }
     lastSyncScope.current = syncScope;
     clearTimeout(syncTimer.current);
-    pendingSync.current = { projectId, tool, nodes: activeEnvNodes, edges: activeEnvEdges, env: pulumiEnv };
+    pendingSync.current = { projectId, tool, nodes: activeEnvNodes, edges: activeEnvEdges, env: activeEnv };
     syncTimer.current = setTimeout(() => {
       flushPendingSync();
     }, 2000);
-  }, [activeEnvEdges, activeEnvNodes, flushPendingSync, projectId, pulumiEnv, syncScope, tool]);
+  }, [activeEnvEdges, activeEnvNodes, flushPendingSync, projectId, activeEnv, syncScope, tool]);
 
   // ─── Handlers ───
 
@@ -716,7 +725,7 @@ export default function App() {
     setTerminalOutput(prev => [...prev, `$ ${command}`, '']);
     api.runCommand(projectId, tool, command, {
       approved: needsApproval,
-      env: pulumiEnv,
+      env: activeEnv,
     }).catch(err => {
       if (needsApproval && isPolicyBlockedError(err)) {
         const findings = err.payload?.findings ?? [];
@@ -734,7 +743,7 @@ export default function App() {
         setTerminalOutput(prev => [...prev, `$ ${command} --acknowledged`, '']);
         api.runCommand(projectId, tool, command, {
           approved: true,
-          env: pulumiEnv,
+          env: activeEnv,
           acknowledged: true,
         }).catch(overrideErr => {
           setTerminalOutput(prev => [...prev, `Error: ${overrideErr.message}`]);
@@ -819,7 +828,7 @@ export default function App() {
     isSyncing.current = true;
     try {
       const fileName = concreteTool === 'pulumi' ? 'index.ts' : `main${TOOLS[concreteTool]?.ext || '.tf'}`;
-      await api.syncCodeToDisk(projectId, tool, value, fileName, pulumiEnv);
+      await api.syncCodeToDisk(projectId, tool, value, fileName, activeEnv);
       setNotification(`Saved ${fileName}`);
       setTimeout(() => setNotification(null), 3000);
     } catch (err: any) {
@@ -829,7 +838,7 @@ export default function App() {
       setCodeSaving(false);
       setTimeout(() => { isSyncing.current = false; }, 1500);
     }
-  }, [concreteTool, projectId, pulumiEnv, tool]);
+  }, [concreteTool, projectId, activeEnv, tool]);
 
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
@@ -905,7 +914,7 @@ export default function App() {
           <h1 style={S.title}>{savedProjects.length > 0 ? 'New Project' : 'Choose your IaC tool'}</h1>
           <p style={S.subtitle}>Visual infrastructure builder with AI-powered assistance</p>
           <div style={S.cardGrid}>
-            {Object.entries(TOOLS).map(([key, t]) => {
+            {Object.entries(PROJECT_CREATION_TOOLS).map(([key, t]) => {
               const detected = detectedTools.find(d => d.name === t.name);
               return (
                 <button key={key} className="tool-card panel-reveal" style={{ ...S.card, borderColor: t.color + '33' }}
@@ -1162,8 +1171,8 @@ export default function App() {
   const ct = TOOLS[tool] || TOOLS[concreteTool] || TOOLS.terraform;
   const selected = nodes.find(n => n.id === selectedNode);
   const codeFileLabel = concreteTool === 'pulumi'
-    ? (pulumiEnv ? `environments/${pulumiEnv}/index.ts` : 'index.ts')
-    : (tool === 'multi' && pulumiEnv ? `environments/${pulumiEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : `main${TOOLS[concreteTool]?.ext || ct.ext}`);
+    ? (activeEnv ? `environments/${activeEnv}/index.ts` : 'index.ts')
+    : (tool === 'multi' && activeEnv ? `environments/${activeEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : `main${TOOLS[concreteTool]?.ext || ct.ext}`);
 
   // ─── Main UI ───
   return (
@@ -1744,7 +1753,7 @@ export default function App() {
           )}
           {rightTab === 'policy' && (
             <div style={{ flex: 1, minHeight: 0 }}>
-              <PolicyStudioPanel projectName={projectId} tool={tool} env={pulumiEnv} />
+              <PolicyStudioPanel projectName={projectId} tool={tool} env={activeEnv} />
             </div>
           )}
           {rightTab === 'scan' && (
