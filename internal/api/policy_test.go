@@ -256,6 +256,55 @@ func TestPolicyRunPulumiEnvRunsCrossGuard(t *testing.T) {
 	}
 }
 
+func TestPolicyRunHybridPulumiEnvBuiltinUsesTSParser(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	envDir := filepath.Join(project, "environments", "dev")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir pulumi env: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".iac-studio.json"), []byte(`{
+  "layout": "layered-v1",
+  "tool": "multi",
+  "environments": ["dev"],
+  "environment_tools": {"dev": "pulumi"}
+}`), 0o644); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
+	writePulumiPolicyProgram(t, envDir)
+
+	srv := httptest.NewServer(policyMux(root))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{
+		"engines": []string{"builtin"},
+		"tool":    "multi",
+		"env":     "dev",
+	})
+	resp, err := http.Post(srv.URL+"/api/projects/demo/policy/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("policy run should 200, got %d", resp.StatusCode)
+	}
+
+	var got policyRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Results) != 1 || got.Results[0].Engine != "builtin" {
+		t.Fatalf("expected a single builtin result, got %+v", got.Results)
+	}
+	if len(got.Findings) == 0 {
+		t.Fatalf("builtin engine should evaluate Pulumi TS resources, got %+v", got)
+	}
+	if !got.Blocking {
+		t.Fatal("Pulumi TS builtin findings should be blocking")
+	}
+}
+
 func TestPolicyRunHybridTerraformEnvUsesRootPolicies(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "demo")
@@ -361,6 +410,26 @@ deny[msg] {
 	}
 }
 
+func TestEvaluateBlockingPoliciesPulumiUsesTSParser(t *testing.T) {
+	project := t.TempDir()
+	writePulumiPolicyProgram(t, project)
+
+	findings, blocking := evaluateBlockingPolicies(context.Background(), project, project, "pulumi")
+	if !blocking {
+		t.Fatalf("expected Pulumi TS resource policy finding to block apply, findings=%+v", findings)
+	}
+	hasBuiltin := false
+	for _, finding := range findings {
+		if finding.Engine == "builtin" && finding.Resource == "aws_s3_bucket.logs" {
+			hasBuiltin = true
+			break
+		}
+	}
+	if !hasBuiltin {
+		t.Fatalf("expected builtin finding for parsed Pulumi S3 bucket, got %+v", findings)
+	}
+}
+
 func fakePolicyPulumi(t *testing.T, stdout string, exitCode int) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -373,4 +442,16 @@ func fakePolicyPulumi(t *testing.T, stdout string, exitCode int) string {
 		t.Fatalf("write fake pulumi: %v", err)
 	}
 	return path
+}
+
+func writePulumiPolicyProgram(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "index.ts"), []byte(`import * as aws from "@pulumi/aws";
+
+const logs = new aws.s3.Bucket("logs", {
+  bucket: "demo-logs",
+});
+`), 0o644); err != nil {
+		t.Fatalf("write index.ts: %v", err)
+	}
 }

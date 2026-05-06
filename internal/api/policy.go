@@ -14,6 +14,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/policy/engines/crossguard"
 	"github.com/iac-studio/iac-studio/internal/policy/engines/opa"
 	"github.com/iac-studio/iac-studio/internal/policy/engines/sentinel"
+	pulumigen "github.com/iac-studio/iac-studio/internal/pulumi"
 )
 
 // defaultPolicyEngines is the list of engines registered on startup. Order
@@ -124,12 +125,7 @@ func registerPolicyRoutes(mux *http.ServeMux, projectsDir string) {
 				planJSON = data
 			}
 		}
-		var resources []parser.Resource
-		if p := parser.ForTool(tool); p != nil {
-			if parsed, err := p.ParseDir(workDir); err == nil {
-				resources = parsed
-			}
-		}
+		resources := parsePolicyResources(workDir, tool)
 
 		selected := filterEngines(engs, req.EngineFilter)
 		results := engines.RunAll(r.Context(), selected, engines.EvalInput{
@@ -195,12 +191,7 @@ func evaluateBlockingPolicies(ctx context.Context, projectRoot, workDir, tool st
 	if workDir == "" {
 		workDir = projectRoot
 	}
-	var resources []parser.Resource
-	if p := parser.ForTool(tool); p != nil {
-		if parsed, err := p.ParseDir(workDir); err == nil {
-			resources = parsed
-		}
-	}
+	resources := parsePolicyResources(workDir, tool)
 
 	var planJSON []byte
 	if data, err := os.ReadFile(filepath.Join(workDir, "tfplan.json")); err == nil {
@@ -220,4 +211,20 @@ func evaluateBlockingPolicies(ctx context.Context, projectRoot, workDir, tool st
 		}
 	}
 	return findings, false
+}
+
+func parsePolicyResources(workDir, tool string) []parser.Resource {
+	var (
+		resources []parser.Resource
+		err       error
+	)
+	if tool == "pulumi" {
+		resources, err = (&pulumigen.TSParser{}).ParseDir(workDir)
+	} else if p := parser.ForTool(tool); p != nil {
+		resources, err = p.ParseDir(workDir)
+	}
+	if err != nil {
+		return nil
+	}
+	return resources
 }
