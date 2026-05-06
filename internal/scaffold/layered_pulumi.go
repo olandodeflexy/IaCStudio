@@ -36,6 +36,29 @@ func validateTagValue(key, value string) error {
 	return nil
 }
 
+func pulumiRegionInput(values map[string]any, cloud string) (string, error) {
+	region := stringInput(values, "region", "")
+	if region == "" {
+		switch cloud {
+		case "gcp":
+			region = "us-central1"
+		case "azure":
+			region = "WestUS2"
+		default:
+			region = "us-east-1"
+		}
+	}
+	if cloud == "gcp" && !gcpRegionRE.MatchString(region) {
+		switch strings.ToUpper(region) {
+		case "US", "EU", "ASIA":
+			region = strings.ToUpper(region)
+		default:
+			return "", fmt.Errorf("region %q is not a valid GCP region (expected canonical form like us-central1 or short multi-region US/EU/ASIA)", region)
+		}
+	}
+	return region, nil
+}
+
 // truncateForBucketName clamps a base name to max chars while keeping
 // the name valid as an S3/GCS bucket (must end in an alphanumeric,
 // no trailing '-' or '_'). Used when composing `<project>-seed` +
@@ -138,39 +161,9 @@ func (b *LayeredPulumiBlueprint) Render(values map[string]any) ([]File, error) {
 			return nil, err
 		}
 	}
-	// Default is empty — per-cloud fallback happens inside Pulumi's
-	// generator (aws: us-east-1, gcp: us-central1, azure: WestUS2).
-	// Only substitute a cloud-appropriate default at scaffold time so
-	// the seed resource locations match what ends up in Pulumi.<env>.yaml.
-	region := stringInput(values, "region", "")
-	if region == "" {
-		switch cloud {
-		case "gcp":
-			region = "us-central1"
-		case "azure":
-			region = "WestUS2"
-		default:
-			region = "us-east-1"
-		}
-	}
-	// Cloud-shape validation: an AWS-shaped region (us-east-1) on a
-	// GCP scaffold would emit gcp:region: us-east-1 in the stack
-	// config — invalid at provider time, AND the seed bucket would
-	// silently fall back to "US" multi-region, producing a confusing
-	// mismatch. Reject up front so the caller fixes the input.
-	if cloud == "gcp" && !gcpRegionRE.MatchString(region) {
-		// Allow short multi-regions only — GCS accepts US, EU, ASIA
-		// (and a small set of named multi-regions). Anything outside
-		// that allowlist would silently uppercase to a still-invalid
-		// value and fail at provider time. Normalise casing so a
-		// lower/mixed input ("us", "Us") becomes canonical before
-		// hitting Pulumi.<env>.yaml.
-		switch strings.ToUpper(region) {
-		case "US", "EU", "ASIA":
-			region = strings.ToUpper(region)
-		default:
-			return nil, fmt.Errorf("region %q is not a valid GCP region (expected canonical form like us-central1 or short multi-region US/EU/ASIA)", region)
-		}
+	region, err := pulumiRegionInput(values, cloud)
+	if err != nil {
+		return nil, err
 	}
 	owner := stringInput(values, "owner_tag", "platform")
 	if err := validateTagValue("owner_tag", owner); err != nil {

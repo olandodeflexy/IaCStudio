@@ -172,29 +172,6 @@ func (b *LayeredHybridBlueprint) Render(values map[string]any) ([]File, error) {
 	return files, nil
 }
 
-func pulumiRegionInput(values map[string]any, cloud string) (string, error) {
-	region := stringInput(values, "region", "")
-	if region == "" {
-		switch cloud {
-		case "gcp":
-			region = "us-central1"
-		case "azure":
-			region = "WestUS2"
-		default:
-			region = "us-east-1"
-		}
-	}
-	if cloud == "gcp" && !gcpRegionRE.MatchString(region) {
-		switch strings.ToUpper(region) {
-		case "US", "EU", "ASIA":
-			region = strings.ToUpper(region)
-		default:
-			return "", fmt.Errorf("region %q is not a valid GCP region (expected canonical form like us-central1 or short multi-region US/EU/ASIA)", region)
-		}
-	}
-	return region, nil
-}
-
 func renderPulumiEnvFiles(name, cloud, env, owner, region string) ([]File, error) {
 	const maxBase = 60
 	projName := truncateForBucketName(name, maxBase) + "-" + env

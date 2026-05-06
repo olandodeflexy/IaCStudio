@@ -129,6 +129,28 @@ func TestLayeredPulumi_RejectsBadName(t *testing.T) {
 	}
 }
 
+func TestPulumiRegionInputDefaultsAndValidatesGCP(t *testing.T) {
+	region, err := pulumiRegionInput(map[string]any{}, "gcp")
+	if err != nil {
+		t.Fatalf("pulumiRegionInput default gcp: %v", err)
+	}
+	if region != "us-central1" {
+		t.Fatalf("default gcp region = %q, want us-central1", region)
+	}
+
+	region, err = pulumiRegionInput(map[string]any{"region": "eu"}, "gcp")
+	if err != nil {
+		t.Fatalf("pulumiRegionInput gcp multi-region: %v", err)
+	}
+	if region != "EU" {
+		t.Fatalf("gcp multi-region = %q, want EU", region)
+	}
+
+	if _, err := pulumiRegionInput(map[string]any{"region": "us-east-1"}, "gcp"); err == nil {
+		t.Fatal("expected GCP region validation error")
+	}
+}
+
 func TestLayeredPulumi_LifecycleScriptsAreExecutable(t *testing.T) {
 	bp := &LayeredPulumiBlueprint{}
 	files, err := bp.Render(map[string]any{

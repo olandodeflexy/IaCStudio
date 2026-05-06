@@ -105,18 +105,18 @@ export const normalizeLayeredProject = (state: any): LayeredProject | null => {
   return { layout: 'layered-v1', environments, environmentTools, modules };
 };
 
-const resourceEnv = (resource: { file?: string }) => {
+export const resourceEnv = (resource: { file?: string }) => {
   if (!resource.file) return null;
   const parts = resource.file.replace(/\\/g, '/').split('/');
   const envIdx = parts.indexOf('environments');
   return envIdx >= 0 && parts.length > envIdx + 1 ? parts[envIdx + 1] : null;
 };
 
-const resourcesForEnv = <T extends { id: string; file?: string }>(resources: T[], env?: string) => {
+export const resourcesForEnv = <T extends { id: string; file?: string }>(resources: T[], env?: string) => {
   if (!env) return resources;
   return resources.filter(resource => {
     const envFromFile = resourceEnv(resource);
-    return !envFromFile || envFromFile === env;
+    return envFromFile === env;
   });
 };
 
@@ -193,12 +193,15 @@ export default function App() {
   const showEnvironmentSelector = Boolean(layeredProject && (tool === 'multi' || layeredProject.environmentTools));
   const activeEnv = envForTool(tool || '', layeredProject, activeEnvironment);
   const activeTool = toolForEnv(tool || '', layeredProject, activeEnv);
+  const unresolvedHybridEnv = tool === 'multi' && Boolean(activeEnv) && !activeTool;
   const concreteTool = activeTool && activeTool !== 'multi'
     ? activeTool
     : (tool && tool !== 'multi' ? tool : 'terraform');
-  const activeResourceFile = concreteTool === 'pulumi'
-    ? (activeEnv ? `environments/${activeEnv}/index.ts` : undefined)
-    : (tool === 'multi' && activeEnv ? `environments/${activeEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : undefined);
+  const activeResourceFile = unresolvedHybridEnv
+    ? undefined
+    : concreteTool === 'pulumi'
+      ? (activeEnv ? `environments/${activeEnv}/index.ts` : undefined)
+      : (tool === 'multi' && activeEnv ? `environments/${activeEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : undefined);
   const activeEnvNodes = useMemo(
     () => resourcesForEnv(nodes, (tool === 'multi' || tool === 'pulumi') ? activeEnv : undefined),
     [nodes, activeEnv, tool],
@@ -479,13 +482,13 @@ export default function App() {
 
   // Generate code preview whenever nodes change
   useEffect(() => {
-    if (!tool || !nodes.length) {
+    if (!tool || unresolvedHybridEnv || !nodes.length) {
       setSyncCode('');
       return;
     }
     const code = generateLocalCode(concreteTool, activeEnvNodes, activeEnvEdges);
     setSyncCode(code);
-  }, [activeEnvEdges, activeEnvNodes, concreteTool, tool]);
+  }, [activeEnvEdges, activeEnvNodes, concreteTool, tool, unresolvedHybridEnv]);
 
   // Sync to disk (debounced) — syncs even when nodes is empty so that
   // deleting the last resource clears the generated file on disk.
@@ -507,6 +510,12 @@ export default function App() {
   }, []);
   useEffect(() => {
     if (!tool || !hasCreatedProject.current || !projectId) return;
+    if (unresolvedHybridEnv) {
+      clearTimeout(syncTimer.current);
+      syncTimer.current = undefined;
+      pendingSync.current = null;
+      return;
+    }
     // Skip the first sync after opening a project — the restored state
     // doesn't need to be written back immediately (it came from disk).
     if (!initialLoadDone.current) {
@@ -527,11 +536,16 @@ export default function App() {
     syncTimer.current = setTimeout(() => {
       flushPendingSync();
     }, 2000);
-  }, [activeEnvEdges, activeEnvNodes, flushPendingSync, projectId, activeEnv, syncScope, tool]);
+  }, [activeEnvEdges, activeEnvNodes, flushPendingSync, projectId, activeEnv, syncScope, tool, unresolvedHybridEnv]);
 
   // ─── Handlers ───
 
   const addNode = useCallback((resourceDef: any) => {
+    if (unresolvedHybridEnv) {
+      setNotification(`Environment "${activeEnv}" has no configured IaC tool`);
+      setTimeout(() => setNotification(null), 4000);
+      return;
+    }
     const node = {
       id: uid(),
       type: resourceDef.type,
@@ -570,7 +584,7 @@ export default function App() {
       return [...prev, node];
     });
     setSelectedNode(node.id);
-  }, [activeResourceFile, catalogResources]);
+  }, [activeEnv, activeResourceFile, catalogResources, unresolvedHybridEnv]);
 
   const removeNode = useCallback((id: string) => {
     setNodes(prev => prev.filter(n => n.id !== id));
@@ -718,6 +732,10 @@ export default function App() {
 
   const runCmd = (command: string) => {
     if (!tool) return;
+    if (unresolvedHybridEnv) {
+      setTerminalOutput(prev => [...prev, `Error: environment "${activeEnv}" has no configured IaC tool`]);
+      return;
+    }
     // apply/destroy require explicit confirmation
     const needsApproval = command === 'apply' || command === 'destroy';
     if (needsApproval && !confirm(`Are you sure you want to run "${command}"? This will modify real infrastructure.`)) {
@@ -820,6 +838,11 @@ export default function App() {
 
   const saveCodeToDisk = useCallback(async (value: string) => {
     if (!tool || !projectId) return;
+    if (unresolvedHybridEnv) {
+      setNotification(`Save failed: environment "${activeEnv}" has no configured IaC tool`);
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
     if (!value.trim()) {
       setNotification('Nothing to save yet');
       setTimeout(() => setNotification(null), 3000);
@@ -839,7 +862,7 @@ export default function App() {
       setCodeSaving(false);
       setTimeout(() => { isSyncing.current = false; }, 1500);
     }
-  }, [concreteTool, projectId, activeEnv, tool]);
+  }, [activeEnv, concreteTool, projectId, tool, unresolvedHybridEnv]);
 
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
@@ -1723,8 +1746,8 @@ export default function App() {
             <div style={S.codeHead}>
               <span>FILE {codeFileLabel}</span>
               <button
-                style={{ ...S.copyBtn, color: codeSaving || !syncCode.trim() ? '#555' : ct.color }}
-                disabled={codeSaving || !syncCode.trim()}
+                style={{ ...S.copyBtn, color: codeSaving || unresolvedHybridEnv || !syncCode.trim() ? '#555' : ct.color }}
+                disabled={codeSaving || unresolvedHybridEnv || !syncCode.trim()}
                 title="Save editor buffer to disk"
                 onClick={() => saveCodeToDisk(syncCode)}
               >
@@ -1754,7 +1777,13 @@ export default function App() {
           )}
           {rightTab === 'policy' && (
             <div style={{ flex: 1, minHeight: 0 }}>
-              <PolicyStudioPanel projectName={projectId} tool={tool} env={activeEnv} />
+              {unresolvedHybridEnv ? (
+                <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 13 }}>
+                  Environment "{activeEnv}" has no configured IaC tool in .iac-studio.json.
+                </div>
+              ) : (
+                <PolicyStudioPanel projectName={projectId} tool={tool} env={activeEnv} />
+              )}
             </div>
           )}
           {rightTab === 'scan' && (

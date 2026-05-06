@@ -8,6 +8,8 @@ type LayeredForLoad = {
   environmentTools?: Record<string, string>;
 } | null;
 
+const concreteTools = new Set(['terraform', 'opentofu', 'pulumi', 'ansible']);
+
 export const shouldParseResourcesFromDisk = (state: ProjectStateForLoad | null | undefined) => {
   if (!state?.resources || state.resources.length === 0) return true;
   return state.layout === 'layered-v1' && state.resources.some((resource) => !resource.file);
@@ -21,7 +23,8 @@ const preferredLayeredEnv = (layered: LayeredForLoad, preferredEnv?: string | nu
 
 export const toolForEnv = (selectedTool: string, layered: LayeredForLoad, env?: string | null) => {
   if (selectedTool === 'multi' && env) {
-    return layered?.environmentTools?.[env] || selectedTool;
+    const envTool = layered?.environmentTools?.[env];
+    return envTool && concreteTools.has(envTool) ? envTool : undefined;
   }
   return selectedTool;
 };

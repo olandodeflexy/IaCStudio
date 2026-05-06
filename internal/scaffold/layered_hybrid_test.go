@@ -84,6 +84,20 @@ func TestLayeredHybridRejectsPulumiEnvironmentOutsideSelectedEnvs(t *testing.T) 
 	}
 }
 
+func TestLayeredHybridRejectsInvalidPulumiGCPRegion(t *testing.T) {
+	bp := &LayeredHybridBlueprint{}
+	_, err := bp.Render(map[string]any{
+		"project_name":        "acme",
+		"cloud":               "gcp",
+		"environments":        []any{"dev"},
+		"pulumi_environments": []any{"dev"},
+		"region":              "us-east-1",
+	})
+	if err == nil {
+		t.Fatal("expected GCP region validation error, got nil")
+	}
+}
+
 func TestLayeredHybridRegisteredInDefaultRegistry(t *testing.T) {
 	bp, ok := Default.Get("layered-hybrid")
 	if !ok {

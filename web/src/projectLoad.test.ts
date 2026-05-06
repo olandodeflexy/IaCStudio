@@ -37,4 +37,14 @@ describe('project load helpers', () => {
     expect(toolForEnv('multi', layered, 'dev')).toBe('pulumi');
     expect(toolForEnv('multi', layered, 'prod')).toBe('terraform');
   });
+
+  it('does not invent a concrete tool for unresolved hybrid environments', () => {
+    const layered = {
+      environments: ['dev', 'prod'],
+      environmentTools: { dev: 'not-a-tool' },
+    };
+    expect(toolForEnv('multi', layered, 'dev')).toBeUndefined();
+    expect(toolForEnv('multi', layered, 'prod')).toBeUndefined();
+    expect(toolForEnv('terraform', layered, 'dev')).toBe('terraform');
+  });
 });
