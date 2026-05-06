@@ -17,6 +17,7 @@ import type { LayeredProject, LayeredModule } from './types';
 import { envForResourceLoad, envForTool, shouldParseResourcesFromDisk, toolForEnv } from './projectLoad';
 import {
   TOOLS,
+  ALL_TOOLS,
   PROJECT_CREATION_TOOLS,
   FALLBACK_RESOURCES,
   uid,
@@ -873,7 +874,7 @@ export default function App() {
               <UIKicker style={{ marginBottom: 12 }}>Recent Projects</UIKicker>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {savedProjects.filter(p => p.tool).slice(0, 5).map(p => {
-                  const t = TOOLS[p.tool] || TOOLS.terraform;
+                  const t = ALL_TOOLS[p.tool] || TOOLS.terraform;
                   const count = p.resources?.length || 0;
                   return (
                     <button key={p.name} className="tool-card" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--bg-elev-1)', border: '1px solid var(--border-main)', borderRadius: 10, cursor: 'pointer', textAlign: 'left', transition: 'border-color 0.2s' }}
@@ -1168,7 +1169,7 @@ export default function App() {
     );
   }
 
-  const ct = TOOLS[tool] || TOOLS[concreteTool] || TOOLS.terraform;
+  const ct = ALL_TOOLS[tool] || TOOLS[concreteTool] || TOOLS.terraform;
   const selected = nodes.find(n => n.id === selectedNode);
   const codeFileLabel = concreteTool === 'pulumi'
     ? (activeEnv ? `environments/${activeEnv}/index.ts` : 'index.ts')

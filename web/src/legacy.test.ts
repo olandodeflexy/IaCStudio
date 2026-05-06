@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { generateLocalCode, PROJECT_CREATION_TOOLS, TOOLS, type Edge } from './legacy';
+import { ALL_TOOLS, generateLocalCode, PROJECT_CREATION_TOOLS, TOOLS, type Edge } from './legacy';
 
 describe('tool metadata', () => {
   it('keeps hybrid metadata available without exposing it to direct project creation', () => {
-    expect(TOOLS.multi).toBeDefined();
+    expect(ALL_TOOLS.multi).toBeDefined();
+    expect(TOOLS.multi).toBeUndefined();
     expect(PROJECT_CREATION_TOOLS.multi).toBeUndefined();
     expect(Object.keys(PROJECT_CREATION_TOOLS)).toEqual(['terraform', 'opentofu', 'pulumi', 'ansible']);
   });

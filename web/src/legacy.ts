@@ -5,19 +5,21 @@ import type { CatalogResource, FileEntry } from './api';
 // top-of-file declarations; the rest are small pure functions that
 // several panels will need once the extraction is done.
 
-// UI metadata for the supported IaC tools. Resource catalogs come from
+// UI metadata for direct project creation. Resource catalogs come from
 // the backend at runtime; this just decorates the tool selector.
 export const TOOLS: Record<string, { name: string; icon: string; color: string; ext: string }> = {
   terraform: { name: 'Terraform', icon: 'TF', color: '#2FB5A8', ext: '.tf' },
   opentofu: { name: 'OpenTofu', icon: 'TO', color: '#F2B447', ext: '.tf' },
   pulumi: { name: 'Pulumi', icon: 'PU', color: '#8A63D2', ext: '.ts' },
   ansible: { name: 'Ansible', icon: 'AN', color: '#D95757', ext: '.yml' },
-  multi: { name: 'Hybrid', icon: 'HY', color: '#66B7D8', ext: '.tf' },
 };
 
-export const PROJECT_CREATION_TOOLS = Object.fromEntries(
-  Object.entries(TOOLS).filter(([key]) => key !== 'multi')
-) as Record<string, { name: string; icon: string; color: string; ext: string }>;
+export const PROJECT_CREATION_TOOLS = TOOLS;
+
+export const ALL_TOOLS: Record<string, { name: string; icon: string; color: string; ext: string }> = {
+  ...TOOLS,
+  multi: { name: 'Hybrid', icon: 'HY', color: '#66B7D8', ext: '.tf' },
+};
 
 // Fallback resource list for when the backend catalog is unreachable —
 // keeps the palette usable offline so the user isn't stuck on an empty
