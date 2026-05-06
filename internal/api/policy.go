@@ -102,7 +102,7 @@ func registerPolicyRoutes(mux *http.ServeMux, projectsDir string) {
 
 		tool := effectiveProjectTool(projectPath, req.Tool, req.Env)
 		if tool == "multi" {
-			http.Error(w, "env is required when running policy for hybrid projects", 400)
+			http.Error(w, hybridToolResolutionMessage("env is required when running policy for hybrid projects", req.Env), 400)
 			return
 		}
 		projectRoot := projectPath

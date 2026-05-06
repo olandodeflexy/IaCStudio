@@ -290,6 +290,73 @@ func TestHybridSyncResolvesEnvironmentTool(t *testing.T) {
 	}
 }
 
+func TestHybridSyncRejectsUnresolvedEnvironmentTool(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(filepath.Join(projectDir, "environments", "dev"), 0o755); err != nil {
+		t.Fatalf("mkdir dev env: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".iac-studio.json"), []byte(`{
+  "layout": "layered-v1",
+  "tool": "multi",
+  "environments": ["dev"],
+  "environment_tools": {"prod": "terraform"}
+}`), 0o644); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/sync?tool=multi&env=dev",
+		"application/json",
+		strings.NewReader(`{"resources":[]}`),
+	)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("sync should reject unresolved hybrid env with 400, got %d", resp.StatusCode)
+	}
+	assertResponseBodyContains(t, resp, `unresolved hybrid tool for env "dev"`, ".iac-studio.json environment_tools")
+}
+
+func TestHybridRunRejectsUnresolvedEnvironmentTool(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(filepath.Join(projectDir, "environments", "dev"), 0o755); err != nil {
+		t.Fatalf("mkdir dev env: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, ".iac-studio.json"), []byte(`{
+  "layout": "layered-v1",
+  "tool": "multi",
+  "environments": ["dev"],
+  "environment_tools": {"dev": "not-a-tool"}
+}`), 0o644); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	body := `{"tool":"multi","command":"plan","env":"dev"}`
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/run",
+		"application/json",
+		strings.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("run should reject unresolved hybrid env with 400, got %d", resp.StatusCode)
+	}
+	assertResponseBodyContains(t, resp, `unresolved hybrid tool for env "dev"`, ".iac-studio.json environment_tools")
+}
+
 func TestPulumiSyncWritesEnvIndexAndPreservesHelpers(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo")

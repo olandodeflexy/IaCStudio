@@ -305,6 +305,39 @@ func TestPolicyRunHybridPulumiEnvBuiltinUsesTSParser(t *testing.T) {
 	}
 }
 
+func TestPolicyRunRejectsUnresolvedHybridEnvironmentTool(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	if err := os.MkdirAll(filepath.Join(project, "environments", "dev"), 0o755); err != nil {
+		t.Fatalf("mkdir dev env: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".iac-studio.json"), []byte(`{
+  "layout": "layered-v1",
+  "tool": "multi",
+  "environments": ["dev"],
+  "environment_tools": {"prod": "terraform"}
+}`), 0o644); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
+
+	srv := httptest.NewServer(policyMux(root))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{
+		"tool": "multi",
+		"env":  "dev",
+	})
+	resp, err := http.Post(srv.URL+"/api/projects/demo/policy/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("policy run should reject unresolved hybrid env with 400, got %d", resp.StatusCode)
+	}
+	assertResponseBodyContains(t, resp, `unresolved hybrid tool for env "dev"`, ".iac-studio.json environment_tools")
+}
+
 func TestPolicyRunHybridTerraformEnvUsesRootPolicies(t *testing.T) {
 	root := t.TempDir()
 	project := filepath.Join(root, "demo")

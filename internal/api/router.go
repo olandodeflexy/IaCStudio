@@ -389,6 +389,13 @@ func effectiveProjectTool(projectPath, requestedTool, env string) string {
 	return requestedTool
 }
 
+func hybridToolResolutionMessage(missingEnvMessage, env string) string {
+	if env == "" {
+		return missingEnvMessage
+	}
+	return fmt.Sprintf("unresolved hybrid tool for env %q; check .iac-studio.json environment_tools", env)
+}
+
 func parseProjectResources(projectPath, tool, env string) ([]parser.Resource, error) {
 	if tool == "multi" {
 		if env == "" {
@@ -870,7 +877,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		}
 		tool := effectiveProjectTool(projectPath, requestedTool, env)
 		if tool == "multi" {
-			http.Error(w, "env query parameter is required for hybrid project sync", 400)
+			http.Error(w, hybridToolResolutionMessage("env query parameter is required for hybrid project sync", env), 400)
 			return
 		}
 		if tool == "pulumi" {
@@ -1096,7 +1103,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 		effectiveTool := effectiveProjectTool(projectPath, req.Tool, req.Env)
 		if effectiveTool == "multi" {
-			http.Error(w, "env is required when running commands for hybrid projects", 400)
+			http.Error(w, hybridToolResolutionMessage("env is required when running commands for hybrid projects", req.Env), 400)
 			return
 		}
 
