@@ -69,10 +69,14 @@ export const normalizeLayeredProject = (state: any): LayeredProject | null => {
     !Array.isArray(rawEnvironmentTools) &&
     [Object.prototype, null].includes(Object.getPrototypeOf(rawEnvironmentTools))
   ) {
-    const entries = Object.entries(rawEnvironmentTools)
-      .filter(([env, envTool]) => environments.includes(env) && typeof envTool === 'string' && envTool.length > 0);
-    if (entries.length > 0) {
-      environmentTools = Object.fromEntries(entries) as Record<string, string>;
+    const normalizedEnvironmentTools = Object.create(null) as Record<string, string>;
+    for (const [env, envTool] of Object.entries(rawEnvironmentTools)) {
+      if (environments.includes(env) && typeof envTool === 'string' && envTool.length > 0) {
+        normalizedEnvironmentTools[env] = envTool;
+      }
+    }
+    if (Object.keys(normalizedEnvironmentTools).length > 0) {
+      environmentTools = normalizedEnvironmentTools;
     }
   }
 

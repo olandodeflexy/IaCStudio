@@ -18,11 +18,25 @@ describe('normalizeLayeredProject', () => {
   });
 
   it('keeps valid environment tool mappings', () => {
-    expect(normalizeLayeredProject({
+    const layered = normalizeLayeredProject({
       layout: 'layered-v1',
       environments: ['dev', 'prod'],
       environment_tools: { dev: 'pulumi', prod: 'terraform', qa: 'terraform' },
-    })?.environmentTools).toEqual({ dev: 'pulumi', prod: 'terraform' });
+    });
+
+    expect({ ...layered?.environmentTools }).toEqual({ dev: 'pulumi', prod: 'terraform' });
+  });
+
+  it('stores environment tool mappings in a null-prototype map', () => {
+    const layered = normalizeLayeredProject({
+      layout: 'layered-v1',
+      environments: ['__proto__', 'constructor'],
+      environment_tools: JSON.parse('{"__proto__":"pulumi","constructor":"terraform"}'),
+    });
+
+    expect(Object.getPrototypeOf(layered?.environmentTools)).toBeNull();
+    expect(layered?.environmentTools?.['__proto__']).toBe('pulumi');
+    expect(layered?.environmentTools?.['constructor']).toBe('terraform');
   });
 });
 
