@@ -37,9 +37,17 @@ function normalizeEndpoint(endpoint: string) {
   return endpoint.trim().replace(/\/+$/, '');
 }
 
+function normalizeOpenAIEndpoint(endpoint: string) {
+  const normalized = normalizeEndpoint(endpoint);
+  if (normalized.endsWith('/chat/completions')) {
+    return normalized.slice(0, -'/chat/completions'.length);
+  }
+  return normalized;
+}
+
 function selectedProvider(settings: AISettingsConfig) {
   if (settings.type === 'openai') {
-    const endpoint = normalizeEndpoint(settings.endpoint);
+    const endpoint = normalizeOpenAIEndpoint(settings.endpoint);
     return endpoint && endpoint !== OPENAI_DEFAULT_ENDPOINT ? 'custom' : 'openai';
   }
   return settings.type;
@@ -50,7 +58,7 @@ function settingsForProvider(provider: string, settings: AISettingsConfig): AISe
     return { ...settings, type: 'ollama', endpoint: 'http://localhost:11434', api_key: '' };
   }
   if (provider === 'openai') {
-    return { ...settings, type: 'openai', endpoint: 'https://api.openai.com/v1', model: 'gpt-4o' };
+    return { ...settings, type: 'openai', endpoint: OPENAI_DEFAULT_ENDPOINT, model: 'gpt-4o' };
   }
   if (provider === 'anthropic') {
     return { ...settings, type: 'anthropic', endpoint: '', model: 'claude-haiku-4-5', api_key: '' };
@@ -61,7 +69,7 @@ function settingsForProvider(provider: string, settings: AISettingsConfig): AISe
 function endpointPlaceholder(provider: string) {
   if (provider === 'ollama') return 'http://localhost:11434';
   if (provider === 'anthropic') return 'https://api.anthropic.com (optional)';
-  return 'https://api.openai.com/v1';
+  return OPENAI_DEFAULT_ENDPOINT;
 }
 
 function modelPlaceholder(provider: string) {
@@ -98,17 +106,23 @@ export function AISettingsModal({
 
         <div style={{ marginBottom: 16 }}>
           <UILabel>Provider Type</UILabel>
-          <div className="ui-choice-grid" style={{ marginTop: 8 }}>
-            {providers.map(provider => (
-              <button
-                key={provider.key}
-                className={selectedProviderKey === provider.key ? 'ui-choice-card is-active' : 'ui-choice-card'}
-                onClick={() => onSettingsChange(current => settingsForProvider(provider.key, current))}
-              >
-                <div className="ui-choice-title">{provider.label}</div>
-                <div className="ui-choice-desc">{provider.desc}</div>
-              </button>
-            ))}
+          <div className="ui-choice-grid" role="radiogroup" aria-label="Provider Type" style={{ marginTop: 8 }}>
+            {providers.map(provider => {
+              const isSelected = selectedProviderKey === provider.key;
+              return (
+                <button
+                  key={provider.key}
+                  type="button"
+                  role="radio"
+                  aria-checked={isSelected}
+                  className={isSelected ? 'ui-choice-card is-active' : 'ui-choice-card'}
+                  onClick={() => onSettingsChange(current => settingsForProvider(provider.key, current))}
+                >
+                  <div className="ui-choice-title">{provider.label}</div>
+                  <div className="ui-choice-desc">{provider.desc}</div>
+                </button>
+              );
+            })}
           </div>
         </div>
 

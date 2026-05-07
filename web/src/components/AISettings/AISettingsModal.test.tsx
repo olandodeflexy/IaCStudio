@@ -44,11 +44,13 @@ describe('AISettingsModal', () => {
   it('applies provider presets to the editable fields', () => {
     renderModal();
 
-    fireEvent.click(screen.getByRole('button', { name: /OpenAI API/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /OpenAI API/i }));
 
     expect(screen.getByDisplayValue('https://api.openai.com/v1')).toBeInTheDocument();
     expect(screen.getByDisplayValue('gpt-4o')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
+    expect(screen.getByRole('radiogroup', { name: /Provider Type/i })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /OpenAI API/i })).toHaveAttribute('aria-checked', 'true');
     expect(screen.getByText(/IaC Studio backend/i)).toHaveTextContent(/kept in process memory/i);
     expect(screen.getByText(/IaC Studio backend/i)).toHaveTextContent(/not stored on disk/i);
   });
@@ -63,15 +65,31 @@ describe('AISettingsModal', () => {
       },
     });
 
-    expect(screen.getByRole('button', { name: /Custom API/i })).toHaveClass('is-active');
-    expect(screen.getByRole('button', { name: /OpenAI API/i })).not.toHaveClass('is-active');
+    expect(screen.getByRole('radio', { name: /Custom API/i })).toHaveClass('is-active');
+    expect(screen.getByRole('radio', { name: /Custom API/i })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /OpenAI API/i })).not.toHaveClass('is-active');
+    expect(screen.getByRole('radio', { name: /OpenAI API/i })).toHaveAttribute('aria-checked', 'false');
+  });
+
+  it('shows OpenAI selected for the default chat completions endpoint', () => {
+    renderModal({
+      initialSettings: {
+        type: 'openai',
+        endpoint: 'https://api.openai.com/v1/chat/completions',
+        model: 'gpt-4o',
+        api_key: '********',
+      },
+    });
+
+    expect(screen.getByRole('radio', { name: /OpenAI API/i })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('radio', { name: /Custom API/i })).toHaveAttribute('aria-checked', 'false');
   });
 
   it('saves settings and closes the modal', async () => {
     const updateSettings = vi.spyOn(api, 'updateAISettings').mockResolvedValue({});
     const { onClose, onNotify } = renderModal();
 
-    fireEvent.click(screen.getByRole('button', { name: /OpenAI API/i }));
+    fireEvent.click(screen.getByRole('radio', { name: /OpenAI API/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
     await waitFor(() => {
