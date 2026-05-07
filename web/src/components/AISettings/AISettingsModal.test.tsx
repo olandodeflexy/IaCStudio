@@ -6,19 +6,21 @@ import { api } from '../../api';
 import { AISettingsModal, type AISettingsConfig } from './AISettingsModal';
 
 function renderModal({
+  initialSettings = {
+    type: 'ollama',
+    endpoint: '',
+    model: '',
+    api_key: '',
+  },
   onClose = vi.fn(),
   onNotify = vi.fn(),
 }: {
+  initialSettings?: AISettingsConfig;
   onClose?: () => void;
   onNotify?: (_message: string, _duration?: number) => void;
 } = {}) {
   function Harness() {
-    const [settings, setSettings] = useState<AISettingsConfig>({
-      type: 'ollama',
-      endpoint: '',
-      model: '',
-      api_key: '',
-    });
+    const [settings, setSettings] = useState<AISettingsConfig>(initialSettings);
 
     return (
       <AISettingsModal
@@ -49,6 +51,20 @@ describe('AISettingsModal', () => {
     expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
     expect(screen.getByText(/IaC Studio backend/i)).toHaveTextContent(/kept in process memory/i);
     expect(screen.getByText(/IaC Studio backend/i)).toHaveTextContent(/not stored on disk/i);
+  });
+
+  it('shows custom selected for an OpenAI-compatible custom endpoint', () => {
+    renderModal({
+      initialSettings: {
+        type: 'openai',
+        endpoint: 'https://llm.example.com/v1',
+        model: 'gpt-compatible',
+        api_key: '********',
+      },
+    });
+
+    expect(screen.getByRole('button', { name: /Custom API/i })).toHaveClass('is-active');
+    expect(screen.getByRole('button', { name: /OpenAI API/i })).not.toHaveClass('is-active');
   });
 
   it('saves settings and closes the modal', async () => {

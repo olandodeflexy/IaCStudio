@@ -31,6 +31,20 @@ const providers: ProviderOption[] = [
   { key: 'custom', label: 'Custom API', desc: 'Any OpenAI-compatible endpoint' },
 ];
 
+const OPENAI_DEFAULT_ENDPOINT = 'https://api.openai.com/v1';
+
+function normalizeEndpoint(endpoint: string) {
+  return endpoint.trim().replace(/\/+$/, '');
+}
+
+function selectedProvider(settings: AISettingsConfig) {
+  if (settings.type === 'openai') {
+    const endpoint = normalizeEndpoint(settings.endpoint);
+    return endpoint && endpoint !== OPENAI_DEFAULT_ENDPOINT ? 'custom' : 'openai';
+  }
+  return settings.type;
+}
+
 function settingsForProvider(provider: string, settings: AISettingsConfig): AISettingsConfig {
   if (provider === 'ollama') {
     return { ...settings, type: 'ollama', endpoint: 'http://localhost:11434', api_key: '' };
@@ -62,6 +76,8 @@ export function AISettingsModal({
   onNotify,
   onClose,
 }: AISettingsModalProps) {
+  const selectedProviderKey = selectedProvider(settings);
+
   const saveSettings = async () => {
     try {
       await api.updateAISettings(settings);
@@ -86,7 +102,7 @@ export function AISettingsModal({
             {providers.map(provider => (
               <button
                 key={provider.key}
-                className={settings.type === provider.key ? 'ui-choice-card is-active' : 'ui-choice-card'}
+                className={selectedProviderKey === provider.key ? 'ui-choice-card is-active' : 'ui-choice-card'}
                 onClick={() => onSettingsChange(current => settingsForProvider(provider.key, current))}
               >
                 <div className="ui-choice-title">{provider.label}</div>
@@ -101,7 +117,7 @@ export function AISettingsModal({
           <UIInput
             value={settings.endpoint}
             onChange={event => onSettingsChange(current => ({ ...current, endpoint: event.target.value }))}
-            placeholder={endpointPlaceholder(settings.type)}
+            placeholder={endpointPlaceholder(selectedProviderKey)}
           />
         </div>
 
@@ -110,7 +126,7 @@ export function AISettingsModal({
           <UIInput
             value={settings.model}
             onChange={event => onSettingsChange(current => ({ ...current, model: event.target.value }))}
-            placeholder={modelPlaceholder(settings.type)}
+            placeholder={modelPlaceholder(selectedProviderKey)}
           />
         </div>
 
