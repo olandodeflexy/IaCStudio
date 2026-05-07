@@ -3,7 +3,8 @@ import { api, ApiError, Resource, ToolInfo, CatalogResource, Suggestion, FileEnt
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
-import { UIButton, UIInput, UIKicker, UILabel, UIModal, UIPanel } from './ui';
+import { UIButton, UIInput, UIKicker, UILabel, UIPanel } from './ui';
+import { AISettingsModal, type AISettingsConfig } from './components/AISettings';
 import { CodeEditor } from './components/CodeEditor';
 import { ChatPanel } from './components/Chat';
 import { ImportWizardModal } from './components/ImportWizard';
@@ -155,7 +156,7 @@ export default function App() {
   const [visionImages, setVisionImages] = useState<File[]>([]);
   const [visionError, setVisionError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [aiSettings, setAiSettings] = useState({ type: 'ollama', endpoint: '', model: '', api_key: '' });
+  const [aiSettings, setAiSettings] = useState<AISettingsConfig>({ type: 'ollama', endpoint: '', model: '', api_key: '' });
   const [savedProjects, setSavedProjects] = useState<any[]>([]);
   const { state: nodes, set: setNodes, undo: undoNodes, redo: redoNodes, canUndo, canRedo, reset: resetNodes } = useHistory<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -945,6 +946,11 @@ export default function App() {
     }
   }, [activeEnv, concreteTool, projectId, tool, unresolvedHybridEnv]);
 
+  const showNotification = useCallback((message: string, duration = 3000) => {
+    setNotification(message);
+    window.setTimeout(() => setNotification(null), duration);
+  }, []);
+
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
     setProjectLayoutMeta(null);
@@ -1163,74 +1169,12 @@ export default function App() {
 
       {/* AI Settings Modal */}
       {showSettings && (
-        <UIModal onClose={() => setShowSettings(false)} width={480} className="ui-panel--raised">
-          <div style={{ padding: 24 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <span className="ui-modal-title">AI Settings</span>
-              <button className="ui-close" onClick={() => setShowSettings(false)}>×</button>
-            </div>
-
-            <div style={{ marginBottom: 16 }}>
-              <UILabel>Provider Type</UILabel>
-              <div className="ui-choice-grid" style={{ marginTop: 8 }}>
-                {[
-                  { key: 'ollama', label: 'Ollama (Local)', desc: 'Free, private, runs on your machine' },
-                  { key: 'openai', label: 'OpenAI API', desc: 'GPT-4o, GPT-4-turbo' },
-                  { key: 'anthropic', label: 'Anthropic', desc: 'Claude Opus, Claude Haiku' },
-                  { key: 'custom', label: 'Custom API', desc: 'Any OpenAI-compatible endpoint' },
-                ].map(p => (
-                  <button key={p.key} className={aiSettings.type === p.key ? 'ui-choice-card is-active' : 'ui-choice-card'}
-                    onClick={() => {
-                      if (p.key === 'ollama') setAiSettings(s => ({ ...s, type: 'ollama', endpoint: 'http://localhost:11434', api_key: '' }));
-                      else if (p.key === 'openai') setAiSettings(s => ({ ...s, type: 'openai', endpoint: 'https://api.openai.com/v1', model: 'gpt-4o' }));
-                      else if (p.key === 'anthropic') setAiSettings(s => ({ ...s, type: 'anthropic', endpoint: '', model: 'claude-haiku-4-5', api_key: '' }));
-                      else setAiSettings(s => ({ ...s, type: 'custom' }));
-                    }}>
-                    <div className="ui-choice-title">{p.label}</div>
-                    <div className="ui-choice-desc">{p.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <UILabel>Endpoint</UILabel>
-              <UIInput value={aiSettings.endpoint} onChange={e => setAiSettings(s => ({ ...s, endpoint: e.target.value }))}
-                placeholder={aiSettings.type === 'ollama' ? 'http://localhost:11434' : aiSettings.type === 'anthropic' ? 'https://api.anthropic.com (optional)' : 'https://api.openai.com/v1'} />
-            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <UILabel>Model</UILabel>
-              <UIInput value={aiSettings.model} onChange={e => setAiSettings(s => ({ ...s, model: e.target.value }))}
-                placeholder={aiSettings.type === 'ollama' ? 'gemma4' : aiSettings.type === 'anthropic' ? 'claude-haiku-4-5' : 'gpt-4o'} />
-            </div>
-
-            {aiSettings.type !== 'ollama' && (
-              <div style={{ marginBottom: 12 }}>
-                <UILabel>API Key</UILabel>
-                <UIInput type="password" value={aiSettings.api_key} onChange={e => setAiSettings(s => ({ ...s, api_key: e.target.value }))}
-                  placeholder="sk-..." />
-                <div className="ui-note ui-note--small" style={{ marginTop: 4 }}>Your key is sent to the backend only — never stored on disk or sent to third parties.</div>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-              <UIButton block onClick={() => setShowSettings(false)}>Cancel</UIButton>
-              <UIButton block variant="primary"
-                onClick={async () => {
-                  try {
-                    await api.updateAISettings(aiSettings);
-                    setNotification('AI settings updated');
-                    setTimeout(() => setNotification(null), 3000);
-                    setShowSettings(false);
-                  } catch (e: any) {
-                    setNotification(`Failed: ${e.message}`);
-                    setTimeout(() => setNotification(null), 4000);
-                  }
-                }}>Save</UIButton>
-            </div>
-          </div>
-        </UIModal>
+        <AISettingsModal
+          settings={aiSettings}
+          onSettingsChange={setAiSettings}
+          onNotify={showNotification}
+          onClose={() => setShowSettings(false)}
+        />
       )}
 
       <div style={S.main}>
