@@ -91,6 +91,7 @@ export function ImportWizardModal({
   };
 
   const importFolder = async () => {
+    if (!browsePath.trim()) return;
     onImportLoadingChange(true);
     try {
       const result = await api.importProject(browsePath);
@@ -147,7 +148,7 @@ export function ImportWizardModal({
             <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{browsePath}</span>
             <UIButton
               variant="primary"
-              disabled={importLoading}
+              disabled={importLoading || !browsePath.trim()}
               onClick={importFolder}
             >
               {importLoading ? 'Scanning...' : 'Import this folder'}

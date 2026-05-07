@@ -898,7 +898,7 @@ export default function App() {
       const toType = nodeTypeById.get(to);
       if (!fromType || !toType) return [];
       return [{
-        id: `${from}->${to}:${edge.field}`,
+        id: edgeId(from, to, edge.field),
         from,
         to,
         fromType,
