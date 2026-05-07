@@ -35,7 +35,7 @@ describe('AppHeader', () => {
   it('renders project status and dispatches terraform commands', () => {
     const props = renderHeader();
 
-    expect(screen.getByDisplayValue('demo')).toBeInTheDocument();
+    expect(screen.getByRole('textbox', { name: 'Project name' })).toHaveValue('demo');
     expect(screen.getByText('2 resources')).toBeInTheDocument();
     expect(screen.getByText('● live')).toBeInTheDocument();
 
@@ -72,8 +72,8 @@ describe('AppHeader', () => {
   it('dispatches navigation, project, reveal, undo, and settings actions', () => {
     const props = renderHeader();
 
-    fireEvent.click(screen.getByText('←'));
-    fireEvent.change(screen.getByDisplayValue('demo'), { target: { value: 'renamed' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'renamed' } });
     fireEvent.click(screen.getByTitle('Open in file manager'));
     fireEvent.click(screen.getByTitle('Undo (Ctrl+Z)'));
     fireEvent.click(screen.getByRole('button', { name: 'SETTINGS' }));

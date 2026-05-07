@@ -49,11 +49,16 @@ export function AppHeader({
   return (
     <header style={{ ...S.header, borderBottomColor: toolMeta.color + '44' }} className="iac-header">
       <div style={S.hLeft}>
-        <button style={S.backBtn} onClick={onBack}>←</button>
+        <button style={S.backBtn} onClick={onBack} aria-label="Back to projects">←</button>
         <span style={{ ...S.badge, background: toolMeta.color + '22', color: toolMeta.color }}>
           {toolMeta.icon} {toolMeta.name}
         </span>
-        <input style={S.projInput} value={projectName} onChange={event => onProjectNameChange(event.target.value)} />
+        <input
+          style={S.projInput}
+          value={projectName}
+          aria-label="Project name"
+          onChange={event => onProjectNameChange(event.target.value)}
+        />
         <button
           style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, fontFamily: 'JetBrains Mono', padding: '2px 6px', color: '#789187' }}
           title="Open in file manager"
