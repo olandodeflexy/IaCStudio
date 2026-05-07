@@ -45,6 +45,12 @@ const isPolicyBlockedError = (err: unknown): err is ApiError => (
   err instanceof ApiError && err.status === 409 && err.payload?.error === 'policy_blocked'
 );
 
+const errorMessage = (err: unknown, fallback: string) => {
+  if (err instanceof Error && err.message) return err.message;
+  if (typeof err === 'string' && err) return err;
+  return fallback;
+};
+
 const extractLayoutMeta = (state: any) => {
   if (!state?.layout) return null;
   const meta: Record<string, any> = {};
@@ -858,8 +864,8 @@ export default function App() {
     const selectedTool = preview.tool === 'opentofu' ? 'opentofu' : preview.tool === 'ansible' ? 'ansible' : 'terraform';
     try {
       await api.createProject(projectName, selectedTool);
-    } catch (err: any) {
-      setNotification(`Import failed: ${err.message}`);
+    } catch (err: unknown) {
+      setNotification(`Import failed: ${errorMessage(err, 'Unable to create project')}`);
       setTimeout(() => setNotification(null), 5000);
       return;
     }

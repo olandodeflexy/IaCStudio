@@ -35,13 +35,24 @@ export interface ImportWizardModalProps {
 const providerOptions = ['aws', 'google', 'azurerm'];
 
 function providerLabel(provider: string) {
-  if (provider === 'aws') return 'AWS';
-  if (provider === 'google') return 'GCP';
-  return 'Azure';
+  switch (provider) {
+    case 'aws':
+      return 'AWS';
+    case 'google':
+      return 'GCP';
+    case 'azurerm':
+      return 'Azure';
+    default:
+      return provider || 'Unknown';
+  }
 }
 
 function errorMessage(err: unknown, fallback: string) {
   return err instanceof Error && err.message ? err.message : fallback;
+}
+
+function resourcePreviewKey(resource: ImportResult['resources'][number]) {
+  return resource.id || [resource.type, resource.name, resource.file, resource.line].filter(Boolean).join(':');
 }
 
 export function ImportWizardModal({
@@ -133,7 +144,7 @@ export function ImportWizardModal({
       {importTab === 'browse' && !importPreview && (
         <div style={{ flex: 1, overflow: 'auto', minHeight: 300 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', borderBottom: '1px solid var(--border-soft)', background: 'var(--bg-elev-1)' }}>
-            <UIButton onClick={() => browseTo(browseParent)}>
+            <UIButton aria-label="Browse to parent directory" onClick={() => browseTo(browseParent)}>
               ↑
             </UIButton>
             <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{browsePath}</span>
@@ -241,10 +252,10 @@ export function ImportWizardModal({
                 {importPreview.resources.length} Resources
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {importPreview.resources.map((resource, index) => {
+                {importPreview.resources.map(resource => {
                   const meta = catalogByType.get(resource.type);
                   return (
-                    <span key={index} style={{ background: 'var(--bg-elev-2)', borderRadius: 6, padding: '4px 10px', fontSize: 11, color: 'var(--text-main)', fontFamily: 'JetBrains Mono' }}>
+                    <span key={resourcePreviewKey(resource)} style={{ background: 'var(--bg-elev-2)', borderRadius: 6, padding: '4px 10px', fontSize: 11, color: 'var(--text-main)', fontFamily: 'JetBrains Mono' }}>
                       {meta?.icon ?? '📦'} {resource.type}.{resource.name}
                     </span>
                   );
@@ -263,7 +274,7 @@ export function ImportWizardModal({
               ← Back
             </UIButton>
             {importPreview.resources.length > 0 && (
-              <UIButton variant="primary" onClick={() => onImportToCanvas(importPreview)}>
+              <UIButton variant="primary" onClick={() => { void onImportToCanvas(importPreview); }}>
                 Import to Canvas
               </UIButton>
             )}
