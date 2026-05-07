@@ -82,34 +82,6 @@ func (b *LayeredHybridBlueprint) Render(values map[string]any) ([]File, error) {
 		pulumiEnvSet[env] = struct{}{}
 	}
 
-	modules := stringSliceInput(values, "modules", []string{"networking", "compute", "database", "security", "monitoring"})
-	for _, mod := range modules {
-		if err := validatePathSegment("module", mod); err != nil {
-			return nil, err
-		}
-	}
-	backend := stringInput(values, "backend", "s3")
-	switch backend {
-	case "s3", "gcs", "azurerm", "none":
-	default:
-		return nil, fmt.Errorf("backend %q is unsupported: must be one of s3, gcs, azurerm, none", backend)
-	}
-	stateBucket := stringInput(values, "state_bucket", defaultStateBucket(name, backend))
-	switch backend {
-	case "none":
-	case "azurerm":
-		if !azureStorageAccountRE.MatchString(stateBucket) {
-			return nil, fmt.Errorf("state_bucket %q is invalid for azurerm backend: must be 3-24 lowercase letters/digits with no hyphens", stateBucket)
-		}
-	default:
-		if err := validateSafeName("state_bucket", stateBucket); err != nil {
-			return nil, err
-		}
-	}
-	stateRegion := stringInput(values, "state_region", "us-east-1")
-	if err := validateSafeName("state_region", stateRegion); err != nil {
-		return nil, err
-	}
 	region, err := pulumiRegionInput(values, cloud)
 	if err != nil {
 		return nil, err
@@ -136,19 +108,46 @@ func (b *LayeredHybridBlueprint) Render(values map[string]any) ([]File, error) {
 		terraformEnvs = append(terraformEnvs, env)
 	}
 
-	ctx := layeredCtx{
-		Name: name, Cloud: cloud, Envs: terraformEnvs, Modules: modules,
-		Backend: backend, StateBucket: stateBucket, StateRegion: stateRegion,
-		Owner: owner, CostCenter: costCenter,
-	}
-
-	descriptorModules := modules
-	if len(terraformEnvs) == 0 {
-		descriptorModules = nil
+	var modules []string
+	var ctx layeredCtx
+	if len(terraformEnvs) > 0 {
+		modules = stringSliceInput(values, "modules", []string{"networking", "compute", "database", "security", "monitoring"})
+		for _, mod := range modules {
+			if err := validatePathSegment("module", mod); err != nil {
+				return nil, err
+			}
+		}
+		backend := stringInput(values, "backend", "s3")
+		switch backend {
+		case "s3", "gcs", "azurerm", "none":
+		default:
+			return nil, fmt.Errorf("backend %q is unsupported: must be one of s3, gcs, azurerm, none", backend)
+		}
+		stateBucket := stringInput(values, "state_bucket", defaultStateBucket(name, backend))
+		switch backend {
+		case "none":
+		case "azurerm":
+			if !azureStorageAccountRE.MatchString(stateBucket) {
+				return nil, fmt.Errorf("state_bucket %q is invalid for azurerm backend: must be 3-24 lowercase letters/digits with no hyphens", stateBucket)
+			}
+		default:
+			if err := validateSafeName("state_bucket", stateBucket); err != nil {
+				return nil, err
+			}
+		}
+		stateRegion := stringInput(values, "state_region", "us-east-1")
+		if err := validateSafeName("state_region", stateRegion); err != nil {
+			return nil, err
+		}
+		ctx = layeredCtx{
+			Name: name, Cloud: cloud, Envs: terraformEnvs, Modules: modules,
+			Backend: backend, StateBucket: stateBucket, StateRegion: stateRegion,
+			Owner: owner, CostCenter: costCenter,
+		}
 	}
 
 	var files []File
-	files = append(files, hybridRootFiles(name, cloud, envs, envTools, descriptorModules, owner, costCenter)...)
+	files = append(files, hybridRootFiles(name, cloud, envs, envTools, modules, owner, costCenter)...)
 	for _, env := range terraformEnvs {
 		files = append(files, ctx.envFiles(env)...)
 	}
@@ -264,6 +263,16 @@ Thumbs.db
 
 func renderHybridProjectReadme(name, cloud string, envs []string, envTools map[string]string) string {
 	var b strings.Builder
+	hasTerraform := false
+	hasPulumi := false
+	for _, tool := range envTools {
+		switch tool {
+		case "terraform":
+			hasTerraform = true
+		case "pulumi":
+			hasPulumi = true
+		}
+	}
 	fmt.Fprintf(&b, "# %s\n\n", name)
 	fmt.Fprintf(&b, "Hybrid layered project scaffolded by IaC Studio, targeting %s.\n\n", cloud)
 	b.WriteString("## Environment Tools\n\n")
@@ -272,8 +281,17 @@ func renderHybridProjectReadme(name, cloud string, envs []string, envTools map[s
 	}
 	b.WriteString("\n## Layout\n\n")
 	b.WriteString("- `environments/{env}/` - Terraform roots or Pulumi projects, depending on `.iac-studio.json`.\n")
-	b.WriteString("- `modules/` - reusable Terraform modules for Terraform environments.\n")
-	b.WriteString("- `policies/` - OPA/Sentinel for Terraform and CrossGuard packs for Pulumi.\n")
+	if hasTerraform {
+		b.WriteString("- `modules/` - reusable Terraform modules for Terraform environments.\n")
+	}
+	switch {
+	case hasTerraform && hasPulumi:
+		b.WriteString("- `policies/` - OPA/Sentinel for Terraform and CrossGuard packs for Pulumi.\n")
+	case hasTerraform:
+		b.WriteString("- `policies/opa/` and `policies/sentinel/` - Terraform policy packs.\n")
+	case hasPulumi:
+		b.WriteString("- `policies/crossguard/` - CrossGuard policy pack for Pulumi environments.\n")
+	}
 	b.WriteString("- `scripts/` - lifecycle wrappers that detect each environment's tool.\n\n")
 	b.WriteString("## Daily use\n\n")
 	b.WriteString("```bash\n")
