@@ -1,6 +1,7 @@
 import { useMemo } from 'react';
 
 import { api, type CatalogResource, type FileEntry, type ImportResult } from '../../api';
+import { errorMessage } from '../../lib/errors';
 import { fileGlyph } from '../../legacy';
 import { UIButton, UILabel, UIModal, UITextArea } from '../../ui';
 import { VisionDropzone } from '../VisionDropzone';
@@ -45,10 +46,6 @@ function providerLabel(provider: string) {
     default:
       return provider || 'Unknown';
   }
-}
-
-function errorMessage(err: unknown, fallback: string) {
-  return err instanceof Error && err.message ? err.message : fallback;
 }
 
 function resourcePreviewKey(resource: ImportResult['resources'][number]) {

@@ -15,6 +15,7 @@ import { SwimlaneCanvas } from './components/Canvas';
 import { S } from './styles';
 import type { LayeredProject, LayeredModule } from './types';
 import { envForResourceLoad, envForTool, shouldParseResourcesFromDisk, toolForEnv } from './projectLoad';
+import { errorMessage } from './lib/errors';
 import {
   TOOLS,
   ALL_TOOLS,
@@ -44,12 +45,6 @@ const summarizePolicyFindings = (findings: PolicyFinding[]) => {
 const isPolicyBlockedError = (err: unknown): err is ApiError => (
   err instanceof ApiError && err.status === 409 && err.payload?.error === 'policy_blocked'
 );
-
-const errorMessage = (err: unknown, fallback: string) => {
-  if (err instanceof Error && err.message) return err.message;
-  if (typeof err === 'string' && err) return err;
-  return fallback;
-};
 
 const extractLayoutMeta = (state: any) => {
   if (!state?.layout) return null;
@@ -879,13 +874,10 @@ export default function App() {
     initialLoadDone.current = true;
 
     const catalogByType = new Map(catalogResources.map(resource => [resource.type, resource]));
-    const idMap = new Map<string, string>();
     const generatedIdPrefix = `imp_${Date.now()}`;
     const imported = preview.resources.map((resource, index) => {
       const id = resource.id || `${generatedIdPrefix}_${index}`;
       const meta = catalogByType.get(resource.type);
-      idMap.set(id, id);
-      if (resource.id) idMap.set(resource.id, id);
       const { file: _file, line: _line, ...rest } = resource;
       return {
         ...rest,
@@ -900,8 +892,8 @@ export default function App() {
 
     const nodeTypeById = new Map(imported.map(resource => [resource.id, resource.type]));
     const newEdges = preview.edges.flatMap(edge => {
-      const from = idMap.get(edge.from_id) ?? edge.from_id;
-      const to = idMap.get(edge.to_id) ?? edge.to_id;
+      const from = edge.from_id;
+      const to = edge.to_id;
       const fromType = nodeTypeById.get(from);
       const toType = nodeTypeById.get(to);
       if (!fromType || !toType) return [];
