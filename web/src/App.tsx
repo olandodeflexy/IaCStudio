@@ -194,6 +194,7 @@ export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
+  const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
   const showEnvironmentSelector = Boolean(layeredProject && (tool === 'multi' || layeredProject.environmentTools));
   const activeEnv = envForTool(tool || '', layeredProject, activeEnvironment);
@@ -207,6 +208,37 @@ export default function App() {
     : concreteTool === 'pulumi'
       ? (activeEnv ? `environments/${activeEnv}/index.ts` : undefined)
       : (tool === 'multi' && activeEnv ? `environments/${activeEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : undefined);
+
+  const clearNotificationTimer = useCallback(() => {
+    if (notificationTimer.current !== null) {
+      clearTimeout(notificationTimer.current);
+      notificationTimer.current = null;
+    }
+  }, []);
+
+  const showNotification = useCallback((message: string, duration = 3000) => {
+    clearNotificationTimer();
+    setNotification(message);
+    notificationTimer.current = setTimeout(() => {
+      setNotification(null);
+      notificationTimer.current = null;
+    }, duration);
+  }, [clearNotificationTimer]);
+
+  const showPersistentNotification = useCallback((message: string) => {
+    clearNotificationTimer();
+    setNotification(message);
+  }, [clearNotificationTimer]);
+
+  const clearNotification = useCallback(() => {
+    clearNotificationTimer();
+    setNotification(null);
+  }, [clearNotificationTimer]);
+
+  useEffect(() => () => {
+    clearNotificationTimer();
+  }, [clearNotificationTimer]);
+
   const activeEnvNodes = useMemo(
     () => resourcesForEnv(nodes, (tool === 'multi' || tool === 'pulumi') ? activeEnv : undefined),
     [nodes, activeEnv, tool],
@@ -342,8 +374,7 @@ export default function App() {
         const parsed = await api.getResources(proj.name, selectedTool, envForResourceLoad(selectedTool, selectedLayered));
         applyParsedResources(parsed);
       }
-      setNotification(`Opened project: ${proj.name}`);
-      setTimeout(() => setNotification(null), 3000);
+      showNotification(`Opened project: ${proj.name}`);
     } catch {
       // No saved state — start fresh
       setProjectLayoutMeta(null);
@@ -351,7 +382,7 @@ export default function App() {
       setActiveEnvironment(null);
       setCanvasMode('freeform');
     }
-  }, [applyParsedResources, applyProjectState]);
+  }, [applyParsedResources, applyProjectState, showNotification]);
 
   useEffect(() => {
     if (tool === 'ansible' && rightTab === 'modules') {
@@ -372,11 +403,11 @@ export default function App() {
       }
     }
     if (msg.type === 'ai_progress') {
-      setNotification(msg.message || 'AI is working...');
+      showPersistentNotification(msg.message || 'AI is working...');
     }
     if (msg.type === 'ai_topology_result') {
       setImportLoading(false);
-      setNotification(null);
+      clearNotification();
       if (msg.error) {
         setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: msg.error, warnings: [msg.error] });
       } else if (msg.resources) {
@@ -399,10 +430,9 @@ export default function App() {
       // Only show notification, don't re-parse. The canvas is the source of
       // truth — if the user wants to import external changes, they can
       // re-open the project or use the import feature.
-      setNotification(`File updated: ${msg.file?.split('/').pop()}`);
-      setTimeout(() => setNotification(null), 3000);
+      showNotification(`File updated: ${msg.file?.split('/').pop()}`);
     }
-  }, []);
+  }, [clearNotification, showNotification, showPersistentNotification, topologyProvider]);
 
   const { connected } = useWebSocket(handleWSMessage);
 
@@ -547,8 +577,7 @@ export default function App() {
 
   const addNode = useCallback((resourceDef: any) => {
     if (unresolvedHybridEnv) {
-      setNotification(`Environment "${activeEnv}" has no configured IaC tool`);
-      setTimeout(() => setNotification(null), 4000);
+      showNotification(`Environment "${activeEnv}" has no configured IaC tool`, 4000);
       return;
     }
     const node = {
@@ -589,7 +618,7 @@ export default function App() {
       return [...prev, node];
     });
     setSelectedNode(node.id);
-  }, [activeEnv, activeResourceFile, catalogResources, unresolvedHybridEnv]);
+  }, [activeEnv, activeResourceFile, catalogResources, showNotification, unresolvedHybridEnv]);
 
   const removeNode = useCallback((id: string) => {
     setNodes(prev => prev.filter(n => n.id !== id));
@@ -805,7 +834,7 @@ export default function App() {
 
     if (visionImages.length > 0) {
       setImportLoading(true);
-      setNotification('AI is reading your diagram...');
+      showPersistentNotification('AI is reading your diagram...');
       try {
         const result = await api.generateTopologyFromImages({
           description: topologyDesc,
@@ -836,14 +865,14 @@ export default function App() {
         });
       } finally {
         setImportLoading(false);
-        setNotification(null);
+        clearNotification();
       }
       return;
     }
 
     if (!topologyDesc.trim()) return;
     setImportLoading(true);
-    setNotification('AI is designing your infrastructure...');
+    showPersistentNotification('AI is designing your infrastructure...');
     try {
       // Fire and forget — result arrives via WebSocket
       await api.generateTopology(topologyDesc, toolKey, topologyProvider);
@@ -852,7 +881,7 @@ export default function App() {
       const message = e?.message || 'Generation failed';
       setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: message, warnings: [message] });
       setImportLoading(false);
-      setNotification(null);
+      clearNotification();
     }
   };
 
@@ -861,8 +890,7 @@ export default function App() {
     try {
       await api.createProject(projectName, selectedTool);
     } catch (err: unknown) {
-      setNotification(`Import failed: ${errorMessage(err, 'Unable to create project')}`);
-      setTimeout(() => setNotification(null), 5000);
+      showNotification(`Import failed: ${errorMessage(err, 'Unable to create project')}`, 5000);
       return;
     }
     setTool(selectedTool);
@@ -914,20 +942,17 @@ export default function App() {
     setImportPreview(null);
     setVisionImages([]);
     setVisionError(null);
-    setNotification(`Imported ${preview.resources.length} resources`);
-    setTimeout(() => setNotification(null), 4000);
-  }, [catalogResources, projectName, resetNodes]);
+    showNotification(`Imported ${preview.resources.length} resources`, 4000);
+  }, [catalogResources, projectName, resetNodes, showNotification]);
 
   const saveCodeToDisk = useCallback(async (value: string) => {
     if (!tool || !projectId) return;
     if (unresolvedHybridEnv) {
-      setNotification(`Save failed: environment "${activeEnv}" has no configured IaC tool`);
-      setTimeout(() => setNotification(null), 5000);
+      showNotification(`Save failed: environment "${activeEnv}" has no configured IaC tool`, 5000);
       return;
     }
     if (!value.trim()) {
-      setNotification('Nothing to save yet');
-      setTimeout(() => setNotification(null), 3000);
+      showNotification('Nothing to save yet');
       return;
     }
     setCodeSaving(true);
@@ -935,21 +960,14 @@ export default function App() {
     try {
       const fileName = concreteTool === 'pulumi' ? 'index.ts' : `main${TOOLS[concreteTool]?.ext || '.tf'}`;
       await api.syncCodeToDisk(projectId, tool, value, fileName, activeEnv);
-      setNotification(`Saved ${fileName}`);
-      setTimeout(() => setNotification(null), 3000);
+      showNotification(`Saved ${fileName}`);
     } catch (err: any) {
-      setNotification(`Save failed: ${err.message}`);
-      setTimeout(() => setNotification(null), 5000);
+      showNotification(`Save failed: ${err.message}`, 5000);
     } finally {
       setCodeSaving(false);
       setTimeout(() => { isSyncing.current = false; }, 1500);
     }
-  }, [activeEnv, concreteTool, projectId, tool, unresolvedHybridEnv]);
-
-  const showNotification = useCallback((message: string, duration = 3000) => {
-    setNotification(message);
-    window.setTimeout(() => setNotification(null), duration);
-  }, []);
+  }, [activeEnv, concreteTool, projectId, showNotification, tool, unresolvedHybridEnv]);
 
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
@@ -1007,11 +1025,9 @@ export default function App() {
                           try {
                             await api.deleteProject(p.name);
                             setSavedProjects(prev => prev.filter(sp => sp.name !== p.name));
-                            setNotification(`Deleted project: ${p.name}`);
-                            setTimeout(() => setNotification(null), 3000);
+                            showNotification(`Deleted project: ${p.name}`);
                           } catch (err: any) {
-                            setNotification(`Failed to delete: ${err.message}`);
-                            setTimeout(() => setNotification(null), 4000);
+                            showNotification(`Failed to delete: ${err.message}`, 4000);
                           }
                         }}>✕</span>
                       <span style={{ fontSize: 11, color: t.color, fontWeight: 700, fontFamily: 'JetBrains Mono' }}>OPEN</span>

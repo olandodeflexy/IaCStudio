@@ -124,7 +124,7 @@ export function AISettingsModal({
               placeholder="sk-..."
             />
             <div className="ui-note ui-note--small" style={{ marginTop: 4 }}>
-              Your key is sent to the backend only - never stored on disk or sent to third parties.
+              Your key is not stored on disk. It is sent only to the selected provider endpoint, or to your configured custom endpoint.
             </div>
           </div>
         )}
