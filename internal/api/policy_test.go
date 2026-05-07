@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -107,6 +108,9 @@ func TestPolicyRunBuiltinOnly(t *testing.T) {
 		t.Fatalf("POST: %v", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("policy run should 200, got %d", resp.StatusCode)
+	}
 
 	var got policyRunResponse
 	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
@@ -252,6 +256,213 @@ func TestPolicyRunPulumiEnvRunsCrossGuard(t *testing.T) {
 	}
 }
 
+func TestPolicyRunHybridPulumiEnvBuiltinUsesTSParser(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	envDir := filepath.Join(project, "environments", "dev")
+	if err := os.MkdirAll(envDir, 0o755); err != nil {
+		t.Fatalf("mkdir pulumi env: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".iac-studio.json"), []byte(`{
+  "layout": "layered-v1",
+  "tool": "multi",
+  "environments": ["dev"],
+  "environment_tools": {"dev": "pulumi"}
+}`), 0o644); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
+	writePulumiPolicyProgram(t, envDir)
+
+	srv := httptest.NewServer(policyMux(root))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{
+		"engines": []string{"builtin"},
+		"tool":    "multi",
+		"env":     "dev",
+	})
+	resp, err := http.Post(srv.URL+"/api/projects/demo/policy/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("policy run should 200, got %d", resp.StatusCode)
+	}
+
+	var got policyRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Results) != 1 || got.Results[0].Engine != "builtin" {
+		t.Fatalf("expected a single builtin result, got %+v", got.Results)
+	}
+	if len(got.Findings) == 0 {
+		t.Fatalf("builtin engine should evaluate Pulumi TS resources, got %+v", got)
+	}
+	if !got.Blocking {
+		t.Fatal("Pulumi TS builtin findings should be blocking")
+	}
+}
+
+func TestPolicyRunRejectsUnresolvedHybridEnvironmentTool(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	if err := os.MkdirAll(filepath.Join(project, "environments", "dev"), 0o755); err != nil {
+		t.Fatalf("mkdir dev env: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(project, ".iac-studio.json"), []byte(`{
+  "layout": "layered-v1",
+  "tool": "multi",
+  "environments": ["dev"],
+  "environment_tools": {"prod": "terraform"}
+}`), 0o644); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
+
+	srv := httptest.NewServer(policyMux(root))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{
+		"tool": "multi",
+		"env":  "dev",
+	})
+	resp, err := http.Post(srv.URL+"/api/projects/demo/policy/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("policy run should reject unresolved hybrid env with 400, got %d", resp.StatusCode)
+	}
+	assertResponseBodyContains(t, resp, `unresolved hybrid tool for env "dev"`, ".iac-studio.json environment_tools")
+}
+
+func TestPolicyRunHybridTerraformEnvUsesRootPolicies(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	envDir := filepath.Join(project, "environments", "prod")
+	policyDir := filepath.Join(project, "policies", "opa")
+	for _, dir := range []string{envDir, policyDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(project, ".iac-studio.json"), []byte(`{
+  "layout": "layered-v1",
+  "tool": "multi",
+  "environments": ["prod"],
+  "environment_tools": {"prod": "terraform"}
+}`), 0o644); err != nil {
+		t.Fatalf("write descriptor: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "main.tf"), []byte(`# env-scoped terraform
+`), 0o644); err != nil {
+		t.Fatalf("write env main.tf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "tfplan.json"), []byte(`{"resource_changes":[]}`), 0o644); err != nil {
+		t.Fatalf("write env tfplan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(policyDir, "policy.rego"), []byte(`package iacstudio.test
+
+deny[msg] {
+  msg := "root policy denied env plan"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write root rego: %v", err)
+	}
+
+	srv := httptest.NewServer(policyMux(root))
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{
+		"engines": []string{"opa"},
+		"tool":    "multi",
+		"env":     "prod",
+	})
+	resp, err := http.Post(srv.URL+"/api/projects/demo/policy/run", "application/json", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	var got policyRunResponse
+	if err := json.NewDecoder(resp.Body).Decode(&got); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(got.Results) != 1 || got.Results[0].Engine != "opa" {
+		t.Fatalf("expected a single opa result, got %+v", got.Results)
+	}
+	if len(got.Findings) != 1 {
+		t.Fatalf("expected root OPA policy finding for env plan, got %+v", got)
+	}
+	if !got.Blocking {
+		t.Fatal("root OPA deny finding should be blocking")
+	}
+}
+
+func TestEvaluateBlockingPoliciesUsesRootPoliciesAndEnvPlan(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "demo")
+	envDir := filepath.Join(project, "environments", "prod")
+	policyDir := filepath.Join(project, "policies", "opa")
+	for _, dir := range []string{envDir, policyDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "main.tf"), []byte(`# env-scoped terraform
+`), 0o644); err != nil {
+		t.Fatalf("write env main.tf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(envDir, "tfplan.json"), []byte(`{"resource_changes":[]}`), 0o644); err != nil {
+		t.Fatalf("write env tfplan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(policyDir, "policy.rego"), []byte(`package iacstudio.test
+
+deny[msg] {
+  msg := "root policy denied env apply"
+}
+`), 0o644); err != nil {
+		t.Fatalf("write root rego: %v", err)
+	}
+
+	findings, blocking := evaluateBlockingPolicies(context.Background(), project, envDir, "terraform")
+	if !blocking {
+		t.Fatalf("expected root policy to block env apply, findings=%+v", findings)
+	}
+	hasOPA := false
+	for _, finding := range findings {
+		if finding.Engine == "opa" && strings.Contains(finding.Message, "root policy denied env apply") {
+			hasOPA = true
+			break
+		}
+	}
+	if !hasOPA {
+		t.Fatalf("expected OPA finding from root policy, got %+v", findings)
+	}
+}
+
+func TestEvaluateBlockingPoliciesPulumiUsesTSParser(t *testing.T) {
+	project := t.TempDir()
+	writePulumiPolicyProgram(t, project)
+
+	findings, blocking := evaluateBlockingPolicies(context.Background(), project, project, "pulumi")
+	if !blocking {
+		t.Fatalf("expected Pulumi TS resource policy finding to block apply, findings=%+v", findings)
+	}
+	hasBuiltin := false
+	for _, finding := range findings {
+		if finding.Engine == "builtin" && finding.Resource == "aws_s3_bucket.logs" {
+			hasBuiltin = true
+			break
+		}
+	}
+	if !hasBuiltin {
+		t.Fatalf("expected builtin finding for parsed Pulumi S3 bucket, got %+v", findings)
+	}
+}
+
 func fakePolicyPulumi(t *testing.T, stdout string, exitCode int) string {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -264,4 +475,16 @@ func fakePolicyPulumi(t *testing.T, stdout string, exitCode int) string {
 		t.Fatalf("write fake pulumi: %v", err)
 	}
 	return path
+}
+
+func writePulumiPolicyProgram(t *testing.T, dir string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(dir, "index.ts"), []byte(`import * as aws from "@pulumi/aws";
+
+const logs = new aws.s3.Bucket("logs", {
+  bucket: "demo-logs",
+});
+`), 0o644); err != nil {
+		t.Fatalf("write index.ts: %v", err)
+	}
 }

@@ -83,6 +83,10 @@ type EvalInput struct {
 	// policy bundles from disk (OPA, Conftest, Sentinel) resolve their files
 	// relative to here — typically policies/opa/*.rego, policies/sentinel/*.sentinel.
 	ProjectDir string
+	// WorkDir is the absolute path for the active IaC working directory. In
+	// layered projects this is usually environments/<env>; when empty, engines
+	// should treat ProjectDir as the working directory.
+	WorkDir string
 	// Resources is the parsed resource graph from the project's .tf/.yml
 	// files. The built-in Go engine walks this directly.
 	Resources []parser.Resource

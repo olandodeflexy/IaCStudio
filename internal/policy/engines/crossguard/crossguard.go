@@ -60,6 +60,10 @@ func (c *crossguardEngine) Evaluate(ctx context.Context, in engines.EvalInput) (
 		res.Error = "crossguard engine requires a project directory"
 		return res, nil
 	}
+	workDir := in.WorkDir
+	if workDir == "" {
+		workDir = in.ProjectDir
+	}
 	packs, err := discoverPolicyPacks(in.ProjectDir)
 	if err != nil {
 		res.Error = err.Error()
@@ -68,13 +72,13 @@ func (c *crossguardEngine) Evaluate(ctx context.Context, in engines.EvalInput) (
 	if len(packs) == 0 {
 		return res, nil
 	}
-	if !hasPulumiProject(in.ProjectDir) {
+	if !hasPulumiProject(workDir) {
 		res.Error = "crossguard engine requires a Pulumi project directory containing Pulumi.yaml"
 		return res, nil
 	}
 
 	args := []string{"preview", "--non-interactive", "--color=never"}
-	if stack := inferStackName(in.ProjectDir); stack != "" {
+	if stack := inferStackName(workDir); stack != "" {
 		args = append(args, "--stack", stack)
 	}
 	for _, pack := range packs {
@@ -82,7 +86,7 @@ func (c *crossguardEngine) Evaluate(ctx context.Context, in engines.EvalInput) (
 	}
 
 	cmd := exec.CommandContext(ctx, Binary, args...)
-	cmd.Dir = in.ProjectDir
+	cmd.Dir = workDir
 	var out bytes.Buffer
 	cmd.Stdout = &out
 	cmd.Stderr = &out

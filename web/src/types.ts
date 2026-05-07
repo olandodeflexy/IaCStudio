@@ -12,6 +12,7 @@ export type { Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, Import
 export interface LayeredProject {
   layout: 'layered-v1' | 'flat';
   environments: string[];
+  environmentTools?: Record<string, string>;
   modules: LayeredModule[];
 }
 

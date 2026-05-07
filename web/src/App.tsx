@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect } from 'react';
+import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { api, ApiError, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, ImportResult, type PolicyFinding } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
@@ -14,9 +14,11 @@ import { SwimlaneCanvas } from './components/Canvas';
 import { VisionDropzone } from './components/VisionDropzone';
 import { S } from './styles';
 import type { LayeredProject, LayeredModule } from './types';
-import { envForTool, shouldParseResourcesFromDisk } from './projectLoad';
+import { envForResourceLoad, envForTool, shouldParseResourcesFromDisk, toolForEnv } from './projectLoad';
 import {
   TOOLS,
+  ALL_TOOLS,
+  PROJECT_CREATION_TOOLS,
   FALLBACK_RESOURCES,
   uid,
   edgeId,
@@ -47,18 +49,36 @@ const isPolicyBlockedError = (err: unknown): err is ApiError => (
 const extractLayoutMeta = (state: any) => {
   if (!state?.layout) return null;
   const meta: Record<string, any> = {};
-  for (const key of ['layout', 'blueprint', 'project_name', 'cloud', 'environments', 'modules', 'tags']) {
+  for (const key of ['layout', 'blueprint', 'project_name', 'cloud', 'environments', 'environment_tools', 'modules', 'tags']) {
     if (state[key] !== undefined) meta[key] = state[key];
   }
   return meta;
 };
 
-const normalizeLayeredProject = (state: any): LayeredProject | null => {
+export const normalizeLayeredProject = (state: any): LayeredProject | null => {
   if (state?.layout !== 'layered-v1') return null;
   const environments = Array.isArray(state.environments)
     ? state.environments.filter((env: unknown): env is string => typeof env === 'string' && env.length > 0)
     : [];
   if (environments.length === 0) return null;
+  const rawEnvironmentTools = state.environment_tools;
+  let environmentTools: Record<string, string> | undefined;
+  if (
+    rawEnvironmentTools &&
+    typeof rawEnvironmentTools === 'object' &&
+    !Array.isArray(rawEnvironmentTools) &&
+    [Object.prototype, null].includes(Object.getPrototypeOf(rawEnvironmentTools))
+  ) {
+    const normalizedEnvironmentTools = Object.create(null) as Record<string, string>;
+    for (const [env, envTool] of Object.entries(rawEnvironmentTools)) {
+      if (environments.includes(env) && typeof envTool === 'string' && envTool.length > 0) {
+        normalizedEnvironmentTools[env] = envTool;
+      }
+    }
+    if (Object.keys(normalizedEnvironmentTools).length > 0) {
+      environmentTools = normalizedEnvironmentTools;
+    }
+  }
 
   const rawModules = Array.isArray(state.modules) ? state.modules : [];
   const modules: LayeredModule[] = rawModules
@@ -86,7 +106,27 @@ const normalizeLayeredProject = (state: any): LayeredProject | null => {
     modules.unshift({ name: 'root', path: 'environments', environments });
   }
 
-  return { layout: 'layered-v1', environments, modules };
+  return { layout: 'layered-v1', environments, environmentTools, modules };
+};
+
+export const resourceEnv = (resource: { file?: string }) => {
+  if (!resource.file) return null;
+  const parts = resource.file.replace(/\\/g, '/').split('/');
+  const envIdx = parts.indexOf('environments');
+  return envIdx >= 0 && parts.length > envIdx + 1 ? parts[envIdx + 1] : null;
+};
+
+export const resourcesForEnv = <T extends { id: string; file?: string }>(resources: T[], env?: string) => {
+  if (!env) return resources;
+  return resources.filter(resource => {
+    const envFromFile = resourceEnv(resource);
+    return envFromFile === env;
+  });
+};
+
+const edgesForResources = (allEdges: Edge[], resources: { id: string }[]) => {
+  const ids = new Set(resources.map(resource => resource.id));
+  return allEdges.filter(edge => ids.has(edge.from) && ids.has(edge.to));
 };
 
 export default function App() {
@@ -130,6 +170,7 @@ export default function App() {
   const [rightTab, setRightTab] = useState<'inspect' | 'policy' | 'scan' | 'modules'>('inspect');
   const [projectLayoutMeta, setProjectLayoutMeta] = useState<Record<string, any> | null>(null);
   const [layeredProject, setLayeredProject] = useState<LayeredProject | null>(null);
+  const [activeEnvironment, setActiveEnvironment] = useState<string | null>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>('freeform');
 
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
@@ -153,7 +194,26 @@ export default function App() {
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
   const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
-  const pulumiEnv = envForTool(tool || '', layeredProject);
+  const showEnvironmentSelector = Boolean(layeredProject && (tool === 'multi' || layeredProject.environmentTools));
+  const activeEnv = envForTool(tool || '', layeredProject, activeEnvironment);
+  const activeTool = toolForEnv(tool || '', layeredProject, activeEnv);
+  const unresolvedHybridEnv = tool === 'multi' && Boolean(activeEnv) && !activeTool;
+  const concreteTool = activeTool && activeTool !== 'multi'
+    ? activeTool
+    : (tool && tool !== 'multi' ? tool : 'terraform');
+  const activeResourceFile = unresolvedHybridEnv
+    ? undefined
+    : concreteTool === 'pulumi'
+      ? (activeEnv ? `environments/${activeEnv}/index.ts` : undefined)
+      : (tool === 'multi' && activeEnv ? `environments/${activeEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : undefined);
+  const activeEnvNodes = useMemo(
+    () => resourcesForEnv(nodes, (tool === 'multi' || tool === 'pulumi') ? activeEnv : undefined),
+    [nodes, activeEnv, tool],
+  );
+  const activeEnvEdges = useMemo(
+    () => edgesForResources(edges, activeEnvNodes),
+    [activeEnvNodes, edges],
+  );
 
   const buildPersistedState = useCallback(() => ({
     ...(projectLayoutMeta || {}),
@@ -172,6 +232,11 @@ export default function App() {
     const layered = normalizeLayeredProject(meta);
     setProjectLayoutMeta(meta);
     setLayeredProject(layered);
+    setActiveEnvironment(current => {
+      if (!layered) return null;
+      if (current && layered.environments.includes(current)) return current;
+      return layered.environments[0];
+    });
     setCanvasMode(layered ? 'swimlane' : 'freeform');
 
     if (state?.resources?.length > 0) {
@@ -235,7 +300,7 @@ export default function App() {
         const selectedLayered = normalizeLayeredProject(extractLayoutMeta(state));
         setTool(selectedTool);
         if (shouldParseResourcesFromDisk(state)) {
-          api.getResources(saved.current.projectId, selectedTool, envForTool(selectedTool, selectedLayered)).then(applyParsedResources).catch(() => {});
+          api.getResources(saved.current.projectId, selectedTool, envForResourceLoad(selectedTool, selectedLayered)).then(applyParsedResources).catch(() => {});
         }
       }).catch(() => {});
     }
@@ -273,7 +338,7 @@ export default function App() {
       const selectedLayered = normalizeLayeredProject(extractLayoutMeta(state));
       setTool(selectedTool);
       if (shouldParseResourcesFromDisk(state)) {
-        const parsed = await api.getResources(proj.name, selectedTool, envForTool(selectedTool, selectedLayered));
+        const parsed = await api.getResources(proj.name, selectedTool, envForResourceLoad(selectedTool, selectedLayered));
         applyParsedResources(parsed);
       }
       setNotification(`Opened project: ${proj.name}`);
@@ -282,6 +347,7 @@ export default function App() {
       // No saved state — start fresh
       setProjectLayoutMeta(null);
       setLayeredProject(null);
+      setActiveEnvironment(null);
       setCanvasMode('freeform');
     }
   }, [applyParsedResources, applyProjectState]);
@@ -411,48 +477,79 @@ export default function App() {
   // Fetch resource catalog from backend when tool changes
   useEffect(() => {
     if (!tool) return;
-    api.getCatalog(tool).then(cat => {
+    api.getCatalog(concreteTool).then(cat => {
       setCatalogResources(cat.resources || []);
     }).catch(() => {
       setCatalogResources(FALLBACK_RESOURCES);
     });
-  }, [tool]);
+  }, [concreteTool, tool]);
 
   // Generate code preview whenever nodes change
   useEffect(() => {
-    if (!tool || !nodes.length) {
+    if (!tool || unresolvedHybridEnv || !nodes.length) {
       setSyncCode('');
       return;
     }
-    const code = generateLocalCode(tool, nodes, edges);
+    const code = generateLocalCode(concreteTool, activeEnvNodes, activeEnvEdges);
     setSyncCode(code);
-  }, [nodes, edges, tool]);
+  }, [activeEnvEdges, activeEnvNodes, concreteTool, tool, unresolvedHybridEnv]);
 
   // Sync to disk (debounced) — syncs even when nodes is empty so that
   // deleting the last resource clears the generated file on disk.
   const syncTimer = useRef<ReturnType<typeof setTimeout>>();
+  const pendingSync = useRef<{ projectId: string; tool: string; nodes: Resource[]; edges: Edge[]; env?: string } | null>(null);
   const hasCreatedProject = useRef(false);
   const initialLoadDone = useRef(false);
+  const syncScope = `${projectId}:${tool || ''}:${activeEnv || ''}`;
+  const lastSyncScope = useRef('');
+  const flushPendingSync = useCallback(() => {
+    const snapshot = pendingSync.current;
+    if (!snapshot) return;
+    pendingSync.current = null;
+    syncTimer.current = undefined;
+    isSyncing.current = true;
+    api.syncToDisk(snapshot.projectId, snapshot.tool, snapshot.nodes, snapshot.edges, snapshot.env).catch(() => {}).finally(() => {
+      setTimeout(() => { isSyncing.current = false; }, 1500);
+    });
+  }, []);
   useEffect(() => {
     if (!tool || !hasCreatedProject.current || !projectId) return;
+    if (unresolvedHybridEnv) {
+      clearTimeout(syncTimer.current);
+      syncTimer.current = undefined;
+      pendingSync.current = null;
+      return;
+    }
     // Skip the first sync after opening a project — the restored state
     // doesn't need to be written back immediately (it came from disk).
     if (!initialLoadDone.current) {
       initialLoadDone.current = true;
+      lastSyncScope.current = syncScope;
       return;
     }
+    if (lastSyncScope.current && lastSyncScope.current !== syncScope) {
+      clearTimeout(syncTimer.current);
+      syncTimer.current = undefined;
+      flushPendingSync();
+      lastSyncScope.current = syncScope;
+      return;
+    }
+    lastSyncScope.current = syncScope;
     clearTimeout(syncTimer.current);
+    pendingSync.current = { projectId, tool, nodes: activeEnvNodes, edges: activeEnvEdges, env: activeEnv };
     syncTimer.current = setTimeout(() => {
-      isSyncing.current = true;
-      api.syncToDisk(projectId, tool, nodes, edges, pulumiEnv).catch(() => {}).finally(() => {
-        setTimeout(() => { isSyncing.current = false; }, 1500);
-      });
+      flushPendingSync();
     }, 2000);
-  }, [nodes, edges, tool, projectId, pulumiEnv]);
+  }, [activeEnvEdges, activeEnvNodes, flushPendingSync, projectId, activeEnv, syncScope, tool, unresolvedHybridEnv]);
 
   // ─── Handlers ───
 
   const addNode = useCallback((resourceDef: any) => {
+    if (unresolvedHybridEnv) {
+      setNotification(`Environment "${activeEnv}" has no configured IaC tool`);
+      setTimeout(() => setNotification(null), 4000);
+      return;
+    }
     const node = {
       id: uid(),
       type: resourceDef.type,
@@ -460,6 +557,7 @@ export default function App() {
       label: resourceDef.label,
       icon: resourceDef.icon,
       properties: { ...(resourceDef.defaults || {}) },
+      file: activeResourceFile,
       x: 100 + Math.random() * 280,
       y: 80 + Math.random() * 180,
     };
@@ -490,7 +588,7 @@ export default function App() {
       return [...prev, node];
     });
     setSelectedNode(node.id);
-  }, [catalogResources]);
+  }, [activeEnv, activeResourceFile, catalogResources, unresolvedHybridEnv]);
 
   const removeNode = useCallback((id: string) => {
     setNodes(prev => prev.filter(n => n.id !== id));
@@ -638,6 +736,10 @@ export default function App() {
 
   const runCmd = (command: string) => {
     if (!tool) return;
+    if (unresolvedHybridEnv) {
+      setTerminalOutput(prev => [...prev, `Error: environment "${activeEnv}" has no configured IaC tool`]);
+      return;
+    }
     // apply/destroy require explicit confirmation
     const needsApproval = command === 'apply' || command === 'destroy';
     if (needsApproval && !confirm(`Are you sure you want to run "${command}"? This will modify real infrastructure.`)) {
@@ -646,7 +748,7 @@ export default function App() {
     setTerminalOutput(prev => [...prev, `$ ${command}`, '']);
     api.runCommand(projectId, tool, command, {
       approved: needsApproval,
-      env: pulumiEnv,
+      env: activeEnv,
     }).catch(err => {
       if (needsApproval && isPolicyBlockedError(err)) {
         const findings = err.payload?.findings ?? [];
@@ -664,7 +766,7 @@ export default function App() {
         setTerminalOutput(prev => [...prev, `$ ${command} --acknowledged`, '']);
         api.runCommand(projectId, tool, command, {
           approved: true,
-          env: pulumiEnv,
+          env: activeEnv,
           acknowledged: true,
         }).catch(overrideErr => {
           setTerminalOutput(prev => [...prev, `Error: ${overrideErr.message}`]);
@@ -740,6 +842,11 @@ export default function App() {
 
   const saveCodeToDisk = useCallback(async (value: string) => {
     if (!tool || !projectId) return;
+    if (unresolvedHybridEnv) {
+      setNotification(`Save failed: environment "${activeEnv}" has no configured IaC tool`);
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
     if (!value.trim()) {
       setNotification('Nothing to save yet');
       setTimeout(() => setNotification(null), 3000);
@@ -748,8 +855,8 @@ export default function App() {
     setCodeSaving(true);
     isSyncing.current = true;
     try {
-      const fileName = tool === 'pulumi' ? 'index.ts' : `main${TOOLS[tool]?.ext || '.tf'}`;
-      await api.syncCodeToDisk(projectId, tool, value, fileName, pulumiEnv);
+      const fileName = concreteTool === 'pulumi' ? 'index.ts' : `main${TOOLS[concreteTool]?.ext || '.tf'}`;
+      await api.syncCodeToDisk(projectId, tool, value, fileName, activeEnv);
       setNotification(`Saved ${fileName}`);
       setTimeout(() => setNotification(null), 3000);
     } catch (err: any) {
@@ -759,12 +866,13 @@ export default function App() {
       setCodeSaving(false);
       setTimeout(() => { isSyncing.current = false; }, 1500);
     }
-  }, [projectId, pulumiEnv, tool]);
+  }, [activeEnv, concreteTool, projectId, tool, unresolvedHybridEnv]);
 
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
     setProjectLayoutMeta(null);
     setLayeredProject(null);
+    setActiveEnvironment(null);
     setCanvasMode('freeform');
     // Lock the project ID at creation time so renaming the display input
     // can't silently redirect API calls to a different directory.
@@ -793,7 +901,7 @@ export default function App() {
               <UIKicker style={{ marginBottom: 12 }}>Recent Projects</UIKicker>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
                 {savedProjects.filter(p => p.tool).slice(0, 5).map(p => {
-                  const t = TOOLS[p.tool] || TOOLS.terraform;
+                  const t = ALL_TOOLS[p.tool] || TOOLS.terraform;
                   const count = p.resources?.length || 0;
                   return (
                     <button key={p.name} className="tool-card" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--bg-elev-1)', border: '1px solid var(--border-main)', borderRadius: 10, cursor: 'pointer', textAlign: 'left', transition: 'border-color 0.2s' }}
@@ -834,7 +942,7 @@ export default function App() {
           <h1 style={S.title}>{savedProjects.length > 0 ? 'New Project' : 'Choose your IaC tool'}</h1>
           <p style={S.subtitle}>Visual infrastructure builder with AI-powered assistance</p>
           <div style={S.cardGrid}>
-            {Object.entries(TOOLS).map(([key, t]) => {
+            {Object.entries(PROJECT_CREATION_TOOLS).map(([key, t]) => {
               const detected = detectedTools.find(d => d.name === t.name);
               return (
                 <button key={key} className="tool-card panel-reveal" style={{ ...S.card, borderColor: t.color + '33' }}
@@ -1038,6 +1146,7 @@ export default function App() {
                             setProjectId(projectName);
                             setProjectLayoutMeta(null);
                             setLayeredProject(null);
+                            setActiveEnvironment(null);
                             setCanvasMode('freeform');
                             hasCreatedProject.current = true;
                             initialLoadDone.current = true;
@@ -1087,11 +1196,11 @@ export default function App() {
     );
   }
 
-  const ct = TOOLS[tool] || TOOLS.terraform;
+  const ct = ALL_TOOLS[tool] || TOOLS[concreteTool] || TOOLS.terraform;
   const selected = nodes.find(n => n.id === selectedNode);
-  const codeFileLabel = tool === 'pulumi'
-    ? (pulumiEnv ? `environments/${pulumiEnv}/index.ts` : 'index.ts')
-    : `main${ct.ext}`;
+  const codeFileLabel = concreteTool === 'pulumi'
+    ? (activeEnv ? `environments/${activeEnv}/index.ts` : 'index.ts')
+    : (tool === 'multi' && activeEnv ? `environments/${activeEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : `main${TOOLS[concreteTool]?.ext || ct.ext}`);
 
   // ─── Main UI ───
   return (
@@ -1112,7 +1221,7 @@ export default function App() {
             // Refresh saved projects list
             api.listProjectStates().then(setSavedProjects).catch(() => {});
             setTool(null); resetNodes([]); setEdges([]); setChatMessages([]); setTerminalOutput([]);
-            setProjectLayoutMeta(null); setLayeredProject(null); setCanvasMode('freeform');
+            setProjectLayoutMeta(null); setLayeredProject(null); setActiveEnvironment(null); setCanvasMode('freeform');
             initialLoadDone.current = false; hasCreatedProject.current = false;
           }}>←</button>
           <span style={{ ...S.badge, background: ct.color + '22', color: ct.color }}>{ct.icon} {ct.name}</span>
@@ -1372,6 +1481,19 @@ export default function App() {
           onClick={() => { setSelectedNode(null); setSelectedEdge(null); }}>
           {layeredProject && (
             <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 10, display: 'flex', gap: 6, padding: 4, background: 'var(--bg-elev-1)', border: '1px solid var(--border-main)', borderRadius: 8 }}>
+              {showEnvironmentSelector && layeredProject.environments.map(env => {
+                const envTool = layeredProject.environmentTools?.[env];
+                return (
+                  <button
+                    key={env}
+                    style={{ ...S.cmd, background: activeEnvironment === env ? ct.color + '22' : 'transparent', color: activeEnvironment === env ? ct.color : 'var(--text-muted)', padding: '5px 9px' }}
+                    onClick={(e) => { e.stopPropagation(); setActiveEnvironment(env); }}
+                    title={envTool ? `${env} uses ${envTool}` : env}
+                  >
+                    {envTool ? `${env} (${envTool})` : env}
+                  </button>
+                );
+              })}
               {(['swimlane', 'freeform'] as const).map(mode => (
                 <button
                   key={mode}
@@ -1628,8 +1750,8 @@ export default function App() {
             <div style={S.codeHead}>
               <span>FILE {codeFileLabel}</span>
               <button
-                style={{ ...S.copyBtn, color: codeSaving || !syncCode.trim() ? '#555' : ct.color }}
-                disabled={codeSaving || !syncCode.trim()}
+                style={{ ...S.copyBtn, color: codeSaving || unresolvedHybridEnv || !syncCode.trim() ? '#555' : ct.color }}
+                disabled={codeSaving || unresolvedHybridEnv || !syncCode.trim()}
                 title="Save editor buffer to disk"
                 onClick={() => saveCodeToDisk(syncCode)}
               >
@@ -1647,7 +1769,7 @@ export default function App() {
                 )}
                 <CodeEditor
                   value={syncCode}
-                  filePath={tool === 'pulumi' ? 'index.ts' : `main${ct.ext}`}
+                  filePath={concreteTool === 'pulumi' ? 'index.ts' : `main${TOOLS[concreteTool]?.ext || ct.ext}`}
                   readOnly={false}
                   onChange={setSyncCode}
                   onSave={saveCodeToDisk}
@@ -1659,7 +1781,13 @@ export default function App() {
           )}
           {rightTab === 'policy' && (
             <div style={{ flex: 1, minHeight: 0 }}>
-              <PolicyStudioPanel projectName={projectId} tool={tool} env={pulumiEnv} />
+              {unresolvedHybridEnv ? (
+                <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 13 }}>
+                  Environment "{activeEnv}" has no configured IaC tool in .iac-studio.json.
+                </div>
+              ) : (
+                <PolicyStudioPanel projectName={projectId} tool={tool} env={activeEnv} />
+              )}
             </div>
           )}
           {rightTab === 'scan' && (

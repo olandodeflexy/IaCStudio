@@ -61,7 +61,7 @@ export function defaultLayeredClassifier(envs: string[], modules: string[]) {
   const modSet = new Set(modules);
   return (r: Resource) => {
     if (!r.file) return null;
-    const parts = r.file.split('/');
+    const parts = r.file.replace(/\\/g, '/').split('/');
 
     // modules/<mod>/...  → shared template, hide from the per-env view.
     const modIdx = parts.indexOf('modules');
@@ -75,7 +75,7 @@ export function defaultLayeredClassifier(envs: string[], modules: string[]) {
     if (envIdx >= 0 && parts.length > envIdx + 1 && envSet.has(parts[envIdx + 1])) {
       const env = parts[envIdx + 1];
       const fileName = parts[parts.length - 1] ?? '';
-      const stem = fileName.replace(/\.tf$/, '');
+      const stem = fileName.replace(/\.(tf|ts)$/, '');
       const module = modSet.has(stem) ? stem : 'root';
       if (!modSet.has(module)) return null;
       return { environment: env, module };

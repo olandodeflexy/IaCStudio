@@ -14,6 +14,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/policy/engines/crossguard"
 	"github.com/iac-studio/iac-studio/internal/policy/engines/opa"
 	"github.com/iac-studio/iac-studio/internal/policy/engines/sentinel"
+	pulumigen "github.com/iac-studio/iac-studio/internal/pulumi"
 )
 
 // defaultPolicyEngines is the list of engines registered on startup. Order
@@ -31,8 +32,8 @@ func defaultPolicyEngines() []engines.PolicyEngine {
 
 // policyRunRequest is the request shape for POST /api/projects/{name}/policy/run.
 // PlanJSON, when provided, is used directly. When empty, the handler falls
-// back to tfplan.json in the project root (the layered-terraform blueprint's
-// plan.sh writes it there). When neither is available, engines that require
+// back to tfplan.json in the active IaC workdir. In layered projects, that is
+// environments/<env>. When neither is available, engines that require
 // plan JSON surface a clear error on their Result.
 type policyRunRequest struct {
 	PlanJSON json.RawMessage `json:"plan_json,omitempty"`
@@ -42,9 +43,9 @@ type policyRunRequest struct {
 	// Tool selects the parser to use for the resource walk. Defaults to
 	// terraform.
 	Tool string `json:"tool,omitempty"`
-	// Env names a layered-v1 environment. When set, policy evaluation runs in
-	// environments/<env>, which is where layered Pulumi projects keep
-	// Pulumi.yaml and stack config.
+	// Env names a layered-v1 environment. When set, resources and plan JSON
+	// are loaded from environments/<env>, while policy bundles are discovered
+	// from the owning project root.
 	Env string `json:"env,omitempty"`
 }
 
@@ -99,38 +100,37 @@ func registerPolicyRoutes(mux *http.ServeMux, projectsDir string) {
 			return
 		}
 
-		tool := req.Tool
-		if tool == "" {
-			tool = "terraform"
+		tool := effectiveProjectTool(projectPath, req.Tool, req.Env)
+		if tool == "multi" {
+			http.Error(w, hybridToolResolutionMessage("env is required when running policy for hybrid projects", req.Env), 400)
+			return
 		}
+		projectRoot := projectPath
+		workDir := projectPath
 		if req.Env != "" {
 			subPath, subErr := safeSubdir(projectPath, "environments", req.Env)
 			if subErr != nil {
 				http.Error(w, "invalid env: "+subErr.Error(), 400)
 				return
 			}
-			projectPath = subPath
+			workDir = subPath
 		}
 
 		planJSON := []byte(req.PlanJSON)
 		if len(planJSON) == 0 {
-			// Fall back to <project>/tfplan.json which the layered-terraform
-			// blueprint's plan.sh writes after `terraform plan`. Missing is
-			// not an error here — plan-less engines (builtin) still run.
-			if data, err := os.ReadFile(filepath.Join(projectPath, "tfplan.json")); err == nil {
+			// Fall back to the active workdir's tfplan.json. Layered
+			// Terraform/hybrid scripts write one under environments/<env>.
+			// Missing is not an error here — plan-less engines still run.
+			if data, err := os.ReadFile(filepath.Join(workDir, "tfplan.json")); err == nil {
 				planJSON = data
 			}
 		}
-		var resources []parser.Resource
-		if p := parser.ForTool(tool); p != nil {
-			if parsed, err := p.ParseDir(projectPath); err == nil {
-				resources = parsed
-			}
-		}
+		resources := parsePolicyResources(workDir, tool)
 
 		selected := filterEngines(engs, req.EngineFilter)
 		results := engines.RunAll(r.Context(), selected, engines.EvalInput{
-			ProjectDir: projectPath,
+			ProjectDir: projectRoot,
+			WorkDir:    workDir,
 			Resources:  resources,
 			PlanJSON:   planJSON,
 		})
@@ -176,33 +176,31 @@ func filterEngines(engs []engines.PolicyEngine, filter []string) []engines.Polic
 // finding list (blocking-first) so the caller can surface it verbatim to the
 // user, and a boolean for a quick gate check.
 //
-// Plan JSON is loaded from tfplan.json on disk when present — the layered-
-// terraform blueprint's plan.sh writes it there after every successful
-// terraform plan. When absent, plan-consuming engines (OPA, Conftest,
-// Sentinel) short-circuit quietly; the builtin still runs against parsed
-// resources so resource-walk findings are caught even without a plan.
+// Plan JSON and resources are loaded from workDir, while policy bundles are
+// discovered from projectRoot. That keeps layered/hybrid env plans scoped to
+// environments/<env> without hiding root-level policies from OPA, Conftest,
+// and Sentinel.
 //
 // Any engine error is swallowed here — apply should not be gated by a
 // broken policy engine. The caller can still observe non-blocking findings
 // via POST /api/projects/{name}/policy/run if needed.
-func evaluateBlockingPolicies(ctx context.Context, projectPath, tool string) ([]engines.Finding, bool) {
+func evaluateBlockingPolicies(ctx context.Context, projectRoot, workDir, tool string) ([]engines.Finding, bool) {
 	if tool == "" {
 		tool = "terraform"
 	}
-	var resources []parser.Resource
-	if p := parser.ForTool(tool); p != nil {
-		if parsed, err := p.ParseDir(projectPath); err == nil {
-			resources = parsed
-		}
+	if workDir == "" {
+		workDir = projectRoot
 	}
+	resources := parsePolicyResources(workDir, tool)
 
 	var planJSON []byte
-	if data, err := os.ReadFile(filepath.Join(projectPath, "tfplan.json")); err == nil {
+	if data, err := os.ReadFile(filepath.Join(workDir, "tfplan.json")); err == nil {
 		planJSON = data
 	}
 
 	results := engines.RunAll(ctx, defaultPolicyEngines(), engines.EvalInput{
-		ProjectDir: projectPath,
+		ProjectDir: projectRoot,
+		WorkDir:    workDir,
 		Resources:  resources,
 		PlanJSON:   planJSON,
 	})
@@ -213,4 +211,20 @@ func evaluateBlockingPolicies(ctx context.Context, projectPath, tool string) ([]
 		}
 	}
 	return findings, false
+}
+
+func parsePolicyResources(workDir, tool string) []parser.Resource {
+	var (
+		resources []parser.Resource
+		err       error
+	)
+	if tool == "pulumi" {
+		resources, err = (&pulumigen.TSParser{}).ParseDir(workDir)
+	} else if p := parser.ForTool(tool); p != nil {
+		resources, err = p.ParseDir(workDir)
+	}
+	if err != nil {
+		return nil
+	}
+	return resources
 }

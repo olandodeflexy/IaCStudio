@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -28,6 +29,20 @@ func fullRouterForTest(t *testing.T, projectsDir string) *http.ServeMux {
 		runner.NewSafeRunner(runner.DefaultSafetyConfig()),
 		projectsDir,
 	)
+}
+
+func assertResponseBodyContains(t *testing.T, resp *http.Response, want ...string) {
+	t.Helper()
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read response body: %v", err)
+	}
+	body := string(data)
+	for _, text := range want {
+		if !strings.Contains(body, text) {
+			t.Fatalf("response body %q does not contain %q", body, text)
+		}
+	}
 }
 
 func TestStateRoutesRejectTraversalProjectName(t *testing.T) {
