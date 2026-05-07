@@ -5,6 +5,7 @@ import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { UIButton, UIInput, UIKicker, UILabel, UIPanel } from './ui';
 import { AISettingsModal, type AISettingsConfig } from './components/AISettings';
+import { AppHeader } from './components/AppHeader';
 import { CodeEditor } from './components/CodeEditor';
 import { ChatPanel } from './components/Chat';
 import { ImportWizardModal } from './components/ImportWizard';
@@ -969,6 +970,29 @@ export default function App() {
     }
   }, [activeEnv, concreteTool, projectId, showNotification, tool, unresolvedHybridEnv]);
 
+  const handleBackToProjectSelect = useCallback(async () => {
+    if (projectId && hasCreatedProject.current) {
+      await api.saveState(projectId, buildPersistedState()).catch(() => {});
+    }
+    api.listProjectStates().then(setSavedProjects).catch(() => {});
+    setTool(null);
+    resetNodes([]);
+    setEdges([]);
+    setChatMessages([]);
+    setTerminalOutput([]);
+    setProjectLayoutMeta(null);
+    setLayeredProject(null);
+    setActiveEnvironment(null);
+    setCanvasMode('freeform');
+    initialLoadDone.current = false;
+    hasCreatedProject.current = false;
+  }, [buildPersistedState, projectId, resetNodes]);
+
+  const openAISettings = useCallback(() => {
+    api.getAISettings().then(setAiSettings).catch(() => {});
+    setShowSettings(true);
+  }, []);
+
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
     setProjectLayoutMeta(null);
@@ -1138,50 +1162,23 @@ export default function App() {
         <div style={S.notification}>{notification}</div>
       )}
 
-      {/* Header */}
-      <header style={{ ...S.header, borderBottomColor: ct.color + '44' }} className="iac-header">
-        <div style={S.hLeft}>
-          <button style={S.backBtn} onClick={async () => {
-            // Save state before navigating away
-            if (projectId && hasCreatedProject.current) {
-              await api.saveState(projectId, buildPersistedState()).catch(() => {});
-            }
-            // Refresh saved projects list
-            api.listProjectStates().then(setSavedProjects).catch(() => {});
-            setTool(null); resetNodes([]); setEdges([]); setChatMessages([]); setTerminalOutput([]);
-            setProjectLayoutMeta(null); setLayeredProject(null); setActiveEnvironment(null); setCanvasMode('freeform');
-            initialLoadDone.current = false; hasCreatedProject.current = false;
-          }}>←</button>
-          <span style={{ ...S.badge, background: ct.color + '22', color: ct.color }}>{ct.icon} {ct.name}</span>
-          <input style={S.projInput} value={projectName} onChange={e => setProjectName(e.target.value)} />
-          <button style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 10, fontFamily: 'JetBrains Mono', padding: '2px 6px', color: '#789187' }}
-            title="Open in file manager"
-            onClick={() => api.revealProject(projectId).catch(() => {})}>OPEN</button>
-          <span style={{ fontSize: 10, color: wsConnected ? '#4ade80' : '#ef4444' }}>{wsConnected ? '● live' : '● offline'}</span>
-        </div>
-        <div style={S.hRight}>
-          <span style={S.count}>{nodes.length} resource{nodes.length !== 1 ? 's' : ''}</span>
-          <button style={{ ...S.cmd, background: 'var(--bg-elev-2)', color: canUndo ? 'var(--text-main)' : '#4b5551' }} onClick={undoNodes} disabled={!canUndo} title="Undo (Ctrl+Z)">↩</button>
-          <button style={{ ...S.cmd, background: 'var(--bg-elev-2)', color: canRedo ? 'var(--text-main)' : '#4b5551' }} onClick={redoNodes} disabled={!canRedo} title="Redo (Ctrl+Shift+Z)">↪</button>
-          <button style={{ ...S.cmd, background: ct.color + '22', color: ct.color }}
-            onClick={() => runCmd(tool === 'ansible' ? 'check' : 'init')}>
-            {tool === 'ansible' ? '▶ Check' : '▶ Init'}
-          </button>
-          <button style={{ ...S.cmd, background: ct.color + '22', color: ct.color }}
-            onClick={() => runCmd(tool === 'ansible' ? 'syntax' : 'plan')}>
-            {tool === 'ansible' ? '▶ Syntax' : '▶ Plan'}
-          </button>
-          <UIButton variant="primary" style={{ background: ct.color, borderColor: ct.color, color: '#0a0a0f' }}
-            onClick={() => runCmd(tool === 'ansible' ? 'playbook' : 'apply')}>
-            ▶ Apply
-          </UIButton>
-          <UIButton
-            onClick={() => { api.getAISettings().then(setAiSettings).catch(() => {}); setShowSettings(true); }}
-            title="AI Settings">
-            SETTINGS
-          </UIButton>
-        </div>
-      </header>
+      <AppHeader
+        tool={tool}
+        toolMeta={ct}
+        projectName={projectName}
+        projectId={projectId}
+        resourceCount={nodes.length}
+        wsConnected={wsConnected}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onBack={handleBackToProjectSelect}
+        onProjectNameChange={setProjectName}
+        onRevealProject={(id) => api.revealProject(id).catch(() => {})}
+        onUndo={undoNodes}
+        onRedo={redoNodes}
+        onRunCommand={runCmd}
+        onOpenSettings={openAISettings}
+      />
 
       {/* AI Settings Modal */}
       {showSettings && (
