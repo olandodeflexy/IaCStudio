@@ -32,6 +32,10 @@ const providers: ProviderOption[] = [
 ];
 
 const OPENAI_DEFAULT_ENDPOINT = 'https://api.openai.com/v1';
+const OLLAMA_DEFAULT_ENDPOINT = 'http://localhost:11434';
+const OLLAMA_DEFAULT_MODEL = 'gemma4';
+const OPENAI_DEFAULT_MODEL = 'gpt-4o';
+const ANTHROPIC_DEFAULT_MODEL = 'claude-haiku-4-5';
 
 function normalizeEndpoint(endpoint: string) {
   return endpoint.trim().replace(/\/+$/, '');
@@ -55,27 +59,27 @@ function selectedProvider(settings: AISettingsConfig) {
 
 function settingsForProvider(provider: string, settings: AISettingsConfig): AISettingsConfig {
   if (provider === 'ollama') {
-    return { ...settings, type: 'ollama', endpoint: 'http://localhost:11434', api_key: '' };
+    return { ...settings, type: 'ollama', endpoint: OLLAMA_DEFAULT_ENDPOINT, model: OLLAMA_DEFAULT_MODEL, api_key: '' };
   }
   if (provider === 'openai') {
-    return { ...settings, type: 'openai', endpoint: OPENAI_DEFAULT_ENDPOINT, model: 'gpt-4o' };
+    return { ...settings, type: 'openai', endpoint: OPENAI_DEFAULT_ENDPOINT, model: OPENAI_DEFAULT_MODEL };
   }
   if (provider === 'anthropic') {
-    return { ...settings, type: 'anthropic', endpoint: '', model: 'claude-haiku-4-5', api_key: '' };
+    return { ...settings, type: 'anthropic', endpoint: '', model: ANTHROPIC_DEFAULT_MODEL, api_key: '' };
   }
-  return { ...settings, type: 'custom' };
+  return { ...settings, type: 'custom', endpoint: OPENAI_DEFAULT_ENDPOINT, model: OPENAI_DEFAULT_MODEL };
 }
 
 function endpointPlaceholder(provider: string) {
-  if (provider === 'ollama') return 'http://localhost:11434';
+  if (provider === 'ollama') return OLLAMA_DEFAULT_ENDPOINT;
   if (provider === 'anthropic') return 'https://api.anthropic.com (optional)';
   return OPENAI_DEFAULT_ENDPOINT;
 }
 
 function modelPlaceholder(provider: string) {
-  if (provider === 'ollama') return 'gemma4';
-  if (provider === 'anthropic') return 'claude-haiku-4-5';
-  return 'gpt-4o';
+  if (provider === 'ollama') return OLLAMA_DEFAULT_MODEL;
+  if (provider === 'anthropic') return ANTHROPIC_DEFAULT_MODEL;
+  return OPENAI_DEFAULT_MODEL;
 }
 
 export function AISettingsModal({
