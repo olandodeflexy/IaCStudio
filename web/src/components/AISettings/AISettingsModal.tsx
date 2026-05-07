@@ -124,7 +124,7 @@ export function AISettingsModal({
               placeholder="sk-..."
             />
             <div className="ui-note ui-note--small" style={{ marginTop: 4 }}>
-              Your key is not stored on disk. It is sent only to the selected provider endpoint, or to your configured custom endpoint.
+              Your key is sent to the IaC Studio backend, kept in process memory, and used only for requests to the selected provider endpoint or your configured custom endpoint. It is not stored on disk.
             </div>
           </div>
         )}

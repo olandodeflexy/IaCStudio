@@ -47,7 +47,8 @@ describe('AISettingsModal', () => {
     expect(screen.getByDisplayValue('https://api.openai.com/v1')).toBeInTheDocument();
     expect(screen.getByDisplayValue('gpt-4o')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
-    expect(screen.getByText(/not stored on disk/i)).toHaveTextContent(/selected provider endpoint/i);
+    expect(screen.getByText(/IaC Studio backend/i)).toHaveTextContent(/kept in process memory/i);
+    expect(screen.getByText(/IaC Studio backend/i)).toHaveTextContent(/not stored on disk/i);
   });
 
   it('saves settings and closes the modal', async () => {
