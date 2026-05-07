@@ -323,10 +323,14 @@ body {
   cursor: pointer;
 }
 
-.import-wizard-entry--dir:hover,
+.import-wizard-entry--dir:hover {
+  background: var(--bg-elev-2);
+}
+
 .import-wizard-entry--dir:focus-visible {
   background: var(--bg-elev-2);
-  outline: none;
+  outline: 2px solid var(--accent-action);
+  outline-offset: -2px;
 }
 
 .import-wizard-entry--file {

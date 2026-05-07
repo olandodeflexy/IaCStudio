@@ -1,3 +1,5 @@
+import { useMemo } from 'react';
+
 import { api, type CatalogResource, type FileEntry, type ImportResult } from '../../api';
 import { fileGlyph } from '../../legacy';
 import { UIButton, UILabel, UIModal, UITextArea } from '../../ui';
@@ -38,6 +40,10 @@ function providerLabel(provider: string) {
   return 'Azure';
 }
 
+function errorMessage(err: unknown, fallback: string) {
+  return err instanceof Error && err.message ? err.message : fallback;
+}
+
 export function ImportWizardModal({
   importTab,
   onImportTabChange,
@@ -62,6 +68,11 @@ export function ImportWizardModal({
   onImportToCanvas,
   onClose,
 }: ImportWizardModalProps) {
+  const catalogByType = useMemo(
+    () => new Map(catalogResources.map(resource => [resource.type, resource])),
+    [catalogResources],
+  );
+
   const browseTo = async (path?: string) => {
     try {
       const result = await api.browse(path);
@@ -76,8 +87,8 @@ export function ImportWizardModal({
     try {
       const result = await api.importProject(browsePath);
       onImportPreviewChange(result);
-    } catch (err: any) {
-      const message = err?.message || 'Import failed';
+    } catch (err: unknown) {
+      const message = errorMessage(err, 'Import failed');
       onImportPreviewChange({
         tool: 'unknown',
         provider: 'unknown',
@@ -231,7 +242,7 @@ export function ImportWizardModal({
               </div>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
                 {importPreview.resources.map((resource, index) => {
-                  const meta = catalogResources.find(candidate => candidate.type === resource.type);
+                  const meta = catalogByType.get(resource.type);
                   return (
                     <span key={index} style={{ background: 'var(--bg-elev-2)', borderRadius: 6, padding: '4px 10px', fontSize: 11, color: 'var(--text-main)', fontFamily: 'JetBrains Mono' }}>
                       {meta?.icon ?? '📦'} {resource.type}.{resource.name}
