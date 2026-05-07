@@ -116,7 +116,7 @@ export function ImportWizardModal({
             </UIButton>
           ))}
         </div>
-        <button className="ui-close" onClick={onClose}>×</button>
+        <button className="ui-close" aria-label="Close import wizard" onClick={onClose}>×</button>
       </div>
 
       {importTab === 'browse' && !importPreview && (
@@ -135,28 +135,33 @@ export function ImportWizardModal({
             </UIButton>
           </div>
           <div style={{ padding: '4px 0' }}>
-            {browseEntries.map(entry => (
-              <div
-                key={entry.path}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 20px', cursor: entry.is_dir ? 'pointer' : 'default', fontSize: 13, color: entry.is_dir ? '#ccc' : '#777', fontFamily: 'JetBrains Mono' }}
-                onClick={() => {
-                  if (entry.is_dir) {
-                    browseTo(entry.path);
-                  }
-                }}
-                onMouseEnter={event => {
-                  if (entry.is_dir) (event.currentTarget as any).style.background = 'var(--bg-elev-2)';
-                }}
-                onMouseLeave={event => {
-                  (event.currentTarget as any).style.background = 'transparent';
-                }}
-              >
-                <span style={{ fontSize: 10, fontFamily: 'JetBrains Mono', color: '#7b8d84', minWidth: 30 }}>{fileGlyph(entry)}</span>
-                <span style={{ flex: 1 }}>{entry.name}</span>
-                {entry.is_dir && entry.children !== undefined && <span style={{ color: '#444', fontSize: 10 }}>{entry.children} items</span>}
-                {!entry.is_dir && <span style={{ color: '#444', fontSize: 10 }}>{entry.size > 1024 ? Math.round(entry.size / 1024) + 'KB' : entry.size + 'B'}</span>}
-              </div>
-            ))}
+            {browseEntries.map(entry => {
+              const contents = (
+                <>
+                  <span style={{ fontSize: 10, fontFamily: 'JetBrains Mono', color: '#7b8d84', minWidth: 30 }}>{fileGlyph(entry)}</span>
+                  <span style={{ flex: 1 }}>{entry.name}</span>
+                  {entry.is_dir && entry.children !== undefined && <span style={{ color: '#444', fontSize: 10 }}>{entry.children} items</span>}
+                  {!entry.is_dir && <span style={{ color: '#444', fontSize: 10 }}>{entry.size > 1024 ? Math.round(entry.size / 1024) + 'KB' : entry.size + 'B'}</span>}
+                </>
+              );
+              if (entry.is_dir) {
+                return (
+                  <button
+                    key={entry.path}
+                    type="button"
+                    className="import-wizard-entry import-wizard-entry--dir"
+                    onClick={() => browseTo(entry.path)}
+                  >
+                    {contents}
+                  </button>
+                );
+              }
+              return (
+                <div key={entry.path} className="import-wizard-entry import-wizard-entry--file">
+                  {contents}
+                </div>
+              );
+            })}
             {browseEntries.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#444' }}>Empty directory</div>}
           </div>
         </div>
@@ -214,7 +219,7 @@ export function ImportWizardModal({
           {importPreview.warnings && importPreview.warnings.length > 0 && (
             <div style={{ background: '#ef444411', border: '1px solid #ef444433', borderRadius: 8, padding: 10 }}>
               {importPreview.warnings.map((warning, index) => (
-                <div key={index} style={{ fontSize: 11, color: '#ef4444', fontFamily: 'JetBrains Mono' }}>{warning}</div>
+                <div key={`${warning}-${index}`} style={{ fontSize: 11, color: '#ef4444', fontFamily: 'JetBrains Mono' }}>{warning}</div>
               ))}
             </div>
           )}

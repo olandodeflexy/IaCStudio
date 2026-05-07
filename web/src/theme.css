@@ -305,6 +305,34 @@ body {
   font-size: 10px;
 }
 
+.import-wizard-entry {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 20px;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+  font-family: 'JetBrains Mono', monospace;
+  text-align: left;
+}
+
+.import-wizard-entry--dir {
+  color: #ccc;
+  cursor: pointer;
+}
+
+.import-wizard-entry--dir:hover,
+.import-wizard-entry--dir:focus-visible {
+  background: var(--bg-elev-2);
+  outline: none;
+}
+
+.import-wizard-entry--file {
+  color: #777;
+}
+
 .ui-choice-grid {
   display: flex;
   gap: 8px;

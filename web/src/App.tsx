@@ -872,31 +872,44 @@ export default function App() {
     hasCreatedProject.current = true;
     initialLoadDone.current = true;
 
-    const imported = preview.resources.map((resource, index) => ({
-      ...(() => {
-        const { file: _file, line: _line, ...rest } = resource;
-        return rest;
-      })(),
-      id: resource.id || `imp_${index}_${Date.now()}`,
-      x: 80 + (index % 5) * 200,
-      y: 80 + Math.floor(index / 5) * 130,
-      icon: catalogResources.find(candidate => candidate.type === resource.type)?.icon ?? '📦',
-      label: catalogResources.find(candidate => candidate.type === resource.type)?.label ?? resource.type,
-    }));
+    const catalogByType = new Map(catalogResources.map(resource => [resource.type, resource]));
+    const idMap = new Map<string, string>();
+    const generatedIdPrefix = `imp_${Date.now()}`;
+    const imported = preview.resources.map((resource, index) => {
+      const id = resource.id || `${generatedIdPrefix}_${index}`;
+      const meta = catalogByType.get(resource.type);
+      idMap.set(id, id);
+      if (resource.id) idMap.set(resource.id, id);
+      const { file: _file, line: _line, ...rest } = resource;
+      return {
+        ...rest,
+        id,
+        x: 80 + (index % 5) * 200,
+        y: 80 + Math.floor(index / 5) * 130,
+        icon: meta?.icon ?? '📦',
+        label: meta?.label ?? resource.type,
+      };
+    });
     resetNodes(imported);
 
-    if (preview.edges.length > 0) {
-      const newEdges = preview.edges.map(edge => ({
-        id: `${edge.from_id}->${edge.to_id}:${edge.field}`,
-        from: edge.from_id,
-        to: edge.to_id,
-        fromType: preview.resources.find(resource => resource.id === edge.from_id)?.type || '',
-        toType: preview.resources.find(resource => resource.id === edge.to_id)?.type || '',
+    const nodeTypeById = new Map(imported.map(resource => [resource.id, resource.type]));
+    const newEdges = preview.edges.flatMap(edge => {
+      const from = idMap.get(edge.from_id) ?? edge.from_id;
+      const to = idMap.get(edge.to_id) ?? edge.to_id;
+      const fromType = nodeTypeById.get(from);
+      const toType = nodeTypeById.get(to);
+      if (!fromType || !toType) return [];
+      return [{
+        id: `${from}->${to}:${edge.field}`,
+        from,
+        to,
+        fromType,
+        toType,
         field: edge.field,
         label: edge.field.replace(/_/g, ' '),
-      }));
-      setEdges(newEdges);
-    }
+      }];
+    });
+    setEdges(newEdges);
 
     setShowImportWizard(false);
     setImportPreview(null);
