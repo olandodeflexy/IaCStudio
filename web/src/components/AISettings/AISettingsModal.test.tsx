@@ -49,8 +49,8 @@ describe('AISettingsModal', () => {
     expect(screen.getByDisplayValue('https://api.openai.com/v1')).toBeInTheDocument();
     expect(screen.getByDisplayValue('gpt-4o')).toBeInTheDocument();
     expect(screen.getByPlaceholderText('sk-...')).toBeInTheDocument();
-    expect(screen.getByRole('radiogroup', { name: /Provider Type/i })).toBeInTheDocument();
-    expect(screen.getByRole('radio', { name: /OpenAI API/i })).toHaveAttribute('aria-checked', 'true');
+    expect(screen.getByRole('group', { name: /Provider Type/i })).toBeInTheDocument();
+    expect(screen.getByRole('radio', { name: /OpenAI API/i })).toBeChecked();
     expect(screen.getByText(/IaC Studio backend/i)).toHaveTextContent(/kept in process memory/i);
     expect(screen.getByText(/IaC Studio backend/i)).toHaveTextContent(/not stored on disk/i);
   });
@@ -65,10 +65,10 @@ describe('AISettingsModal', () => {
       },
     });
 
-    expect(screen.getByRole('radio', { name: /Custom API/i })).toHaveClass('is-active');
-    expect(screen.getByRole('radio', { name: /Custom API/i })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: /OpenAI API/i })).not.toHaveClass('is-active');
-    expect(screen.getByRole('radio', { name: /OpenAI API/i })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: /Custom API/i })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Custom API/i }).closest('label')).toHaveClass('is-active');
+    expect(screen.getByRole('radio', { name: /OpenAI API/i })).not.toBeChecked();
+    expect(screen.getByRole('radio', { name: /OpenAI API/i }).closest('label')).not.toHaveClass('is-active');
   });
 
   it('shows OpenAI selected for the default chat completions endpoint', () => {
@@ -81,8 +81,8 @@ describe('AISettingsModal', () => {
       },
     });
 
-    expect(screen.getByRole('radio', { name: /OpenAI API/i })).toHaveAttribute('aria-checked', 'true');
-    expect(screen.getByRole('radio', { name: /Custom API/i })).toHaveAttribute('aria-checked', 'false');
+    expect(screen.getByRole('radio', { name: /OpenAI API/i })).toBeChecked();
+    expect(screen.getByRole('radio', { name: /Custom API/i })).not.toBeChecked();
   });
 
   it('saves settings and closes the modal', async () => {

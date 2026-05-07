@@ -104,27 +104,32 @@ export function AISettingsModal({
           <button className="ui-close" aria-label="Close AI settings" onClick={onClose}>x</button>
         </div>
 
-        <div style={{ marginBottom: 16 }}>
-          <UILabel>Provider Type</UILabel>
-          <div className="ui-choice-grid" role="radiogroup" aria-label="Provider Type" style={{ marginTop: 8 }}>
+        <fieldset style={{ margin: '0 0 16px', padding: 0, border: 0 }}>
+          <legend className="ui-label">Provider Type</legend>
+          <div className="ui-choice-grid" style={{ marginTop: 8 }}>
             {providers.map(provider => {
               const isSelected = selectedProviderKey === provider.key;
               return (
-                <button
+                <label
                   key={provider.key}
-                  type="button"
-                  role="radio"
-                  aria-checked={isSelected}
-                  className={isSelected ? 'ui-choice-card is-active' : 'ui-choice-card'}
-                  onClick={() => onSettingsChange(current => settingsForProvider(provider.key, current))}
+                  className={isSelected ? 'ui-choice-card ai-provider-choice is-active' : 'ui-choice-card ai-provider-choice'}
                 >
-                  <div className="ui-choice-title">{provider.label}</div>
-                  <div className="ui-choice-desc">{provider.desc}</div>
-                </button>
+                  <input
+                    type="radio"
+                    name="ai-provider-type"
+                    value={provider.key}
+                    checked={isSelected}
+                    onChange={() => onSettingsChange(current => settingsForProvider(provider.key, current))}
+                  />
+                  <span>
+                    <span className="ui-choice-title">{provider.label}</span>
+                    <span className="ui-choice-desc">{provider.desc}</span>
+                  </span>
+                </label>
               );
             })}
           </div>
-        </div>
+        </fieldset>
 
         <div style={{ marginBottom: 12 }}>
           <UILabel>Endpoint</UILabel>
