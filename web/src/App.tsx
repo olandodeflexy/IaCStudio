@@ -3,15 +3,15 @@ import { api, ApiError, Resource, ToolInfo, CatalogResource, Suggestion, FileEnt
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
-import { UIButton, UIInput, UIKicker, UILabel, UIModal, UIPanel, UITextArea } from './ui';
+import { UIButton, UIInput, UIKicker, UILabel, UIModal, UIPanel } from './ui';
 import { CodeEditor } from './components/CodeEditor';
 import { ChatPanel } from './components/Chat';
+import { ImportWizardModal } from './components/ImportWizard';
 import { TerminalPanel } from './components/Terminal';
 import { ModuleRegistryPanel } from './components/ModuleRegistry';
 import { PolicyStudioPanel } from './components/PolicyStudio';
 import { ScanPanel } from './components/ScanPanel';
 import { SwimlaneCanvas } from './components/Canvas';
-import { VisionDropzone } from './components/VisionDropzone';
 import { S } from './styles';
 import type { LayeredProject, LayeredModule } from './types';
 import { envForResourceLoad, envForTool, shouldParseResourcesFromDisk, toolForEnv } from './projectLoad';
@@ -22,7 +22,6 @@ import {
   FALLBACK_RESOURCES,
   uid,
   edgeId,
-  fileGlyph,
   generateLocalCode,
   type Edge,
 } from './legacy';
@@ -784,6 +783,21 @@ export default function App() {
     setVisionError(null);
   };
 
+  const handleBrowseLoaded = useCallback((path: string, entries: FileEntry[], parent: string) => {
+    setBrowsePath(path);
+    setBrowseEntries(entries);
+    setBrowseParent(parent);
+  }, []);
+
+  const loadBrowsePath = useCallback(async (path?: string) => {
+    try {
+      const result = await api.browse(path);
+      handleBrowseLoaded(result.path, result.entries, result.parent);
+    } catch {
+      // Preserve local-only behavior when the backend browse endpoint is unavailable.
+    }
+  }, [handleBrowseLoaded]);
+
   const handleGenerateTopology = async () => {
     const toolKey = detectedTools.find(t => t.available && t.name !== 'Ansible')?.name === 'OpenTofu' ? 'opentofu' : 'terraform';
 
@@ -839,6 +853,58 @@ export default function App() {
       setNotification(null);
     }
   };
+
+  const handleImportToCanvas = useCallback(async (preview: ImportResult) => {
+    const selectedTool = preview.tool === 'opentofu' ? 'opentofu' : preview.tool === 'ansible' ? 'ansible' : 'terraform';
+    try {
+      await api.createProject(projectName, selectedTool);
+    } catch (err: any) {
+      setNotification(`Import failed: ${err.message}`);
+      setTimeout(() => setNotification(null), 5000);
+      return;
+    }
+    setTool(selectedTool);
+    setProjectId(projectName);
+    setProjectLayoutMeta(null);
+    setLayeredProject(null);
+    setActiveEnvironment(null);
+    setCanvasMode('freeform');
+    hasCreatedProject.current = true;
+    initialLoadDone.current = true;
+
+    const imported = preview.resources.map((resource, index) => ({
+      ...(() => {
+        const { file: _file, line: _line, ...rest } = resource;
+        return rest;
+      })(),
+      id: resource.id || `imp_${index}_${Date.now()}`,
+      x: 80 + (index % 5) * 200,
+      y: 80 + Math.floor(index / 5) * 130,
+      icon: catalogResources.find(candidate => candidate.type === resource.type)?.icon ?? '📦',
+      label: catalogResources.find(candidate => candidate.type === resource.type)?.label ?? resource.type,
+    }));
+    resetNodes(imported);
+
+    if (preview.edges.length > 0) {
+      const newEdges = preview.edges.map(edge => ({
+        id: `${edge.from_id}->${edge.to_id}:${edge.field}`,
+        from: edge.from_id,
+        to: edge.to_id,
+        fromType: preview.resources.find(resource => resource.id === edge.from_id)?.type || '',
+        toType: preview.resources.find(resource => resource.id === edge.to_id)?.type || '',
+        field: edge.field,
+        label: edge.field.replace(/_/g, ' '),
+      }));
+      setEdges(newEdges);
+    }
+
+    setShowImportWizard(false);
+    setImportPreview(null);
+    setVisionImages([]);
+    setVisionError(null);
+    setNotification(`Imported ${preview.resources.length} resources`);
+    setTimeout(() => setNotification(null), 4000);
+  }, [catalogResources, projectName, resetNodes]);
 
   const saveCodeToDisk = useCallback(async (value: string) => {
     if (!tool || !projectId) return;
@@ -983,7 +1049,7 @@ export default function App() {
             {/* Import / Topology buttons */}
             <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>
               <UIButton
-                onClick={() => { setImportTab('browse'); setVisionImages([]); setVisionError(null); setShowImportWizard(true); api.browse().then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {}); }}>
+                onClick={() => { setImportTab('browse'); setVisionImages([]); setVisionError(null); setShowImportWizard(true); loadBrowsePath(); }}>
                 Import Existing Project
               </UIButton>
               <UIButton variant="primary"
@@ -995,201 +1061,30 @@ export default function App() {
 
           {/* ─── Import Wizard Modal ─── */}
           {showImportWizard && (
-            <UIModal onClose={closeImportWizard}>
-              {/* Wizard header */}
-              <div className="ui-modal-header">
-                <div style={{ display: 'flex', gap: 12 }}>
-                    {(['browse', 'topology'] as const).map(t => (
-                      <UIButton key={t} variant="tab" active={importTab === t}
-                        onClick={() => { setImportTab(t); setImportPreview(null); if (t === 'browse') { setVisionImages([]); setVisionError(null); } }}>
-                        {t === 'browse' ? 'Browse Files' : 'AI Topology'}
-                      </UIButton>
-                    ))}
-                </div>
-                <button className="ui-close" onClick={closeImportWizard}>×</button>
-              </div>
-
-                {/* Browse tab */}
-                {importTab === 'browse' && !importPreview && (
-                  <div style={{ flex: 1, overflow: 'auto', minHeight: 300 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 20px', borderBottom: '1px solid var(--border-soft)', background: 'var(--bg-elev-1)' }}>
-                      <UIButton
-                        onClick={() => { api.browse(browseParent).then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {}); }}>
-                        ↑
-                      </UIButton>
-                      <span style={{ fontSize: 11, color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', flex: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{browsePath}</span>
-                      <UIButton variant="primary"
-                        disabled={importLoading}
-                        onClick={async () => {
-                          setImportLoading(true);
-                          try {
-                            const result = await api.importProject(browsePath);
-                            setImportPreview(result);
-                          } catch (e: any) {
-                            setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: e.message || 'Import failed', warnings: [e.message] });
-                          }
-                          setImportLoading(false);
-                        }}>
-                        {importLoading ? 'Scanning...' : 'Import this folder'}
-                      </UIButton>
-                    </div>
-                    <div style={{ padding: '4px 0' }}>
-                      {browseEntries.map(entry => (
-                        <div key={entry.path} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '7px 20px', cursor: entry.is_dir ? 'pointer' : 'default', fontSize: 13, color: entry.is_dir ? '#ccc' : '#777', fontFamily: 'JetBrains Mono' }}
-                          onClick={() => {
-                            if (entry.is_dir) {
-                              api.browse(entry.path).then(r => { setBrowsePath(r.path); setBrowseEntries(r.entries); setBrowseParent(r.parent); }).catch(() => {});
-                            }
-                          }}
-                          onMouseEnter={e => { if (entry.is_dir) (e.currentTarget as any).style.background = 'var(--bg-elev-2)'; }}
-                          onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
-                          <span style={{ fontSize: 10, fontFamily: 'JetBrains Mono', color: '#7b8d84', minWidth: 30 }}>{fileGlyph(entry)}</span>
-                          <span style={{ flex: 1 }}>{entry.name}</span>
-                          {entry.is_dir && entry.children !== undefined && <span style={{ color: '#444', fontSize: 10 }}>{entry.children} items</span>}
-                          {!entry.is_dir && <span style={{ color: '#444', fontSize: 10 }}>{entry.size > 1024 ? Math.round(entry.size / 1024) + 'KB' : entry.size + 'B'}</span>}
-                        </div>
-                      ))}
-                      {browseEntries.length === 0 && <div style={{ padding: 20, textAlign: 'center', color: '#444' }}>Empty directory</div>}
-                    </div>
-                  </div>
-                )}
-
-                {/* Topology tab */}
-                {importTab === 'topology' && !importPreview && (
-                  <div style={{ flex: 1, padding: 20, display: 'flex', flexDirection: 'column', gap: 16 }}>
-                    <div style={{ fontSize: 14, color: 'var(--text-main)', fontWeight: 600 }}>Describe your infrastructure</div>
-                    <div className="ui-note">
-                      Tell us what you want to build in plain language, or upload a diagram for vision analysis.
-                    </div>
-                    <VisionDropzone
-                      files={visionImages}
-                      onFilesChange={setVisionImages}
-                      onError={setVisionError}
-                      error={visionError}
-                      disabled={importLoading}
-                    />
-                    <UITextArea style={{ flex: 1, minHeight: 120 }}
-                      value={topologyDesc} onChange={e => setTopologyDesc(e.target.value)}
-                      placeholder={"Optional context:\nA three-tier web app with VPC, ALB, auto-scaling EC2, RDS PostgreSQL, and S3 for static assets\nA GKE cluster with Cloud SQL, Redis cache, and Cloud Storage for a microservices platform"} />
-                    <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                      <UILabel>Provider:</UILabel>
-                      {['aws', 'google', 'azurerm'].map(p => (
-                        <UIButton key={p} variant="tab" active={topologyProvider === p}
-                          onClick={() => setTopologyProvider(p)}>
-                          {p === 'aws' ? 'AWS' : p === 'google' ? 'GCP' : 'Azure'}
-                        </UIButton>
-                      ))}
-                    </div>
-                    <UIButton variant="primary"
-                      disabled={(!topologyDesc.trim() && visionImages.length === 0) || Boolean(visionError) || importLoading}
-                      onClick={handleGenerateTopology}>
-                      {importLoading ? 'Generating... (this may take a minute)' : visionImages.length > 0 ? 'Generate from Diagram' : 'Generate Infrastructure'}
-                    </UIButton>
-                  </div>
-                )}
-
-                {/* Preview panel — shown after scan or generation */}
-                {importPreview && (
-                  <div style={{ flex: 1, overflow: 'auto', padding: 20, display: 'flex', flexDirection: 'column', gap: 12 }}>
-                    <div style={{ fontSize: 14, fontWeight: 600, color: '#bbb' }}>
-                      {importPreview.tool === 'unknown' ? 'Import Failed' : 'Preview'}
-                    </div>
-                    <div className="ui-note">{importPreview.summary}</div>
-
-                    {importPreview.warnings && importPreview.warnings.length > 0 && (
-                      <div style={{ background: '#ef444411', border: '1px solid #ef444433', borderRadius: 8, padding: 10 }}>
-                        {importPreview.warnings.map((w, i) => (
-                          <div key={i} style={{ fontSize: 11, color: '#ef4444', fontFamily: 'JetBrains Mono' }}>{w}</div>
-                        ))}
-                      </div>
-                    )}
-
-                    {importPreview.resources.length > 0 && (
-                      <>
-                        <div style={{ fontSize: 11, color: '#555', fontFamily: 'JetBrains Mono', textTransform: 'uppercase', letterSpacing: 1 }}>
-                          {importPreview.resources.length} Resources
-                        </div>
-                        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                          {importPreview.resources.map((r, i) => {
-                            const meta = catalogResources.find(c => c.type === r.type);
-                            return (
-                              <span key={i} style={{ background: 'var(--bg-elev-2)', borderRadius: 6, padding: '4px 10px', fontSize: 11, color: 'var(--text-main)', fontFamily: 'JetBrains Mono' }}>
-                                {meta?.icon ?? '📦'} {r.type}.{r.name}
-                              </span>
-                            );
-                          })}
-                        </div>
-                        {importPreview.edges.length > 0 && (
-                          <div style={{ fontSize: 11, color: '#555', fontFamily: 'JetBrains Mono' }}>
-                            {importPreview.edges.length} connections detected
-                          </div>
-                        )}
-                      </>
-                    )}
-
-                    <div style={{ display: 'flex', gap: 10, marginTop: 8 }}>
-                      <UIButton onClick={() => setImportPreview(null)}>
-                        ← Back
-                      </UIButton>
-                      {importPreview.resources.length > 0 && (
-                        <UIButton variant="primary"
-                          onClick={async () => {
-                            const t = importPreview!.tool === 'opentofu' ? 'opentofu' : importPreview!.tool === 'ansible' ? 'ansible' : 'terraform';
-                            try {
-                              await api.createProject(projectName, t);
-                            } catch (e: any) {
-                              setNotification(`Import failed: ${e.message}`);
-                              setTimeout(() => setNotification(null), 5000);
-                              return;
-                            }
-                            setTool(t);
-                            setProjectId(projectName);
-                            setProjectLayoutMeta(null);
-                            setLayeredProject(null);
-                            setActiveEnvironment(null);
-                            setCanvasMode('freeform');
-                            hasCreatedProject.current = true;
-                            initialLoadDone.current = true;
-                            // Place resources on canvas in a grid layout
-                            const imported = importPreview!.resources.map((r, i) => ({
-                              ...(() => {
-                                const { file: _file, line: _line, ...rest } = r;
-                                return rest;
-                              })(),
-                              id: r.id || `imp_${i}_${Date.now()}`,
-                              x: 80 + (i % 5) * 200,
-                              y: 80 + Math.floor(i / 5) * 130,
-                              icon: catalogResources.find(c => c.type === r.type)?.icon ?? '📦',
-                              label: catalogResources.find(c => c.type === r.type)?.label ?? r.type,
-                            }));
-                            resetNodes(imported);
-                            // Create edges from detected connections
-                            if (importPreview!.edges.length > 0) {
-                              const newEdges = importPreview!.edges.map(e => ({
-                                id: `${e.from_id}->${e.to_id}:${e.field}`,
-                                from: e.from_id,
-                                to: e.to_id,
-                                fromType: importPreview!.resources.find(r => r.id === e.from_id)?.type || '',
-                                toType: importPreview!.resources.find(r => r.id === e.to_id)?.type || '',
-                                field: e.field,
-                                label: e.field.replace(/_/g, ' '),
-                              }));
-                              setEdges(newEdges);
-                            }
-                            setShowImportWizard(false);
-                            setImportPreview(null);
-                            setVisionImages([]);
-                            setVisionError(null);
-                            setNotification(`Imported ${importPreview!.resources.length} resources`);
-                            setTimeout(() => setNotification(null), 4000);
-                          }}>
-                          Import to Canvas
-                        </UIButton>
-                      )}
-                    </div>
-                  </div>
-                )}
-            </UIModal>
+            <ImportWizardModal
+              importTab={importTab}
+              onImportTabChange={setImportTab}
+              browsePath={browsePath}
+              browseParent={browseParent}
+              browseEntries={browseEntries}
+              onBrowseLoaded={handleBrowseLoaded}
+              importPreview={importPreview}
+              onImportPreviewChange={setImportPreview}
+              importLoading={importLoading}
+              onImportLoadingChange={setImportLoading}
+              topologyDesc={topologyDesc}
+              onTopologyDescChange={setTopologyDesc}
+              topologyProvider={topologyProvider}
+              onTopologyProviderChange={setTopologyProvider}
+              visionImages={visionImages}
+              onVisionImagesChange={setVisionImages}
+              visionError={visionError}
+              onVisionErrorChange={setVisionError}
+              catalogResources={catalogResources}
+              onGenerateTopology={handleGenerateTopology}
+              onImportToCanvas={handleImportToCanvas}
+              onClose={closeImportWizard}
+            />
           )}
         </div>
       </div>
