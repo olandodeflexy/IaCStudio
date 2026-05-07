@@ -58,7 +58,7 @@ describe('AppHeader', () => {
 
     expect(screen.getByText('1 resource')).toBeInTheDocument();
     expect(screen.getByText('● offline')).toBeInTheDocument();
-    expect(screen.getByTitle('Redo (Ctrl+Shift+Z)')).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Redo' })).toBeDisabled();
 
     fireEvent.click(screen.getByRole('button', { name: /Check/i }));
     fireEvent.click(screen.getByRole('button', { name: /Syntax/i }));
@@ -75,7 +75,7 @@ describe('AppHeader', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Back to projects' }));
     fireEvent.change(screen.getByRole('textbox', { name: 'Project name' }), { target: { value: 'renamed' } });
     fireEvent.click(screen.getByTitle('Open in file manager'));
-    fireEvent.click(screen.getByTitle('Undo (Ctrl+Z)'));
+    fireEvent.click(screen.getByRole('button', { name: 'Undo' }));
     fireEvent.click(screen.getByRole('button', { name: 'SETTINGS' }));
 
     expect(props.onBack).toHaveBeenCalled();

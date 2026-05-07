@@ -76,6 +76,7 @@ export function AppHeader({
           style={{ ...S.cmd, background: 'var(--bg-elev-2)', color: canUndo ? 'var(--text-main)' : '#4b5551' }}
           onClick={onUndo}
           disabled={!canUndo}
+          aria-label="Undo"
           title="Undo (Ctrl+Z)"
         >
           ↩
@@ -84,6 +85,7 @@ export function AppHeader({
           style={{ ...S.cmd, background: 'var(--bg-elev-2)', color: canRedo ? 'var(--text-main)' : '#4b5551' }}
           onClick={onRedo}
           disabled={!canRedo}
+          aria-label="Redo"
           title="Redo (Ctrl+Shift+Z)"
         >
           ↪
