@@ -3,7 +3,8 @@ import { api, ApiError, Resource, ToolInfo, CatalogResource, Suggestion, FileEnt
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
-import { UIButton, UIInput, UIKicker, UILabel, UIModal, UIPanel } from './ui';
+import { UIButton, UIInput, UIKicker, UILabel, UIPanel } from './ui';
+import { AISettingsModal, type AISettingsConfig } from './components/AISettings';
 import { CodeEditor } from './components/CodeEditor';
 import { ChatPanel } from './components/Chat';
 import { ImportWizardModal } from './components/ImportWizard';
@@ -155,7 +156,7 @@ export default function App() {
   const [visionImages, setVisionImages] = useState<File[]>([]);
   const [visionError, setVisionError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [aiSettings, setAiSettings] = useState({ type: 'ollama', endpoint: '', model: '', api_key: '' });
+  const [aiSettings, setAiSettings] = useState<AISettingsConfig>({ type: 'ollama', endpoint: '', model: '', api_key: '' });
   const [savedProjects, setSavedProjects] = useState<any[]>([]);
   const { state: nodes, set: setNodes, undo: undoNodes, redo: redoNodes, canUndo, canRedo, reset: resetNodes } = useHistory<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
@@ -193,6 +194,7 @@ export default function App() {
   const canvasRef = useRef<HTMLDivElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
+  const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
   const showEnvironmentSelector = Boolean(layeredProject && (tool === 'multi' || layeredProject.environmentTools));
   const activeEnv = envForTool(tool || '', layeredProject, activeEnvironment);
@@ -206,6 +208,37 @@ export default function App() {
     : concreteTool === 'pulumi'
       ? (activeEnv ? `environments/${activeEnv}/index.ts` : undefined)
       : (tool === 'multi' && activeEnv ? `environments/${activeEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : undefined);
+
+  const clearNotificationTimer = useCallback(() => {
+    if (notificationTimer.current !== null) {
+      clearTimeout(notificationTimer.current);
+      notificationTimer.current = null;
+    }
+  }, []);
+
+  const showNotification = useCallback((message: string, duration = 3000) => {
+    clearNotificationTimer();
+    setNotification(message);
+    notificationTimer.current = setTimeout(() => {
+      setNotification(null);
+      notificationTimer.current = null;
+    }, duration);
+  }, [clearNotificationTimer]);
+
+  const showPersistentNotification = useCallback((message: string) => {
+    clearNotificationTimer();
+    setNotification(message);
+  }, [clearNotificationTimer]);
+
+  const clearNotification = useCallback(() => {
+    clearNotificationTimer();
+    setNotification(null);
+  }, [clearNotificationTimer]);
+
+  useEffect(() => () => {
+    clearNotificationTimer();
+  }, [clearNotificationTimer]);
+
   const activeEnvNodes = useMemo(
     () => resourcesForEnv(nodes, (tool === 'multi' || tool === 'pulumi') ? activeEnv : undefined),
     [nodes, activeEnv, tool],
@@ -341,8 +374,7 @@ export default function App() {
         const parsed = await api.getResources(proj.name, selectedTool, envForResourceLoad(selectedTool, selectedLayered));
         applyParsedResources(parsed);
       }
-      setNotification(`Opened project: ${proj.name}`);
-      setTimeout(() => setNotification(null), 3000);
+      showNotification(`Opened project: ${proj.name}`);
     } catch {
       // No saved state — start fresh
       setProjectLayoutMeta(null);
@@ -350,7 +382,7 @@ export default function App() {
       setActiveEnvironment(null);
       setCanvasMode('freeform');
     }
-  }, [applyParsedResources, applyProjectState]);
+  }, [applyParsedResources, applyProjectState, showNotification]);
 
   useEffect(() => {
     if (tool === 'ansible' && rightTab === 'modules') {
@@ -371,11 +403,11 @@ export default function App() {
       }
     }
     if (msg.type === 'ai_progress') {
-      setNotification(msg.message || 'AI is working...');
+      showPersistentNotification(msg.message || 'AI is working...');
     }
     if (msg.type === 'ai_topology_result') {
       setImportLoading(false);
-      setNotification(null);
+      clearNotification();
       if (msg.error) {
         setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: msg.error, warnings: [msg.error] });
       } else if (msg.resources) {
@@ -398,10 +430,9 @@ export default function App() {
       // Only show notification, don't re-parse. The canvas is the source of
       // truth — if the user wants to import external changes, they can
       // re-open the project or use the import feature.
-      setNotification(`File updated: ${msg.file?.split('/').pop()}`);
-      setTimeout(() => setNotification(null), 3000);
+      showNotification(`File updated: ${msg.file?.split('/').pop()}`);
     }
-  }, []);
+  }, [clearNotification, showNotification, showPersistentNotification, topologyProvider]);
 
   const { connected } = useWebSocket(handleWSMessage);
 
@@ -546,8 +577,7 @@ export default function App() {
 
   const addNode = useCallback((resourceDef: any) => {
     if (unresolvedHybridEnv) {
-      setNotification(`Environment "${activeEnv}" has no configured IaC tool`);
-      setTimeout(() => setNotification(null), 4000);
+      showNotification(`Environment "${activeEnv}" has no configured IaC tool`, 4000);
       return;
     }
     const node = {
@@ -588,7 +618,7 @@ export default function App() {
       return [...prev, node];
     });
     setSelectedNode(node.id);
-  }, [activeEnv, activeResourceFile, catalogResources, unresolvedHybridEnv]);
+  }, [activeEnv, activeResourceFile, catalogResources, showNotification, unresolvedHybridEnv]);
 
   const removeNode = useCallback((id: string) => {
     setNodes(prev => prev.filter(n => n.id !== id));
@@ -804,7 +834,7 @@ export default function App() {
 
     if (visionImages.length > 0) {
       setImportLoading(true);
-      setNotification('AI is reading your diagram...');
+      showPersistentNotification('AI is reading your diagram...');
       try {
         const result = await api.generateTopologyFromImages({
           description: topologyDesc,
@@ -835,14 +865,14 @@ export default function App() {
         });
       } finally {
         setImportLoading(false);
-        setNotification(null);
+        clearNotification();
       }
       return;
     }
 
     if (!topologyDesc.trim()) return;
     setImportLoading(true);
-    setNotification('AI is designing your infrastructure...');
+    showPersistentNotification('AI is designing your infrastructure...');
     try {
       // Fire and forget — result arrives via WebSocket
       await api.generateTopology(topologyDesc, toolKey, topologyProvider);
@@ -851,7 +881,7 @@ export default function App() {
       const message = e?.message || 'Generation failed';
       setImportPreview({ tool: 'unknown', provider: 'unknown', files: [], resources: [], edges: [], summary: message, warnings: [message] });
       setImportLoading(false);
-      setNotification(null);
+      clearNotification();
     }
   };
 
@@ -860,8 +890,7 @@ export default function App() {
     try {
       await api.createProject(projectName, selectedTool);
     } catch (err: unknown) {
-      setNotification(`Import failed: ${errorMessage(err, 'Unable to create project')}`);
-      setTimeout(() => setNotification(null), 5000);
+      showNotification(`Import failed: ${errorMessage(err, 'Unable to create project')}`, 5000);
       return;
     }
     setTool(selectedTool);
@@ -913,20 +942,17 @@ export default function App() {
     setImportPreview(null);
     setVisionImages([]);
     setVisionError(null);
-    setNotification(`Imported ${preview.resources.length} resources`);
-    setTimeout(() => setNotification(null), 4000);
-  }, [catalogResources, projectName, resetNodes]);
+    showNotification(`Imported ${preview.resources.length} resources`, 4000);
+  }, [catalogResources, projectName, resetNodes, showNotification]);
 
   const saveCodeToDisk = useCallback(async (value: string) => {
     if (!tool || !projectId) return;
     if (unresolvedHybridEnv) {
-      setNotification(`Save failed: environment "${activeEnv}" has no configured IaC tool`);
-      setTimeout(() => setNotification(null), 5000);
+      showNotification(`Save failed: environment "${activeEnv}" has no configured IaC tool`, 5000);
       return;
     }
     if (!value.trim()) {
-      setNotification('Nothing to save yet');
-      setTimeout(() => setNotification(null), 3000);
+      showNotification('Nothing to save yet');
       return;
     }
     setCodeSaving(true);
@@ -934,16 +960,14 @@ export default function App() {
     try {
       const fileName = concreteTool === 'pulumi' ? 'index.ts' : `main${TOOLS[concreteTool]?.ext || '.tf'}`;
       await api.syncCodeToDisk(projectId, tool, value, fileName, activeEnv);
-      setNotification(`Saved ${fileName}`);
-      setTimeout(() => setNotification(null), 3000);
+      showNotification(`Saved ${fileName}`);
     } catch (err: any) {
-      setNotification(`Save failed: ${err.message}`);
-      setTimeout(() => setNotification(null), 5000);
+      showNotification(`Save failed: ${err.message}`, 5000);
     } finally {
       setCodeSaving(false);
       setTimeout(() => { isSyncing.current = false; }, 1500);
     }
-  }, [activeEnv, concreteTool, projectId, tool, unresolvedHybridEnv]);
+  }, [activeEnv, concreteTool, projectId, showNotification, tool, unresolvedHybridEnv]);
 
   const handleCreateProject = async (selectedTool: string) => {
     setTool(selectedTool);
@@ -1001,11 +1025,9 @@ export default function App() {
                           try {
                             await api.deleteProject(p.name);
                             setSavedProjects(prev => prev.filter(sp => sp.name !== p.name));
-                            setNotification(`Deleted project: ${p.name}`);
-                            setTimeout(() => setNotification(null), 3000);
+                            showNotification(`Deleted project: ${p.name}`);
                           } catch (err: any) {
-                            setNotification(`Failed to delete: ${err.message}`);
-                            setTimeout(() => setNotification(null), 4000);
+                            showNotification(`Failed to delete: ${err.message}`, 4000);
                           }
                         }}>✕</span>
                       <span style={{ fontSize: 11, color: t.color, fontWeight: 700, fontFamily: 'JetBrains Mono' }}>OPEN</span>
@@ -1163,74 +1185,12 @@ export default function App() {
 
       {/* AI Settings Modal */}
       {showSettings && (
-        <UIModal onClose={() => setShowSettings(false)} width={480} className="ui-panel--raised">
-          <div style={{ padding: 24 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-              <span className="ui-modal-title">AI Settings</span>
-              <button className="ui-close" onClick={() => setShowSettings(false)}>×</button>
-            </div>
-
-            <div style={{ marginBottom: 16 }}>
-              <UILabel>Provider Type</UILabel>
-              <div className="ui-choice-grid" style={{ marginTop: 8 }}>
-                {[
-                  { key: 'ollama', label: 'Ollama (Local)', desc: 'Free, private, runs on your machine' },
-                  { key: 'openai', label: 'OpenAI API', desc: 'GPT-4o, GPT-4-turbo' },
-                  { key: 'anthropic', label: 'Anthropic', desc: 'Claude Opus, Claude Haiku' },
-                  { key: 'custom', label: 'Custom API', desc: 'Any OpenAI-compatible endpoint' },
-                ].map(p => (
-                  <button key={p.key} className={aiSettings.type === p.key ? 'ui-choice-card is-active' : 'ui-choice-card'}
-                    onClick={() => {
-                      if (p.key === 'ollama') setAiSettings(s => ({ ...s, type: 'ollama', endpoint: 'http://localhost:11434', api_key: '' }));
-                      else if (p.key === 'openai') setAiSettings(s => ({ ...s, type: 'openai', endpoint: 'https://api.openai.com/v1', model: 'gpt-4o' }));
-                      else if (p.key === 'anthropic') setAiSettings(s => ({ ...s, type: 'anthropic', endpoint: '', model: 'claude-haiku-4-5', api_key: '' }));
-                      else setAiSettings(s => ({ ...s, type: 'custom' }));
-                    }}>
-                    <div className="ui-choice-title">{p.label}</div>
-                    <div className="ui-choice-desc">{p.desc}</div>
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <UILabel>Endpoint</UILabel>
-              <UIInput value={aiSettings.endpoint} onChange={e => setAiSettings(s => ({ ...s, endpoint: e.target.value }))}
-                placeholder={aiSettings.type === 'ollama' ? 'http://localhost:11434' : aiSettings.type === 'anthropic' ? 'https://api.anthropic.com (optional)' : 'https://api.openai.com/v1'} />
-            </div>
-
-            <div style={{ marginBottom: 12 }}>
-              <UILabel>Model</UILabel>
-              <UIInput value={aiSettings.model} onChange={e => setAiSettings(s => ({ ...s, model: e.target.value }))}
-                placeholder={aiSettings.type === 'ollama' ? 'gemma4' : aiSettings.type === 'anthropic' ? 'claude-haiku-4-5' : 'gpt-4o'} />
-            </div>
-
-            {aiSettings.type !== 'ollama' && (
-              <div style={{ marginBottom: 12 }}>
-                <UILabel>API Key</UILabel>
-                <UIInput type="password" value={aiSettings.api_key} onChange={e => setAiSettings(s => ({ ...s, api_key: e.target.value }))}
-                  placeholder="sk-..." />
-                <div className="ui-note ui-note--small" style={{ marginTop: 4 }}>Your key is sent to the backend only — never stored on disk or sent to third parties.</div>
-              </div>
-            )}
-
-            <div style={{ display: 'flex', gap: 10, marginTop: 20 }}>
-              <UIButton block onClick={() => setShowSettings(false)}>Cancel</UIButton>
-              <UIButton block variant="primary"
-                onClick={async () => {
-                  try {
-                    await api.updateAISettings(aiSettings);
-                    setNotification('AI settings updated');
-                    setTimeout(() => setNotification(null), 3000);
-                    setShowSettings(false);
-                  } catch (e: any) {
-                    setNotification(`Failed: ${e.message}`);
-                    setTimeout(() => setNotification(null), 4000);
-                  }
-                }}>Save</UIButton>
-            </div>
-          </div>
-        </UIModal>
+        <AISettingsModal
+          settings={aiSettings}
+          onSettingsChange={setAiSettings}
+          onNotify={showNotification}
+          onClose={() => setShowSettings(false)}
+        />
       )}
 
       <div style={S.main}>

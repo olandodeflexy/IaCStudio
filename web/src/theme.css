@@ -353,6 +353,18 @@ body {
   transition: border-color 180ms ease, background 180ms ease;
 }
 
+.ai-provider-choice {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.ai-provider-choice input {
+  margin-top: 2px;
+  accent-color: var(--accent-action);
+}
+
 .ui-choice-card.is-active {
   border-color: var(--accent-action);
   background: var(--accent-action-soft);
@@ -369,6 +381,7 @@ body {
 }
 
 .ui-choice-desc {
+  display: block;
   font-size: 10px;
   color: var(--text-muted);
   margin-top: 2px;
