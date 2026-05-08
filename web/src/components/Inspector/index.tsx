@@ -77,6 +77,7 @@ export function InspectorPanel({
 }: InspectorPanelProps) {
   const selected = nodes.find(node => node.id === selectedNodeId);
   const selectedEdge = edges.find(edge => edge.id === selectedEdgeId);
+  const saveDisabled = codeSaving || unresolvedHybridEnv || !syncCode.trim();
 
   const copyCode = async () => {
     if (onCopyCode) {
@@ -169,6 +170,7 @@ export function InspectorPanel({
                   {typeof value === 'boolean' ? (
                     <button
                       id={fieldId(selected.id, key)}
+                      aria-pressed={value}
                       style={{ ...S.ftoggle, background: value ? toolMeta.color + '33' : 'var(--bg-elev-2)', color: value ? toolMeta.color : 'var(--text-muted)' }}
                       onClick={() => onUpdateNodeProp(selected.id, key, !value)}
                     >
@@ -218,8 +220,8 @@ export function InspectorPanel({
             <div style={S.codeHead}>
               <span>FILE {codeFileLabel}</span>
               <button
-                style={{ ...S.copyBtn, color: codeSaving || unresolvedHybridEnv || !syncCode.trim() ? '#555' : toolMeta.color }}
-                disabled={codeSaving || unresolvedHybridEnv || !syncCode.trim()}
+                style={{ ...S.copyBtn, color: saveDisabled ? '#555' : toolMeta.color }}
+                disabled={saveDisabled}
                 title="Save editor buffer to disk"
                 onClick={() => onSaveCode(syncCode)}
               >
@@ -239,7 +241,7 @@ export function InspectorPanel({
                   filePath={codeEditorFilePath}
                   readOnly={false}
                   onChange={onSyncCodeChange}
-                  onSave={onSaveCode}
+                  onSave={saveDisabled ? undefined : onSaveCode}
                 />
               </div>
             </div>

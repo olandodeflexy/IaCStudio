@@ -107,9 +107,13 @@ describe('InspectorPanel', () => {
 
     expect(screen.getByText('V Properties')).toBeInTheDocument();
 
+    const booleanToggle = screen.getByLabelText('enable_dns_hostnames');
+
+    expect(booleanToggle).toHaveAttribute('aria-pressed', 'true');
+
     fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'core' } });
     fireEvent.change(screen.getByLabelText('cidr_block'), { target: { value: '10.1.0.0/16' } });
-    fireEvent.click(screen.getByLabelText('enable_dns_hostnames'));
+    fireEvent.click(booleanToggle);
     fireEvent.click(screen.getByRole('button', { name: /app.*vpc_id/ }));
 
     expect(props.onUpdateNodeName).toHaveBeenCalledWith('vpc', 'core');
@@ -144,6 +148,16 @@ describe('InspectorPanel', () => {
     expect(props.onSaveCode).toHaveBeenCalledWith('resource "aws_vpc" "main" {}');
     expect(props.onCopyCode).toHaveBeenCalledWith('resource "aws_vpc" "main" {}');
     expect(props.onTabChange).toHaveBeenCalledWith('policy');
+  });
+
+  it('keeps editor save disabled when the save button is disabled', () => {
+    const props = renderInspector({ unresolvedHybridEnv: true });
+
+    expect(screen.getByRole('button', { name: 'Save' })).toBeDisabled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Editor Save' }));
+
+    expect(props.onSaveCode).not.toHaveBeenCalled();
   });
 
   it('handles clipboard fallback failures without unhandled rejections', async () => {
