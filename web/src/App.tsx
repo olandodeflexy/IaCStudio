@@ -8,6 +8,7 @@ import { AppHeader } from './components/AppHeader';
 import { CodeEditor } from './components/CodeEditor';
 import { ChatPanel } from './components/Chat';
 import { ProjectLauncher, type SavedProject } from './components/ProjectLauncher';
+import { WorkspaceSidebar, type SidebarPanel } from './components/Sidebar';
 import { TerminalPanel } from './components/Terminal';
 import { ModuleRegistryPanel } from './components/ModuleRegistry';
 import { PolicyStudioPanel } from './components/PolicyStudio';
@@ -166,7 +167,7 @@ export default function App() {
   const [chatInput, setChatInput] = useState('');
   const [chatLoading, setChatLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
-  const [activePanel, setActivePanel] = useState('palette');
+  const [activePanel, setActivePanel] = useState<SidebarPanel>('palette');
   const [rightTab, setRightTab] = useState<'inspect' | 'policy' | 'scan' | 'modules'>('inspect');
   const [projectLayoutMeta, setProjectLayoutMeta] = useState<Record<string, any> | null>(null);
   const [layeredProject, setLayeredProject] = useState<LayeredProject | null>(null);
@@ -494,15 +495,6 @@ export default function App() {
       setConnecting(null);
     },
   });
-
-  // Filter resources by search query
-  const filteredResources = searchQuery
-    ? catalogResources.filter(r =>
-        r.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        r.type.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        r.category.toLowerCase().includes(searchQuery.toLowerCase()))
-    : catalogResources;
-  const filteredCategories = [...new Set(filteredResources.map(r => r.category))];
 
   // Fetch resource catalog from backend when tool changes
   useEffect(() => {
@@ -1117,142 +1109,25 @@ export default function App() {
 
       <div style={S.main}>
         {/* Sidebar — resizable */}
-        <aside style={{ ...S.sidebar, width: sidebarWidth }}>
-          <div style={S.tabs}>
-            {[
-              { key: 'palette', label: 'Resources' },
-              { key: 'suggest', label: 'Next' },
-              { key: 'guide', label: 'Guide' },
-            ].map(t => (
-              <button key={t.key} style={{ ...S.tab, ...(activePanel === t.key ? { color: ct.color, borderBottomColor: ct.color } : {}), fontSize: 10 }}
-                onClick={() => setActivePanel(t.key)}>
-                {t.label}
-                {t.key === 'suggest' && suggestions.length > 0 && (
-                  <span style={{ marginLeft: 4, background: ct.color + '33', color: ct.color, padding: '1px 5px', borderRadius: 8, fontSize: 9 }}>{suggestions.length}</span>
-                )}
-              </button>
-            ))}
-          </div>
-          {activePanel === 'palette' && (
-            <>
-              {/* Search */}
-              <div style={{ padding: '8px 10px', borderBottom: '1px solid var(--border-soft)' }}>
-                <input
-                  style={{ ...S.finput, fontSize: 12, padding: '6px 10px', background: 'var(--bg-app)' }}
-                  placeholder="Search resources..."
-                  value={searchQuery}
-                  onChange={e => setSearchQuery(e.target.value)}
-                />
-                {searchQuery && (
-                  <div style={{ fontSize: 10, color: '#555', marginTop: 4, fontFamily: 'JetBrains Mono' }}>
-                    {filteredResources.length} result{filteredResources.length !== 1 ? 's' : ''}
-                  </div>
-                )}
-              </div>
-              <div style={S.palScroll}>
-                {filteredCategories.map(cat => (
-                  <div key={cat}>
-                    <div style={S.catTitle}>{cat}</div>
-                    {filteredResources.filter((r: any) => r.category === cat).map((r: any) => (
-                      <button key={r.type} style={S.palItem} onClick={() => addNode(r)}
-                        onMouseEnter={e => {
-                          (e.currentTarget as any).style.background = 'var(--bg-elev-2)';
-                          const rect = e.currentTarget.getBoundingClientRect();
-                          setHoverPos({ x: rect.right + 8, y: rect.top });
-                          setHoveredResource(r);
-                        }}
-                        onMouseLeave={e => {
-                          (e.currentTarget as any).style.background = 'transparent';
-                          setHoveredResource(null);
-                        }}>
-                        <span>{r.icon}</span>
-                        <span style={{ flex: 1 }}>{r.label}</span>
-                        <span style={{ color: '#444' }}>+</span>
-                      </button>
-                    ))}
-                  </div>
-                ))}
-                {filteredResources.length === 0 && searchQuery && (
-                  <div style={{ padding: '20px 16px', color: '#444', fontSize: 12, textAlign: 'center' }}>
-                    No resources matching "{searchQuery}"
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-          {activePanel === 'files' && (
-            <div style={{ padding: 16 }}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#bbb', marginBottom: 12, fontFamily: 'JetBrains Mono' }}>DIR {projectName}/</div>
-              {['main' + ct.ext, 'variables' + ct.ext, 'outputs' + ct.ext, '.gitignore'].map(f => (
-                <div key={f} style={{ fontSize: 12, color: '#777', padding: '5px 0 5px 12px', fontFamily: 'JetBrains Mono', cursor: 'pointer' }}>FILE {f}</div>
-              ))}
-              <div style={{ marginTop: 24, padding: 12, background: '#111122', borderRadius: 8, fontSize: 11, color: '#555', lineHeight: 1.6 }}>
-                Files sync to:<br /><code style={{ color: ct.color, fontFamily: 'JetBrains Mono' }}>~/{projectName}/</code>
-              </div>
-            </div>
-          )}
-          {/* Suggestions panel */}
-          {activePanel === 'suggest' && (
-            <div style={S.palScroll}>
-              {suggestions.length === 0 ? (
-                <div style={{ padding: 20, textAlign: 'center', color: '#555', fontSize: 12 }}>
-                  Add resources to get smart suggestions based on IaC best practices.
-                </div>
-              ) : (
-                suggestions.map(s => {
-                  const meta = catalogResources.find(c => c.type === s.type);
-                  return (
-                    <button key={s.type} style={{ ...S.palItem, flexDirection: 'column' as const, alignItems: 'flex-start', gap: 4, padding: '10px 16px' }}
-                      onClick={() => meta && addNode(meta)}
-                      onMouseEnter={e => { (e.currentTarget as any).style.background = 'var(--bg-elev-2)'; }}
-                      onMouseLeave={e => { (e.currentTarget as any).style.background = 'transparent'; }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%' }}>
-                        <span>{meta?.icon ?? '📦'}</span>
-                        <span style={{ flex: 1, fontWeight: 600, color: '#ddd' }}>{s.label}</span>
-                        <span style={{ color: s.priority === 1 ? ct.color : s.priority === 2 ? '#888' : '#555', fontSize: 9, fontFamily: 'JetBrains Mono' }}>
-                          {s.priority === 1 ? 'NEXT' : s.priority === 2 ? 'RECOMMENDED' : 'OPTIONAL'}
-                        </span>
-                      </div>
-                      <div style={{ fontSize: 11, color: '#666', lineHeight: 1.4, paddingLeft: 28 }}>{s.reason}</div>
-                    </button>
-                  );
-                })
-              )}
-            </div>
-          )}
-          {/* Guide panel */}
-          {activePanel === 'guide' && (
-            <div style={{ ...S.palScroll, padding: 16 }}>
-              <div style={{ fontSize: 14, fontWeight: 700, color: '#ddd', marginBottom: 16 }}>Getting Started</div>
-              {[
-                { step: '1', title: 'Add a foundation', desc: tool === 'ansible' ? 'Start with package installation (apt/yum)' : detectProvider() === 'google' ? 'Start with a VPC Network (google_compute_network)' : detectProvider() === 'azurerm' ? 'Start with a Resource Group (azurerm_resource_group)' : 'Start with a VPC (aws_vpc)' },
-                { step: '2', title: 'Build networking', desc: tool === 'ansible' ? 'Configure services and users' : 'Add subnets, security groups, and routing' },
-                { step: '3', title: 'Add compute', desc: tool === 'ansible' ? 'Deploy application files and templates' : 'Deploy VMs, containers, or serverless functions' },
-                { step: '4', title: 'Add data layer', desc: tool === 'ansible' ? 'Configure databases and cron jobs' : 'Add databases, caches, and storage buckets' },
-                { step: '5', title: 'Secure & monitor', desc: tool === 'ansible' ? 'Configure firewall and enable services' : 'Add IAM roles, encryption keys, and alarms' },
-              ].map(g => (
-                <div key={g.step} style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
-                  <div style={{ width: 24, height: 24, borderRadius: '50%', background: ct.color + '22', color: ct.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, flexShrink: 0 }}>{g.step}</div>
-                  <div>
-                    <div style={{ fontSize: 12, fontWeight: 600, color: '#bbb' }}>{g.title}</div>
-                    <div style={{ fontSize: 11, color: '#666', marginTop: 2 }}>{g.desc}</div>
-                  </div>
-                </div>
-              ))}
-              <div style={{ marginTop: 20, padding: 12, background: '#111122', borderRadius: 8, fontSize: 11, color: '#666', lineHeight: 1.6 }}>
-                <div style={{ fontWeight: 600, color: '#888', marginBottom: 6 }}>Tips</div>
-                <div>Drag the <span style={{ color: ct.color }}>circle port</span> on a node to connect it to another resource.</div>
-                <div style={{ marginTop: 4 }}>Use the <span style={{ color: ct.color }}>AI chat</span> below to describe what you need in plain language.</div>
-                <div style={{ marginTop: 4 }}>Check the <span style={{ color: ct.color }}>Next</span> tab for smart suggestions based on what's on your canvas.</div>
-                <div style={{ marginTop: 4 }}>The code preview on the right updates live as you build.</div>
-              </div>
-              <button style={{ ...S.cmd, background: ct.color + '22', color: ct.color, width: '100%', marginTop: 16, padding: '8px 0' }}
-                onClick={() => setActivePanel('suggest')}>
-                View Suggestions →
-              </button>
-            </div>
-          )}
-        </aside>
+        <WorkspaceSidebar
+          width={sidebarWidth}
+          activePanel={activePanel}
+          tool={tool}
+          toolMeta={ct}
+          projectName={projectName}
+          provider={detectProvider()}
+          resources={catalogResources}
+          suggestions={suggestions}
+          searchQuery={searchQuery}
+          onActivePanelChange={setActivePanel}
+          onSearchQueryChange={setSearchQuery}
+          onAddResource={addNode}
+          onResourceHover={(resource, position) => {
+            setHoverPos(position);
+            setHoveredResource(resource);
+          }}
+          onResourceHoverEnd={() => setHoveredResource(null)}
+        />
         {/* Sidebar resize handle */}
         <div style={{ width: 4, cursor: 'col-resize', background: resizing?.panel === 'sidebar' ? ct.color + '44' : 'transparent', flexShrink: 0, transition: 'background 0.15s' }}
           onMouseDown={e => setResizing({ panel: 'sidebar', startPos: e.clientX, startSize: sidebarWidth })}
