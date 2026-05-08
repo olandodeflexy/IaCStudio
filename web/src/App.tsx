@@ -3,12 +3,11 @@ import { api, ApiError, Resource, ToolInfo, CatalogResource, Suggestion, FileEnt
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
-import { UIButton, UIInput, UIKicker, UILabel, UIPanel } from './ui';
 import { AISettingsModal, type AISettingsConfig } from './components/AISettings';
 import { AppHeader } from './components/AppHeader';
 import { CodeEditor } from './components/CodeEditor';
 import { ChatPanel } from './components/Chat';
-import { ImportWizardModal } from './components/ImportWizard';
+import { ProjectLauncher, type SavedProject } from './components/ProjectLauncher';
 import { TerminalPanel } from './components/Terminal';
 import { ModuleRegistryPanel } from './components/ModuleRegistry';
 import { PolicyStudioPanel } from './components/PolicyStudio';
@@ -21,7 +20,6 @@ import { errorMessage } from './lib/errors';
 import {
   TOOLS,
   ALL_TOOLS,
-  PROJECT_CREATION_TOOLS,
   FALLBACK_RESOURCES,
   uid,
   edgeId,
@@ -158,7 +156,7 @@ export default function App() {
   const [visionError, setVisionError] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [aiSettings, setAiSettings] = useState<AISettingsConfig>({ type: 'ollama', endpoint: '', model: '', api_key: '' });
-  const [savedProjects, setSavedProjects] = useState<any[]>([]);
+  const [savedProjects, setSavedProjects] = useState<SavedProject[]>([]);
   const { state: nodes, set: setNodes, undo: undoNodes, redo: redoNodes, canUndo, canRedo, reset: resetNodes } = useHistory<(Resource & { x: number; y: number; icon: string; label: string })[]>([]);
   const [edges, setEdges] = useState<Edge[]>([]);
   const [selectedNode, setSelectedNode] = useState<string | null>(null);
@@ -360,7 +358,7 @@ export default function App() {
   }, [buildPersistedState, tool, projectId]);
 
   // Open a saved project
-  const openProject = useCallback(async (proj: any) => {
+  const openProject = useCallback(async (proj: SavedProject) => {
     setProjectName(proj.name);
     setProjectId(proj.name);
     setTool(proj.tool || 'terraform');
@@ -830,6 +828,29 @@ export default function App() {
     }
   }, [handleBrowseLoaded]);
 
+  const startImportBrowse = useCallback(() => {
+    setImportTab('browse');
+    setVisionImages([]);
+    setVisionError(null);
+    setShowImportWizard(true);
+    loadBrowsePath();
+  }, [loadBrowsePath]);
+
+  const startTopologyBuilder = useCallback(() => {
+    setImportTab('topology');
+    setShowImportWizard(true);
+  }, []);
+
+  const handleDeleteSavedProject = useCallback(async (name: string) => {
+    try {
+      await api.deleteProject(name);
+      setSavedProjects(prev => prev.filter(project => project.name !== name));
+      showNotification(`Deleted project: ${name}`);
+    } catch (err: any) {
+      showNotification(`Failed to delete: ${err.message}`, 4000);
+    }
+  }, [showNotification]);
+
   const handleGenerateTopology = async () => {
     const toolKey = detectedTools.find(t => t.available && t.name !== 'Ansible')?.name === 'OpenTofu' ? 'opentofu' : 'terraform';
 
@@ -1014,137 +1035,41 @@ export default function App() {
   // ─── Tool Selection ───
   if (!tool) {
     return (
-      <div style={S.selectScreen} className="select-screen">
-        <div className="ambient-orb ambient-orb-a" />
-        <div className="ambient-orb ambient-orb-b" />
-        <div style={S.selectBg} />
-        <div style={S.selectContent}>
-          <div style={S.logo}><span style={{ fontSize: 28, color: 'var(--accent-action)' }}>◆</span> <span style={S.logoText}>IaC Studio</span></div>
-          {/* Saved projects */}
-          {savedProjects.length > 0 && (
-            <div style={{ marginBottom: 32, width: '100%', maxWidth: 600 }}>
-              <UIKicker style={{ marginBottom: 12 }}>Recent Projects</UIKicker>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                {savedProjects.filter(p => p.tool).slice(0, 5).map(p => {
-                  const t = ALL_TOOLS[p.tool] || TOOLS.terraform;
-                  const count = p.resources?.length || 0;
-                  return (
-                    <button key={p.name} className="tool-card" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 16px', background: 'var(--bg-elev-1)', border: '1px solid var(--border-main)', borderRadius: 10, cursor: 'pointer', textAlign: 'left', transition: 'border-color 0.2s' }}
-                      onClick={() => openProject(p)}
-                      onMouseEnter={e => { (e.currentTarget as any).style.borderColor = t.color; }}
-                      onMouseLeave={e => { (e.currentTarget as any).style.borderColor = 'var(--border-main)'; }}>
-                      <span style={{ fontSize: 20 }}>{t.icon}</span>
-                      <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: '#ccc', fontFamily: 'JetBrains Mono' }}>{p.name}</div>
-                        <div style={{ fontSize: 11, color: '#555' }}>{t.name} · {count} resource{count !== 1 ? 's' : ''}{p.updated_at ? ' · ' + new Date(p.updated_at).toLocaleDateString() : ''}</div>
-                      </div>
-                      <span style={{ fontSize: 11, color: '#555', cursor: 'pointer', fontFamily: 'JetBrains Mono' }}
-                        title="Open in file manager"
-                        onClick={(e) => { e.stopPropagation(); api.revealProject(p.name).catch(() => {}); }}>OPEN</span>
-                      <span style={{ fontSize: 12, color: '#555', cursor: 'pointer', padding: '0 8px' }}
-                        title="Delete project"
-                        onClick={async (e) => {
-                          e.stopPropagation();
-                          if (!confirm(`Delete project "${p.name}"?\n\nThis will permanently remove the project directory and all its files.\n\nThis cannot be undone.`)) return;
-                          try {
-                            await api.deleteProject(p.name);
-                            setSavedProjects(prev => prev.filter(sp => sp.name !== p.name));
-                            showNotification(`Deleted project: ${p.name}`);
-                          } catch (err: any) {
-                            showNotification(`Failed to delete: ${err.message}`, 4000);
-                          }
-                        }}>✕</span>
-                      <span style={{ fontSize: 11, color: t.color, fontWeight: 700, fontFamily: 'JetBrains Mono' }}>OPEN</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          <h1 style={S.title}>{savedProjects.length > 0 ? 'New Project' : 'Choose your IaC tool'}</h1>
-          <p style={S.subtitle}>Visual infrastructure builder with AI-powered assistance</p>
-          <div style={S.cardGrid}>
-            {Object.entries(PROJECT_CREATION_TOOLS).map(([key, t]) => {
-              const detected = detectedTools.find(d => d.name === t.name);
-              return (
-                <button key={key} className="tool-card panel-reveal" style={{ ...S.card, borderColor: t.color + '33' }}
-                  onClick={() => handleCreateProject(key)}
-                  onMouseEnter={e => { (e.currentTarget as any).style.borderColor = t.color; (e.currentTarget as any).style.transform = 'translateY(-4px)'; }}
-                  onMouseLeave={e => { (e.currentTarget as any).style.borderColor = t.color + '33'; (e.currentTarget as any).style.transform = 'translateY(0)'; }}>
-                  <span style={{ fontSize: 26, fontWeight: 700, letterSpacing: 0.8, fontFamily: 'JetBrains Mono', color: t.color }}>{t.icon}</span>
-                  <span style={{ fontSize: 18, fontWeight: 600, color: t.color }}>{t.name}</span>
-                  <span style={{ fontSize: 12, color: '#555', fontFamily: 'JetBrains Mono' }}>{t.ext} files</span>
-                  {detected && (
-                    <span style={{ fontSize: 10, color: detected.available ? '#4ade80' : '#666', marginTop: 4 }}>
-                      {detected.available ? `✓ ${detected.version?.slice(0, 30)}` : '✗ Not installed'}
-                    </span>
-                  )}
-                </button>
-              );
-            })}
-          </div>
-          <div style={S.features}>
-            {['Visual drag-and-drop builder', 'AI chat to generate resources', 'Real-time code generation', 'Files editable on disk'].map(f => (
-              <div key={f} style={{ fontSize: 13, color: '#555', display: 'flex', alignItems: 'center', gap: 6 }}>
-                <span style={{ fontSize: 8, color: 'var(--accent-action)' }}>●</span> {f}
-              </div>
-            ))}
-          </div>
-
-          {/* Project name & directory */}
-          <UIPanel style={{ marginTop: 32, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10, padding: '16px 24px', width: '100%', maxWidth: 480 }}>
-            <div style={{ display: 'flex', gap: 8, alignItems: 'center', width: '100%' }}>
-              <UILabel style={{ whiteSpace: 'nowrap' }}>Project name:</UILabel>
-              <UIInput style={{ flex: 1, minWidth: 0 }}
-                value={projectName} onChange={e => setProjectName(e.target.value)} placeholder="my-infra-project" />
-            </div>
-            <div className="ui-path">
-              ROOT ~/iac-projects/<span style={{ color: 'var(--accent-action)' }}>{projectName}</span>/
-            </div>
-
-            {/* Import / Topology buttons */}
-            <div style={{ marginTop: 12, display: 'flex', gap: 10 }}>
-              <UIButton
-                onClick={() => { setImportTab('browse'); setVisionImages([]); setVisionError(null); setShowImportWizard(true); loadBrowsePath(); }}>
-                Import Existing Project
-              </UIButton>
-              <UIButton variant="primary"
-                onClick={() => { setImportTab('topology'); setShowImportWizard(true); }}>
-                Build with AI
-              </UIButton>
-            </div>
-          </UIPanel>
-
-          {/* ─── Import Wizard Modal ─── */}
-          {showImportWizard && (
-            <ImportWizardModal
-              importTab={importTab}
-              onImportTabChange={setImportTab}
-              browsePath={browsePath}
-              browseParent={browseParent}
-              browseEntries={browseEntries}
-              onBrowseLoaded={handleBrowseLoaded}
-              importPreview={importPreview}
-              onImportPreviewChange={setImportPreview}
-              importLoading={importLoading}
-              onImportLoadingChange={setImportLoading}
-              topologyDesc={topologyDesc}
-              onTopologyDescChange={setTopologyDesc}
-              topologyProvider={topologyProvider}
-              onTopologyProviderChange={setTopologyProvider}
-              visionImages={visionImages}
-              onVisionImagesChange={setVisionImages}
-              visionError={visionError}
-              onVisionErrorChange={setVisionError}
-              catalogResources={catalogResources}
-              onGenerateTopology={handleGenerateTopology}
-              onImportToCanvas={handleImportToCanvas}
-              onClose={closeImportWizard}
-            />
-          )}
-        </div>
-      </div>
+      <ProjectLauncher
+        savedProjects={savedProjects}
+        detectedTools={detectedTools}
+        projectName={projectName}
+        showImportWizard={showImportWizard}
+        importTab={importTab}
+        browsePath={browsePath}
+        browseParent={browseParent}
+        browseEntries={browseEntries}
+        importPreview={importPreview}
+        importLoading={importLoading}
+        topologyDesc={topologyDesc}
+        topologyProvider={topologyProvider}
+        visionImages={visionImages}
+        visionError={visionError}
+        catalogResources={catalogResources}
+        onProjectNameChange={setProjectName}
+        onCreateProject={handleCreateProject}
+        onOpenProject={openProject}
+        onRevealProject={(name) => api.revealProject(name).catch(() => {})}
+        onDeleteProject={handleDeleteSavedProject}
+        onStartImportBrowse={startImportBrowse}
+        onStartTopology={startTopologyBuilder}
+        onImportTabChange={setImportTab}
+        onBrowseLoaded={handleBrowseLoaded}
+        onImportPreviewChange={setImportPreview}
+        onImportLoadingChange={setImportLoading}
+        onTopologyDescChange={setTopologyDesc}
+        onTopologyProviderChange={setTopologyProvider}
+        onVisionImagesChange={setVisionImages}
+        onVisionErrorChange={setVisionError}
+        onGenerateTopology={handleGenerateTopology}
+        onImportToCanvas={handleImportToCanvas}
+        onCloseImportWizard={closeImportWizard}
+      />
     );
   }
 
