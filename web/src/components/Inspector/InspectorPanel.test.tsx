@@ -1,0 +1,167 @@
+import { fireEvent, render, screen } from '@testing-library/react';
+import { describe, expect, it, vi } from 'vitest';
+
+import type { Edge } from '../../legacy';
+import { InspectorPanel, type InspectorPanelProps, type InspectorResource } from './index';
+
+vi.mock('../CodeEditor', () => ({
+  CodeEditor: ({ value, filePath, onChange, onSave }: any) => (
+    <div>
+      <textarea
+        aria-label="Code editor"
+        data-filepath={filePath}
+        value={value}
+        onChange={event => onChange?.(event.target.value)}
+      />
+      <button onClick={() => onSave?.(value)}>Editor Save</button>
+    </div>
+  ),
+}));
+
+vi.mock('../PolicyStudio', () => ({
+  PolicyStudioPanel: ({ projectName, tool, env }: any) => (
+    <div>Policy panel {projectName} {tool} {env}</div>
+  ),
+}));
+
+vi.mock('../ScanPanel', () => ({
+  ScanPanel: ({ projectName, tool }: any) => (
+    <div>Scan panel {projectName} {tool}</div>
+  ),
+}));
+
+vi.mock('../ModuleRegistry', () => ({
+  ModuleRegistryPanel: ({ initialQuery }: any) => (
+    <div>Module registry {initialQuery}</div>
+  ),
+}));
+
+const nodes: InspectorResource[] = [
+  {
+    id: 'vpc',
+    type: 'aws_vpc',
+    name: 'main',
+    properties: { cidr_block: '10.0.0.0/16', enable_dns_hostnames: true },
+    icon: 'V',
+    label: 'VPC',
+  },
+  {
+    id: 'subnet',
+    type: 'aws_subnet',
+    name: 'app',
+    properties: { cidr_block: '10.0.1.0/24' },
+    icon: 'S',
+    label: 'Subnet',
+  },
+];
+
+const edges: Edge[] = [
+  {
+    id: 'subnet->vpc:vpc_id',
+    from: 'subnet',
+    to: 'vpc',
+    fromType: 'aws_subnet',
+    toType: 'aws_vpc',
+    field: 'vpc_id',
+    label: 'vpc id',
+  },
+];
+
+function baseProps(): InspectorPanelProps {
+  return {
+    width: 320,
+    activeTab: 'inspect',
+    tool: 'terraform',
+    toolMeta: { color: '#2FB5A8', ext: '.tf' },
+    activeEnv: null,
+    projectId: 'demo',
+    nodes,
+    edges,
+    selectedNodeId: null,
+    selectedEdgeId: null,
+    syncCode: 'resource "aws_vpc" "main" {}',
+    codeFileLabel: 'main.tf',
+    codeEditorFilePath: 'main.tf',
+    codeSaving: false,
+    unresolvedHybridEnv: false,
+    onTabChange: vi.fn(),
+    onDeleteEdge: vi.fn(),
+    onSelectEdge: vi.fn(),
+    onUpdateNodeName: vi.fn(),
+    onUpdateNodeProp: vi.fn(),
+    onSyncCodeChange: vi.fn(),
+    onSaveCode: vi.fn(),
+    onCopyCode: vi.fn(),
+  };
+}
+
+function renderInspector(overrides: Partial<InspectorPanelProps> = {}) {
+  const props = { ...baseProps(), ...overrides };
+  render(<InspectorPanel {...props} />);
+  return props;
+}
+
+describe('InspectorPanel', () => {
+  it('renders selected node properties and dispatches edits', () => {
+    const props = renderInspector({ selectedNodeId: 'vpc' });
+
+    expect(screen.getByText('V Properties')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByDisplayValue('main'), { target: { value: 'core' } });
+    fireEvent.change(screen.getByDisplayValue('10.0.0.0/16'), { target: { value: '10.1.0.0/16' } });
+    fireEvent.click(screen.getByRole('button', { name: 'true' }));
+    fireEvent.click(screen.getByText('app'));
+
+    expect(props.onUpdateNodeName).toHaveBeenCalledWith('vpc', 'core');
+    expect(props.onUpdateNodeProp).toHaveBeenCalledWith('vpc', 'cidr_block', '10.1.0.0/16');
+    expect(props.onUpdateNodeProp).toHaveBeenCalledWith('vpc', 'enable_dns_hostnames', false);
+    expect(props.onSelectEdge).toHaveBeenCalledWith('subnet->vpc:vpc_id');
+  });
+
+  it('renders selected edge details and dispatches deletion', () => {
+    const props = renderInspector({ selectedEdgeId: 'subnet->vpc:vpc_id' });
+
+    expect(screen.getByText('🔗 Connection')).toBeInTheDocument();
+    expect(screen.getByText('vpc_id = aws_vpc.main.id')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Delete Connection' }));
+
+    expect(props.onDeleteEdge).toHaveBeenCalledWith('subnet->vpc:vpc_id');
+  });
+
+  it('renders code controls and dispatches code callbacks', () => {
+    const props = renderInspector();
+
+    expect(screen.getByText('FILE main.tf')).toBeInTheDocument();
+    expect(screen.getByLabelText('Code editor')).toHaveAttribute('data-filepath', 'main.tf');
+
+    fireEvent.change(screen.getByLabelText('Code editor'), { target: { value: 'resource "aws_s3_bucket" "logs" {}' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Policy' }));
+
+    expect(props.onSyncCodeChange).toHaveBeenCalledWith('resource "aws_s3_bucket" "logs" {}');
+    expect(props.onSaveCode).toHaveBeenCalledWith('resource "aws_vpc" "main" {}');
+    expect(props.onCopyCode).toHaveBeenCalledWith('resource "aws_vpc" "main" {}');
+    expect(props.onTabChange).toHaveBeenCalledWith('policy');
+  });
+
+  it('renders tool tabs and mounted panels', () => {
+    renderInspector({ activeTab: 'modules' });
+
+    expect(screen.getByRole('button', { name: 'Modules' })).toBeInTheDocument();
+    expect(screen.getByText('Module registry vpc')).toBeInTheDocument();
+  });
+
+  it('guards unresolved hybrid environments and hides modules for Ansible', () => {
+    renderInspector({
+      activeTab: 'policy',
+      tool: 'ansible',
+      activeEnv: 'qa',
+      unresolvedHybridEnv: true,
+    });
+
+    expect(screen.queryByRole('button', { name: 'Modules' })).not.toBeInTheDocument();
+    expect(screen.getByText('Environment "qa" has no configured IaC tool in .iac-studio.json.')).toBeInTheDocument();
+  });
+});

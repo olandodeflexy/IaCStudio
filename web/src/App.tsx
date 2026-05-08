@@ -5,14 +5,11 @@ import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
 import { AISettingsModal, type AISettingsConfig } from './components/AISettings';
 import { AppHeader } from './components/AppHeader';
-import { CodeEditor } from './components/CodeEditor';
 import { ChatPanel } from './components/Chat';
+import { InspectorPanel, type RightPanelTab } from './components/Inspector';
 import { ProjectLauncher, type SavedProject } from './components/ProjectLauncher';
 import { WorkspaceSidebar, type SidebarPanel } from './components/Sidebar';
 import { TerminalPanel } from './components/Terminal';
-import { ModuleRegistryPanel } from './components/ModuleRegistry';
-import { PolicyStudioPanel } from './components/PolicyStudio';
-import { ScanPanel } from './components/ScanPanel';
 import { SwimlaneCanvas } from './components/Canvas';
 import { S } from './styles';
 import type { LayeredProject, LayeredModule } from './types';
@@ -29,7 +26,6 @@ import {
 } from './legacy';
 
 type CanvasMode = 'freeform' | 'swimlane';
-const EMPTY_CODE_PLACEHOLDER = 'Add resources from the palette or write code here';
 
 const summarizePolicyFindings = (findings: PolicyFinding[]) => {
   if (findings.length === 0) return 'No finding details were returned.';
@@ -168,7 +164,7 @@ export default function App() {
   const [chatLoading, setChatLoading] = useState(false);
   const [suggestions, setSuggestions] = useState<Suggestion[]>([]);
   const [activePanel, setActivePanel] = useState<SidebarPanel>('palette');
-  const [rightTab, setRightTab] = useState<'inspect' | 'policy' | 'scan' | 'modules'>('inspect');
+  const [rightTab, setRightTab] = useState<RightPanelTab>('inspect');
   const [projectLayoutMeta, setProjectLayoutMeta] = useState<Record<string, any> | null>(null);
   const [layeredProject, setLayeredProject] = useState<LayeredProject | null>(null);
   const [activeEnvironment, setActiveEnvironment] = useState<string | null>(null);
@@ -1066,10 +1062,10 @@ export default function App() {
   }
 
   const ct = ALL_TOOLS[tool] || TOOLS[concreteTool] || TOOLS.terraform;
-  const selected = nodes.find(n => n.id === selectedNode);
   const codeFileLabel = concreteTool === 'pulumi'
     ? (activeEnv ? `environments/${activeEnv}/index.ts` : 'index.ts')
     : (tool === 'multi' && activeEnv ? `environments/${activeEnv}/main${TOOLS[concreteTool]?.ext || '.tf'}` : `main${TOOLS[concreteTool]?.ext || ct.ext}`);
+  const codeEditorFilePath = concreteTool === 'pulumi' ? 'index.ts' : `main${TOOLS[concreteTool]?.ext || ct.ext}`;
 
   // ─── Main UI ───
   return (
@@ -1306,164 +1302,33 @@ export default function App() {
           onMouseDown={e => setResizing({ panel: 'right', startPos: e.clientX, startSize: rightWidth })}
           onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = 'var(--border-main)'; }}
           onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
-        <aside style={{ ...S.right, width: rightWidth }}>
-          <div style={S.tabs}>
-            {[
-              { key: 'inspect', label: selected || selectedEdge ? 'Inspect' : 'Code' },
-              { key: 'policy', label: 'Policy' },
-              { key: 'scan', label: 'Scan' },
-              ...(tool === 'ansible' ? [] : [{ key: 'modules', label: 'Modules' }]),
-            ].map(t => (
-              <button
-                key={t.key}
-                style={{
-                  ...S.tab,
-                  ...(rightTab === t.key ? { color: ct.color, borderBottomColor: ct.color } : {}),
-                  fontSize: 10,
-                }}
-                onClick={() => setRightTab(t.key as typeof rightTab)}
-              >
-                {t.label}
-              </button>
-            ))}
-          </div>
-          {rightTab === 'inspect' && (
-            <>
-          {/* Selected edge info */}
-          {selectedEdge && (() => {
-            const edge = edges.find(e => e.id === selectedEdge);
-            if (!edge) return null;
-            const fromNode = nodes.find(n => n.id === edge.from);
-            const toNode = nodes.find(n => n.id === edge.to);
-            return (
-              <div style={S.props}>
-                <div style={{ fontSize: 13, fontWeight: 600, color: '#bbb', marginBottom: 12 }}>🔗 Connection</div>
-                <div style={S.field}>
-                  <label style={S.flabel}>From</label>
-                  <div style={{ fontSize: 12, color: '#aaa', fontFamily: 'JetBrains Mono' }}>{fromNode?.icon} {fromNode?.type}.{fromNode?.name}</div>
-                </div>
-                <div style={S.field}>
-                  <label style={S.flabel}>To</label>
-                  <div style={{ fontSize: 12, color: '#aaa', fontFamily: 'JetBrains Mono' }}>{toNode?.icon} {toNode?.type}.{toNode?.name}</div>
-                </div>
-                <div style={S.field}>
-                  <label style={S.flabel}>Via Field</label>
-                  <div style={{ fontSize: 12, color: ct.color, fontFamily: 'JetBrains Mono' }}>{edge.field}</div>
-                </div>
-                <div style={S.field}>
-                  <label style={S.flabel}>Generated Reference</label>
-                  <div style={{ fontSize: 11, color: '#888', fontFamily: 'JetBrains Mono', background: '#111120', padding: '6px 8px', borderRadius: 4 }}>
-                    {edge.field} = {toNode?.type}.{toNode?.name}.id
-                  </div>
-                </div>
-                <button style={{ ...S.cmd, background: '#ef444433', color: '#ef4444', width: '100%', marginTop: 8 }}
-                  onClick={() => { setEdges(prev => prev.filter(e => e.id !== selectedEdge)); setSelectedEdge(null); }}>
-                  Delete Connection
-                </button>
-              </div>
-            );
-          })()}
-          {/* Selected node properties */}
-          {selected && !selectedEdge && (
-            <div style={S.props}>
-              <div style={{ fontSize: 13, fontWeight: 600, color: '#bbb', marginBottom: 12 }}>{selected.icon} Properties</div>
-              <div style={S.field}>
-                <label style={S.flabel}>Name</label>
-                <input style={S.finput} value={selected.name} onChange={e => updateName(selected.id, e.target.value)} />
-              </div>
-              {Object.entries(selected.properties).map(([k, v]) => (
-                <div key={k} style={S.field}>
-                  <label style={S.flabel}>{k}</label>
-                  {typeof v === 'boolean' ? (
-                      <button style={{ ...S.ftoggle, background: v ? ct.color + '33' : 'var(--bg-elev-2)', color: v ? ct.color : 'var(--text-muted)' }}
-                      onClick={() => updateProp(selected.id, k, !v)}>
-                      {v ? 'true' : 'false'}
-                    </button>
-                  ) : (
-                    <input style={S.finput} value={String(v)} onChange={e => updateProp(selected.id, k, e.target.value)} />
-                  )}
-                </div>
-              ))}
-              {/* Show connections for this node */}
-              {(() => {
-                const nodeEdges = edges.filter(e => e.from === selected.id || e.to === selected.id);
-                if (nodeEdges.length === 0) return null;
-                return (
-                  <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border-soft)' }}>
-                    <label style={S.flabel}>Connections ({nodeEdges.length})</label>
-                    {nodeEdges.map(e => {
-                      const other = nodes.find(n => n.id === (e.from === selected.id ? e.to : e.from));
-                      const direction = e.from === selected.id ? '→' : '←';
-                      return (
-                        <div key={e.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 11, color: '#777', fontFamily: 'JetBrains Mono', cursor: 'pointer' }}
-                          onClick={() => setSelectedEdge(e.id)}>
-                          <span>{direction}</span>
-                          <span>{other?.icon}</span>
-                          <span style={{ color: '#aaa' }}>{other?.name}</span>
-                          <span style={{ color: ct.color, marginLeft: 'auto', fontSize: 9 }}>{e.field}</span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                );
-              })()}
-            </div>
-          )}
-          <div style={S.codePanel}>
-            <div style={S.codeHead}>
-              <span>FILE {codeFileLabel}</span>
-              <button
-                style={{ ...S.copyBtn, color: codeSaving || unresolvedHybridEnv || !syncCode.trim() ? '#555' : ct.color }}
-                disabled={codeSaving || unresolvedHybridEnv || !syncCode.trim()}
-                title="Save editor buffer to disk"
-                onClick={() => saveCodeToDisk(syncCode)}
-              >
-                {codeSaving ? 'Saving...' : 'Save'}
-              </button>
-              <button style={{ ...S.copyBtn, color: ct.color }}
-                onClick={() => navigator.clipboard?.writeText(syncCode)}>Copy</button>
-            </div>
-            <div style={S.codePre}>
-              <div style={{ position: 'relative', flex: 1, minWidth: 0, height: '100%', display: 'flex' }}>
-                {!syncCode && (
-                  <div style={{ position: 'absolute', top: 14, left: 18, zIndex: 1, color: '#555', fontFamily: 'JetBrains Mono', fontSize: 13, pointerEvents: 'none' }}>
-                    {EMPTY_CODE_PLACEHOLDER}
-                  </div>
-                )}
-                <CodeEditor
-                  value={syncCode}
-                  filePath={concreteTool === 'pulumi' ? 'index.ts' : `main${TOOLS[concreteTool]?.ext || ct.ext}`}
-                  readOnly={false}
-                  onChange={setSyncCode}
-                  onSave={saveCodeToDisk}
-                />
-              </div>
-            </div>
-          </div>
-            </>
-          )}
-          {rightTab === 'policy' && (
-            <div style={{ flex: 1, minHeight: 0 }}>
-              {unresolvedHybridEnv ? (
-                <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 13 }}>
-                  Environment "{activeEnv}" has no configured IaC tool in .iac-studio.json.
-                </div>
-              ) : (
-                <PolicyStudioPanel projectName={projectId} tool={tool} env={activeEnv} />
-              )}
-            </div>
-          )}
-          {rightTab === 'scan' && (
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <ScanPanel projectName={projectId} tool={tool} />
-            </div>
-          )}
-          {rightTab === 'modules' && tool !== 'ansible' && (
-            <div style={{ flex: 1, minHeight: 0 }}>
-              <ModuleRegistryPanel initialQuery="vpc" />
-            </div>
-          )}
-        </aside>
+        <InspectorPanel
+          width={rightWidth}
+          activeTab={rightTab}
+          tool={tool}
+          toolMeta={ct}
+          activeEnv={activeEnv}
+          projectId={projectId}
+          nodes={nodes}
+          edges={edges}
+          selectedNodeId={selectedNode}
+          selectedEdgeId={selectedEdge}
+          syncCode={syncCode}
+          codeFileLabel={codeFileLabel}
+          codeEditorFilePath={codeEditorFilePath}
+          codeSaving={codeSaving}
+          unresolvedHybridEnv={unresolvedHybridEnv}
+          onTabChange={setRightTab}
+          onDeleteEdge={(edgeId) => {
+            setEdges(prev => prev.filter(edge => edge.id !== edgeId));
+            setSelectedEdge(null);
+          }}
+          onSelectEdge={setSelectedEdge}
+          onUpdateNodeName={updateName}
+          onUpdateNodeProp={updateProp}
+          onSyncCodeChange={setSyncCode}
+          onSaveCode={saveCodeToDisk}
+        />
       </div>
 
       {/* Bottom: Chat + Terminal */}
