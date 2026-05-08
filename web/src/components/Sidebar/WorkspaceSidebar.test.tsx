@@ -89,8 +89,11 @@ describe('WorkspaceSidebar', () => {
   });
 
   it('renders file names for the project tool extension', () => {
-    renderSidebar({ activePanel: 'files', toolMeta: { color: '#8A63D2', ext: '.ts' } });
+    const props = renderSidebar({ activePanel: 'files', toolMeta: { color: '#8A63D2', ext: '.ts' } });
 
+    fireEvent.click(screen.getByRole('button', { name: 'Files' }));
+
+    expect(props.onActivePanelChange).toHaveBeenCalledWith('files');
     expect(screen.getByText('DIR demo/')).toBeInTheDocument();
     expect(screen.getByText('FILE main.ts')).toBeInTheDocument();
     expect(screen.getByText('FILE variables.ts')).toBeInTheDocument();

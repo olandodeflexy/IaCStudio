@@ -62,6 +62,7 @@ export function WorkspaceSidebar({
       <div style={S.tabs}>
         {[
           { key: 'palette' as const, label: 'Resources' },
+          { key: 'files' as const, label: 'Files' },
           { key: 'suggest' as const, label: 'Next' },
           { key: 'guide' as const, label: 'Guide' },
         ].map(tab => (
