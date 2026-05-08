@@ -125,19 +125,19 @@ export function InspectorPanel({
               <div style={S.props}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: '#bbb', marginBottom: 12 }}>🔗 Connection</div>
                 <div style={S.field}>
-                  <label style={S.flabel}>From</label>
+                  <div style={S.flabel}>From</div>
                   <div style={{ fontSize: 12, color: '#aaa', fontFamily: 'JetBrains Mono' }}>{fromNode?.icon} {fromNode?.type}.{fromNode?.name}</div>
                 </div>
                 <div style={S.field}>
-                  <label style={S.flabel}>To</label>
+                  <div style={S.flabel}>To</div>
                   <div style={{ fontSize: 12, color: '#aaa', fontFamily: 'JetBrains Mono' }}>{toNode?.icon} {toNode?.type}.{toNode?.name}</div>
                 </div>
                 <div style={S.field}>
-                  <label style={S.flabel}>Via Field</label>
+                  <div style={S.flabel}>Via Field</div>
                   <div style={{ fontSize: 12, color: toolMeta.color, fontFamily: 'JetBrains Mono' }}>{selectedEdge.field}</div>
                 </div>
                 <div style={S.field}>
-                  <label style={S.flabel}>Generated Reference</label>
+                  <div style={S.flabel}>Generated Reference</div>
                   <div style={{ fontSize: 11, color: '#888', fontFamily: 'JetBrains Mono', background: '#111120', padding: '6px 8px', borderRadius: 4 }}>
                     {selectedEdge.field} = {toNode?.type}.{toNode?.name}.id
                   </div>
@@ -192,7 +192,7 @@ export function InspectorPanel({
                 if (nodeEdges.length === 0) return null;
                 return (
                   <div style={{ marginTop: 12, paddingTop: 12, borderTop: '1px solid var(--border-soft)' }}>
-                    <label style={S.flabel}>Connections ({nodeEdges.length})</label>
+                    <div style={S.flabel}>Connections ({nodeEdges.length})</div>
                     {nodeEdges.map(edge => {
                       const other = nodes.find(node => node.id === (edge.from === selected.id ? edge.to : edge.from));
                       const direction = edge.from === selected.id ? '→' : '←';
