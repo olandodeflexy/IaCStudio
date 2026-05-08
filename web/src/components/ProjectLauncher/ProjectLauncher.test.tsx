@@ -87,7 +87,7 @@ describe('ProjectLauncher', () => {
     expect(screen.getByText(/1 resource/)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Open project existing-project' }));
-    fireEvent.click(screen.getByRole('button', { name: 'FILES' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open files for existing-project' }));
     fireEvent.click(screen.getByRole('button', { name: 'Delete project existing-project' }));
 
     expect(props.onOpenProject).toHaveBeenCalledWith(savedProject);

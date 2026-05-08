@@ -43,7 +43,7 @@ export interface ProjectLauncherProps {
   onVisionImagesChange: (_images: File[]) => void;
   onVisionErrorChange: (_error: string | null) => void;
   onGenerateTopology: () => void;
-  onImportToCanvas: (_preview: ImportResult) => void;
+  onImportToCanvas: (_preview: ImportResult) => void | Promise<void>;
   onCloseImportWizard: () => void;
 }
 
@@ -131,6 +131,7 @@ export function ProjectLauncher({
                       type="button"
                       style={{ background: 'transparent', border: 0, fontSize: 11, color: '#555', cursor: 'pointer', fontFamily: 'JetBrains Mono', padding: '2px 4px' }}
                       title="Open in file manager"
+                      aria-label={`Open files for ${project.name}`}
                       onClick={() => onRevealProject(project.name)}
                     >
                       FILES

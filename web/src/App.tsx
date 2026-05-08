@@ -846,8 +846,8 @@ export default function App() {
       await api.deleteProject(name);
       setSavedProjects(prev => prev.filter(project => project.name !== name));
       showNotification(`Deleted project: ${name}`);
-    } catch (err: any) {
-      showNotification(`Failed to delete: ${err.message}`, 4000);
+    } catch (err: unknown) {
+      showNotification(`Failed to delete: ${errorMessage(err, 'Unable to delete project')}`, 4000);
     }
   }, [showNotification]);
 
