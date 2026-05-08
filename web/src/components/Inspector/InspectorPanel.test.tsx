@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { Edge } from '../../legacy';
@@ -107,10 +107,10 @@ describe('InspectorPanel', () => {
 
     expect(screen.getByText('V Properties')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByDisplayValue('main'), { target: { value: 'core' } });
-    fireEvent.change(screen.getByDisplayValue('10.0.0.0/16'), { target: { value: '10.1.0.0/16' } });
-    fireEvent.click(screen.getByRole('button', { name: 'true' }));
-    fireEvent.click(screen.getByText('app'));
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'core' } });
+    fireEvent.change(screen.getByLabelText('cidr_block'), { target: { value: '10.1.0.0/16' } });
+    fireEvent.click(screen.getByLabelText('enable_dns_hostnames'));
+    fireEvent.click(screen.getByRole('button', { name: /app.*vpc_id/ }));
 
     expect(props.onUpdateNodeName).toHaveBeenCalledWith('vpc', 'core');
     expect(props.onUpdateNodeProp).toHaveBeenCalledWith('vpc', 'cidr_block', '10.1.0.0/16');
@@ -144,6 +144,36 @@ describe('InspectorPanel', () => {
     expect(props.onSaveCode).toHaveBeenCalledWith('resource "aws_vpc" "main" {}');
     expect(props.onCopyCode).toHaveBeenCalledWith('resource "aws_vpc" "main" {}');
     expect(props.onTabChange).toHaveBeenCalledWith('policy');
+  });
+
+  it('handles clipboard fallback failures without unhandled rejections', async () => {
+    const originalClipboard = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    const writeText = vi.fn().mockRejectedValue(new Error('denied'));
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    Object.defineProperty(navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText },
+    });
+
+    try {
+      renderInspector({ onCopyCode: undefined });
+
+      fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith('resource "aws_vpc" "main" {}');
+      });
+      await waitFor(() => {
+        expect(warn).toHaveBeenCalledWith('Failed to copy code to clipboard', expect.any(Error));
+      });
+    } finally {
+      warn.mockRestore();
+      if (originalClipboard) {
+        Object.defineProperty(navigator, 'clipboard', originalClipboard);
+      } else {
+        Reflect.deleteProperty(navigator, 'clipboard');
+      }
+    }
   });
 
   it('renders tool tabs and mounted panels', () => {

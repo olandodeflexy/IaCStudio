@@ -46,6 +46,10 @@ export interface InspectorPanelProps {
 
 const EMPTY_CODE_PLACEHOLDER = 'Add resources from the palette or write code here';
 
+const fieldId = (nodeId: string, field: string) => (
+  `inspector-${nodeId}-${field}`.replace(/[^a-zA-Z0-9_-]/g, '-')
+);
+
 export function InspectorPanel({
   width,
   activeTab,
@@ -74,12 +78,16 @@ export function InspectorPanel({
   const selected = nodes.find(node => node.id === selectedNodeId);
   const selectedEdge = edges.find(edge => edge.id === selectedEdgeId);
 
-  const copyCode = () => {
+  const copyCode = async () => {
     if (onCopyCode) {
       onCopyCode(syncCode);
       return;
     }
-    navigator.clipboard?.writeText(syncCode);
+    try {
+      await navigator.clipboard?.writeText(syncCode);
+    } catch (err) {
+      console.warn('Failed to copy code to clipboard', err);
+    }
   };
 
   const tabs: { key: RightPanelTab; label: string }[] = [
@@ -147,21 +155,32 @@ export function InspectorPanel({
             <div style={S.props}>
               <div style={{ fontSize: 13, fontWeight: 600, color: '#bbb', marginBottom: 12 }}>{selected.icon} Properties</div>
               <div style={S.field}>
-                <label style={S.flabel}>Name</label>
-                <input style={S.finput} value={selected.name} onChange={event => onUpdateNodeName(selected.id, event.target.value)} />
+                <label style={S.flabel} htmlFor={fieldId(selected.id, 'name')}>Name</label>
+                <input
+                  id={fieldId(selected.id, 'name')}
+                  style={S.finput}
+                  value={selected.name}
+                  onChange={event => onUpdateNodeName(selected.id, event.target.value)}
+                />
               </div>
               {Object.entries(selected.properties).map(([key, value]) => (
                 <div key={key} style={S.field}>
-                  <label style={S.flabel}>{key}</label>
+                  <label style={S.flabel} htmlFor={fieldId(selected.id, key)}>{key}</label>
                   {typeof value === 'boolean' ? (
                     <button
+                      id={fieldId(selected.id, key)}
                       style={{ ...S.ftoggle, background: value ? toolMeta.color + '33' : 'var(--bg-elev-2)', color: value ? toolMeta.color : 'var(--text-muted)' }}
                       onClick={() => onUpdateNodeProp(selected.id, key, !value)}
                     >
                       {value ? 'true' : 'false'}
                     </button>
                   ) : (
-                    <input style={S.finput} value={String(value)} onChange={event => onUpdateNodeProp(selected.id, key, event.target.value)} />
+                    <input
+                      id={fieldId(selected.id, key)}
+                      style={S.finput}
+                      value={String(value)}
+                      onChange={event => onUpdateNodeProp(selected.id, key, event.target.value)}
+                    />
                   )}
                 </div>
               ))}
@@ -176,16 +195,17 @@ export function InspectorPanel({
                       const other = nodes.find(node => node.id === (edge.from === selected.id ? edge.to : edge.from));
                       const direction = edge.from === selected.id ? '→' : '←';
                       return (
-                        <div
+                        <button
                           key={edge.id}
-                          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 11, color: '#777', fontFamily: 'JetBrains Mono', cursor: 'pointer' }}
+                          type="button"
+                          style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '4px 0', fontSize: 11, color: '#777', fontFamily: 'JetBrains Mono', cursor: 'pointer', background: 'transparent', border: 0, width: '100%', textAlign: 'left' }}
                           onClick={() => onSelectEdge(edge.id)}
                         >
                           <span>{direction}</span>
                           <span>{other?.icon}</span>
                           <span style={{ color: '#aaa' }}>{other?.name}</span>
                           <span style={{ color: toolMeta.color, marginLeft: 'auto', fontSize: 9 }}>{edge.field}</span>
-                        </div>
+                        </button>
                       );
                     })}
                   </div>
