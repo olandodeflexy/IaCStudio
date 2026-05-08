@@ -153,15 +153,20 @@ describe('InspectorPanel', () => {
     expect(screen.getByText('Module registry vpc')).toBeInTheDocument();
   });
 
-  it('guards unresolved hybrid environments and hides modules for Ansible', () => {
+  it('guards unresolved hybrid environments', () => {
     renderInspector({
       activeTab: 'policy',
-      tool: 'ansible',
+      tool: 'multi',
       activeEnv: 'qa',
       unresolvedHybridEnv: true,
     });
 
-    expect(screen.queryByRole('button', { name: 'Modules' })).not.toBeInTheDocument();
     expect(screen.getByText('Environment "qa" has no configured IaC tool in .iac-studio.json.')).toBeInTheDocument();
+  });
+
+  it('hides modules for Ansible projects', () => {
+    renderInspector({ tool: 'ansible' });
+
+    expect(screen.queryByRole('button', { name: 'Modules' })).not.toBeInTheDocument();
   });
 });
