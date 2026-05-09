@@ -178,17 +178,17 @@ func (c *Client) StreamChat(ctx context.Context, req ChatRequest, onDelta provid
 
 // ChatMessage represents one message in a conversation.
 type ChatMessage struct {
-	Role    string `json:"role"`    // "user" or "ai"
+	Role    string `json:"role"` // "user" or "ai"
 	Content string `json:"content"`
 }
 
 // ChatRequest is the full request from the frontend including conversation context.
 type ChatRequest struct {
-	Message  string            `json:"message"`
-	Tool     string            `json:"tool"`    // terraform | opentofu | ansible
-	Provider string            `json:"provider"` // aws | google | azurerm (auto-detected)
-	History  []ChatMessage     `json:"history"`  // conversation history for context
-	Canvas   []CanvasResource  `json:"canvas"`   // what's currently on the canvas
+	Message  string           `json:"message"`
+	Tool     string           `json:"tool"`     // terraform | opentofu | ansible
+	Provider string           `json:"provider"` // aws | google | azurerm (auto-detected)
+	History  []ChatMessage    `json:"history"`  // conversation history for context
+	Canvas   []CanvasResource `json:"canvas"`   // what's currently on the canvas
 	// Project, when set, names the active project. The HTTP layer uses it
 	// to look up the project's RAG index and populate ProjectContext
 	// before calling the bridge.
@@ -245,18 +245,18 @@ func buildChatUserPrompt(req ChatRequest) string {
 
 // PlanFixRequest is a request to analyze plan/apply output and suggest fixes.
 type PlanFixRequest struct {
-	Tool        string           `json:"tool"`
-	Provider    string           `json:"provider"`
-	Command     string           `json:"command"`     // "plan", "apply", "init", "validate"
-	Output      string           `json:"output"`      // raw CLI output
-	ExitCode    int              `json:"exit_code"`
-	Canvas      []CanvasResource `json:"canvas"`
+	Tool     string           `json:"tool"`
+	Provider string           `json:"provider"`
+	Command  string           `json:"command"` // "plan", "apply", "init", "validate"
+	Output   string           `json:"output"`  // raw CLI output
+	ExitCode int              `json:"exit_code"`
+	Canvas   []CanvasResource `json:"canvas"`
 }
 
 // PlanFix is a suggested fix from the AI.
 type PlanFix struct {
-	Message    string            `json:"message"`     // explanation of the problem
-	Fixes      []ResourceFix     `json:"fixes"`       // specific changes to make
+	Message      string            `json:"message"`       // explanation of the problem
+	Fixes        []ResourceFix     `json:"fixes"`         // specific changes to make
 	NewResources []parser.Resource `json:"new_resources"` // resources to add
 }
 
@@ -313,7 +313,7 @@ func parsePlanFixResponse(raw string) (*PlanFix, error) {
 	raw = strings.TrimSpace(raw)
 
 	var result struct {
-		Message      string `json:"message"`
+		Message      string        `json:"message"`
 		Fixes        []ResourceFix `json:"fixes"`
 		NewResources []struct {
 			Type       string                 `json:"type"`
@@ -797,7 +797,7 @@ func matchPatterns(msg string, patterns []struct {
 // Uses IaC best practices to predict what the user likely needs next.
 func SuggestNext(tool, provider string, canvas []CanvasResource) []Suggestion {
 	if tool == "ansible" {
-		return suggestAnsible(canvas)
+		return ensureSuggestions(suggestAnsible(canvas))
 	}
 
 	types := make(map[string]bool)
@@ -805,14 +805,16 @@ func SuggestNext(tool, provider string, canvas []CanvasResource) []Suggestion {
 		types[r.Type] = true
 	}
 
+	var suggestions []Suggestion
 	switch provider {
 	case "google":
-		return suggestGCP(types)
+		suggestions = suggestGCP(types)
 	case "azurerm":
-		return suggestAzure(types)
+		suggestions = suggestAzure(types)
 	default:
-		return suggestAWS(types)
+		suggestions = suggestAWS(types)
 	}
+	return ensureSuggestions(suggestions)
 }
 
 // Suggestion is a recommended next resource to add.
@@ -821,6 +823,13 @@ type Suggestion struct {
 	Label    string `json:"label"`
 	Reason   string `json:"reason"`
 	Priority int    `json:"priority"` // 1 = high, 2 = medium, 3 = low
+}
+
+func ensureSuggestions(suggestions []Suggestion) []Suggestion {
+	if suggestions == nil {
+		return []Suggestion{}
+	}
+	return suggestions
 }
 
 func suggestAWS(has map[string]bool) []Suggestion {

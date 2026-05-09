@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { api, ApiError } from './api';
+import { api, ApiError, normalizeSuggestions } from './api';
 
 describe('api.generateTopologyFromImages', () => {
   afterEach(() => {
@@ -74,5 +74,29 @@ describe('api.runCommand', () => {
       status: 409,
       payload,
     });
+  });
+});
+
+describe('api.suggest', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('normalizes null suggestion responses to an empty array', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('null', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    await expect(api.suggest('terraform', 'aws', [])).resolves.toEqual([]);
+  });
+});
+
+describe('normalizeSuggestions', () => {
+  it('normalizes omitted and explicit null suggestions to empty arrays', () => {
+    expect(normalizeSuggestions(undefined)).toEqual([]);
+    expect(normalizeSuggestions(null)).toEqual([]);
   });
 });

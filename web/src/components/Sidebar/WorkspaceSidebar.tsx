@@ -48,13 +48,15 @@ export function WorkspaceSidebar({
   onResourceHover,
   onResourceHoverEnd,
 }: WorkspaceSidebarProps) {
+  const safeResources = Array.isArray(resources) ? resources : [];
+  const safeSuggestions = Array.isArray(suggestions) ? suggestions : [];
   const normalizedSearch = searchQuery.trim().toLowerCase();
   const filteredResources = normalizedSearch
-    ? resources.filter(resource =>
+    ? safeResources.filter(resource =>
         resource.label.toLowerCase().includes(normalizedSearch) ||
         resource.type.toLowerCase().includes(normalizedSearch) ||
         resource.category.toLowerCase().includes(normalizedSearch))
-    : resources;
+    : safeResources;
   const filteredCategories = [...new Set(filteredResources.map(resource => resource.category))];
 
   return (
@@ -69,13 +71,13 @@ export function WorkspaceSidebar({
           <button
             key={tab.key}
             style={{ ...S.tab, ...(activePanel === tab.key ? { color: toolMeta.color, borderBottomColor: toolMeta.color } : {}), fontSize: 10 }}
-            aria-label={tab.key === 'suggest' && suggestions.length > 0 ? `${tab.label} ${suggestions.length}` : tab.label}
+            aria-label={tab.key === 'suggest' && safeSuggestions.length > 0 ? `${tab.label} ${safeSuggestions.length}` : tab.label}
             onClick={() => onActivePanelChange(tab.key)}
           >
             {tab.label}
-            {tab.key === 'suggest' && suggestions.length > 0 && (
+            {tab.key === 'suggest' && safeSuggestions.length > 0 && (
               <span style={{ marginLeft: 4, background: toolMeta.color + '33', color: toolMeta.color, padding: '1px 5px', borderRadius: 8, fontSize: 9 }}>
-                {suggestions.length}
+                {safeSuggestions.length}
               </span>
             )}
           </button>
@@ -148,13 +150,13 @@ export function WorkspaceSidebar({
 
       {activePanel === 'suggest' && (
         <div style={S.palScroll}>
-          {suggestions.length === 0 ? (
+          {safeSuggestions.length === 0 ? (
             <div style={{ padding: 20, textAlign: 'center', color: '#555', fontSize: 12 }}>
               Add resources to get smart suggestions based on IaC best practices.
             </div>
           ) : (
-            suggestions.map(suggestion => {
-              const meta = resources.find(resource => resource.type === suggestion.type);
+            safeSuggestions.map(suggestion => {
+              const meta = safeResources.find(resource => resource.type === suggestion.type);
               return (
                 <button
                   key={suggestion.type}

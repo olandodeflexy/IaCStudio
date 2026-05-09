@@ -85,3 +85,27 @@ func TestPatternMatch_ResourceProperties(t *testing.T) {
 		t.Errorf("cidr_block = %v, want 10.0.0.0/16", cidr)
 	}
 }
+
+func TestSuggestNextReturnsEmptySliceWhenNoSuggestionsRemain(t *testing.T) {
+	canvas := []CanvasResource{
+		{Type: "aws_vpc"},
+		{Type: "aws_subnet"},
+		{Type: "aws_internet_gateway"},
+		{Type: "aws_security_group"},
+		{Type: "aws_instance"},
+		{Type: "aws_db_instance"},
+		{Type: "aws_s3_bucket"},
+		{Type: "aws_lb"},
+		{Type: "aws_iam_role"},
+		{Type: "aws_kms_key"},
+	}
+
+	suggestions := SuggestNext("terraform", "aws", canvas)
+
+	if suggestions == nil {
+		t.Fatal("SuggestNext returned nil; JSON encoding would produce null")
+	}
+	if len(suggestions) != 0 {
+		t.Fatalf("SuggestNext returned %d suggestions, want none", len(suggestions))
+	}
+}

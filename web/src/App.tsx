@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { api, ApiError, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, ImportResult, type PolicyFinding } from './api';
+import { api, ApiError, normalizeSuggestions, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, ImportResult, type PolicyFinding } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -10,7 +10,7 @@ import { InspectorPanel, type RightPanelTab } from './components/Inspector';
 import { ProjectLauncher, type SavedProject } from './components/ProjectLauncher';
 import { WorkspaceSidebar, type SidebarPanel } from './components/Sidebar';
 import { TerminalPanel } from './components/Terminal';
-import { SwimlaneCanvas } from './components/Canvas';
+import { CanvasPanel, type CanvasMode } from './components/Canvas';
 import { S } from './styles';
 import type { LayeredProject, LayeredModule } from './types';
 import { envForResourceLoad, envForTool, shouldParseResourcesFromDisk, toolForEnv } from './projectLoad';
@@ -24,8 +24,6 @@ import {
   generateLocalCode,
   type Edge,
 } from './legacy';
-
-type CanvasMode = 'freeform' | 'swimlane';
 
 const summarizePolicyFindings = (findings: PolicyFinding[]) => {
   if (findings.length === 0) return 'No finding details were returned.';
@@ -187,11 +185,10 @@ export default function App() {
   const [bottomHeight, setBottomHeight] = useState(220);
   const [resizing, setResizing] = useState<{ panel: string; startPos: number; startSize: number } | null>(null);
 
-  const canvasRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
   const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
   const showEnvironmentSelector = Boolean(layeredProject && (tool === 'multi' || layeredProject.environmentTools));
   const activeEnv = envForTool(tool || '', layeredProject, activeEnvironment);
   const activeTool = toolForEnv(tool || '', layeredProject, activeEnv);
@@ -649,6 +646,64 @@ export default function App() {
 
   const onMouseUp = () => setDragging(null);
 
+  const handleSelectNode = useCallback((id: string) => {
+    setSelectedNode(id);
+    setSelectedEdge(null);
+  }, []);
+
+  const handleSelectEdge = useCallback((id: string) => {
+    setSelectedEdge(id);
+    setSelectedNode(null);
+  }, []);
+
+  const handleClearCanvasSelection = useCallback(() => {
+    setSelectedNode(null);
+    setSelectedEdge(null);
+  }, []);
+
+  const handleStartConnection = useCallback((nodeId: string, position: { x: number; y: number }) => {
+    setConnecting({ fromId: nodeId, ...position });
+  }, []);
+
+  const handleCancelConnection = useCallback(() => {
+    setConnecting(null);
+  }, []);
+
+  const handleCompleteConnection = useCallback((targetNodeId: string) => {
+    if (!connecting) return;
+    if (connecting.fromId === targetNodeId) {
+      setConnecting(null);
+      return;
+    }
+    const fromNode = nodes.find(n => n.id === connecting.fromId);
+    const toNode = nodes.find(n => n.id === targetNodeId);
+    if (!fromNode || !toNode) {
+      setConnecting(null);
+      return;
+    }
+
+    const catEntry = catalogResources.find(c => c.type === fromNode.type);
+    let field = 'depends_on';
+    if (catEntry?.connects_via) {
+      const match = Object.entries(catEntry.connects_via).find(([, t]) => t === toNode.type);
+      if (match) field = match[0];
+    }
+    const newEdge: Edge = {
+      id: edgeId(connecting.fromId, targetNodeId, field),
+      from: connecting.fromId,
+      to: targetNodeId,
+      fromType: fromNode.type,
+      toType: toNode.type,
+      field,
+      label: field.replace(/_/g, ' '),
+    };
+    setEdges(prev => {
+      if (prev.some(e => e.from === newEdge.from && e.to === newEdge.to && e.field === newEdge.field)) return prev;
+      return [...prev, newEdge];
+    });
+    setConnecting(null);
+  }, [catalogResources, connecting, nodes]);
+
   // Detect the dominant cloud provider from canvas nodes
   const detectProvider = useCallback((): string => {
     const counts: Record<string, number> = { aws: 0, google: 0, azurerm: 0 };
@@ -675,7 +730,7 @@ export default function App() {
     if (!tool) return;
     const provider = detectProvider();
     const canvas = nodes.map(n => ({ type: n.type, name: n.name }));
-    api.suggest(tool, provider, canvas).then(setSuggestions).catch(() => {});
+    api.suggest(tool, provider, canvas).then(setSuggestions).catch(() => setSuggestions([]));
   }, [nodes, tool, detectProvider]);
 
   const chatInFlightRef = useRef(false);
@@ -730,7 +785,9 @@ export default function App() {
       // Replace the streamed raw text with the parsed clean message.
       pendingAiText = result.message;
       updateAiMessageText(pendingAiText);
-      if (result.suggestions) setSuggestions(result.suggestions);
+      if (result.suggestions !== undefined) {
+        setSuggestions(normalizeSuggestions(result.suggestions));
+      }
       if (result.resources) {
         result.resources.forEach(r => {
           const meta = catalogResources.find(def => def.type === r.type);
@@ -1130,171 +1187,31 @@ export default function App() {
           onMouseEnter={e => { if (!resizing) (e.currentTarget as any).style.background = 'var(--border-main)'; }}
           onMouseLeave={e => { if (!resizing) (e.currentTarget as any).style.background = 'transparent'; }} />
 
-        {/* Canvas */}
-        <main style={S.canvas} ref={canvasRef} onMouseMove={isSwimlaneMode ? undefined : onMouseMove} onMouseUp={(e) => {
-          if (isSwimlaneMode) return;
-          onMouseUp(e);
-          // Finish manual connection if dragging to empty space
-          if (connecting) setConnecting(null);
-        }} onMouseLeave={() => { if (!isSwimlaneMode) { onMouseUp(null as any); setConnecting(null); } }}
-          onClick={() => { setSelectedNode(null); setSelectedEdge(null); }}>
-          {layeredProject && (
-            <div style={{ position: 'absolute', top: 12, right: 12, zIndex: 10, display: 'flex', gap: 6, padding: 4, background: 'var(--bg-elev-1)', border: '1px solid var(--border-main)', borderRadius: 8 }}>
-              {showEnvironmentSelector && layeredProject.environments.map(env => {
-                const envTool = layeredProject.environmentTools?.[env];
-                return (
-                  <button
-                    key={env}
-                    style={{ ...S.cmd, background: activeEnvironment === env ? ct.color + '22' : 'transparent', color: activeEnvironment === env ? ct.color : 'var(--text-muted)', padding: '5px 9px' }}
-                    onClick={(e) => { e.stopPropagation(); setActiveEnvironment(env); }}
-                    title={envTool ? `${env} uses ${envTool}` : env}
-                  >
-                    {envTool ? `${env} (${envTool})` : env}
-                  </button>
-                );
-              })}
-              {(['swimlane', 'freeform'] as const).map(mode => (
-                <button
-                  key={mode}
-                  style={{ ...S.cmd, background: canvasMode === mode ? ct.color + '22' : 'transparent', color: canvasMode === mode ? ct.color : 'var(--text-muted)', padding: '5px 9px' }}
-                  onClick={(e) => { e.stopPropagation(); setCanvasMode(mode); }}
-                >
-                  {mode === 'swimlane' ? 'Swimlane' : 'Freeform'}
-                </button>
-              ))}
-            </div>
-          )}
-
-          {isSwimlaneMode && layeredProject ? (
-            <SwimlaneCanvas
-              project={layeredProject}
-              resources={nodes}
-              onSelectResource={(id) => { setSelectedNode(id); setSelectedEdge(null); }}
-            />
-          ) : (
-            <>
-          <div style={S.grid} className="iac-canvas-grid" />
-
-          {/* SVG layer for connection lines */}
-          <svg style={{ position: 'absolute', inset: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 1 }}>
-            <defs>
-              <marker id="arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                <polygon points="0 0, 10 3.5, 0 7" fill={ct.color} opacity="0.6" />
-              </marker>
-              <marker id="arrowhead-hover" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
-                <polygon points="0 0, 10 3.5, 0 7" fill={ct.color} />
-              </marker>
-            </defs>
-            {edges.map(edge => {
-              const fromNode = nodes.find(n => n.id === edge.from);
-              const toNode = nodes.find(n => n.id === edge.to);
-              if (!fromNode || !toNode) return null;
-              const NODE_W = 180, NODE_H = 70;
-              const x1 = fromNode.x + NODE_W / 2;
-              const y1 = fromNode.y + NODE_H;
-              const x2 = toNode.x + NODE_W / 2;
-              const y2 = toNode.y;
-              const mx = (x1 + x2) / 2;
-              const my = (y1 + y2) / 2;
-              const isSelected = selectedEdge === edge.id;
-              // Bezier curve for smooth connections
-              const path = `M ${x1} ${y1} C ${x1} ${y1 + 40}, ${x2} ${y2 - 40}, ${x2} ${y2}`;
-              return (
-                <g key={edge.id}>
-                  {/* Invisible wider path for click target */}
-                  <path d={path} fill="none" stroke="transparent" strokeWidth={12} style={{ pointerEvents: 'stroke', cursor: 'pointer' }}
-                    onClick={(e) => { e.stopPropagation(); setSelectedEdge(edge.id); setSelectedNode(null); }} />
-                  {/* Visible path */}
-                  <path d={path} fill="none"
-                    stroke={isSelected ? ct.color : `${ct.color}55`}
-                    strokeWidth={isSelected ? 2.5 : 1.5}
-                    strokeDasharray={isSelected ? 'none' : '6 4'}
-                    markerEnd={isSelected ? 'url(#arrowhead-hover)' : 'url(#arrowhead)'}
-                    style={{ transition: 'stroke 0.2s, stroke-width 0.2s' }} />
-                  {/* Field label on the line */}
-                  <text x={mx} y={my - 6} textAnchor="middle" fill={isSelected ? ct.color : '#555'}
-                    fontSize={9} fontFamily="JetBrains Mono" style={{ pointerEvents: 'none' }}>
-                    {edge.field}
-                  </text>
-                </g>
-              );
-            })}
-            {/* Connection drag preview line */}
-            {connecting && (
-              <line x1={nodes.find(n => n.id === connecting.fromId)!.x + 90}
-                y1={nodes.find(n => n.id === connecting.fromId)!.y + 70}
-                x2={connecting.x} y2={connecting.y}
-                stroke={ct.color} strokeWidth={2} strokeDasharray="4 4" opacity={0.6} />
-            )}
-          </svg>
-
-          {nodes.length === 0 && (
-            <div style={S.empty}>
-              <div style={{ fontSize: 20, opacity: 0.5, marginBottom: 16, fontFamily: 'JetBrains Mono', letterSpacing: 1.5 }}>CANVAS</div>
-              <div style={{ fontSize: 16, opacity: 0.4 }}>Drag resources from the palette</div>
-              <div style={{ fontSize: 14, opacity: 0.3, marginTop: 4 }}>or use AI chat below</div>
-            </div>
-          )}
-          {nodes.map(node => {
-            const nodeEdges = edges.filter(e => e.from === node.id || e.to === node.id);
-            const hasConnections = nodeEdges.length > 0;
-            return (
-            <div key={node.id} className="node-shell"
-              style={{ ...S.node, left: node.x, top: node.y, zIndex: 2,
-                borderColor: selectedNode === node.id ? ct.color : hasConnections ? `${ct.color}44` : 'var(--border-main)',
-                boxShadow: selectedNode === node.id ? `0 0 20px ${ct.color}33` : '0 4px 12px rgba(0,0,0,0.3)' }}
-              onMouseDown={e => onMouseDown(e, node.id)}
-              onClick={e => { e.stopPropagation(); setSelectedNode(node.id); setSelectedEdge(null); }}
-              onMouseUp={() => {
-                // Complete manual connection
-                if (connecting && connecting.fromId !== node.id) {
-                  const fromNode = nodes.find(n => n.id === connecting.fromId);
-                  if (fromNode) {
-                    // Find a valid ConnectsVia field for this pair
-                    const catEntry = catalogResources.find(c => c.type === fromNode.type);
-                    let field = 'depends_on';
-                    if (catEntry?.connects_via) {
-                      const match = Object.entries(catEntry.connects_via).find(([, t]) => t === node.type);
-                      if (match) field = match[0];
-                    }
-                    const newEdge: Edge = {
-                      id: edgeId(connecting.fromId, node.id, field),
-                      from: connecting.fromId, to: node.id,
-                      fromType: fromNode.type, toType: node.type,
-                      field, label: field.replace(/_/g, ' '),
-                    };
-                    setEdges(prev => {
-                      if (prev.some(e => e.from === newEdge.from && e.to === newEdge.to && e.field === newEdge.field)) return prev;
-                      return [...prev, newEdge];
-                    });
-                  }
-                  setConnecting(null);
-                }
-              }}>
-              <div style={S.nodeHead}>
-                <span style={{ fontSize: 18 }}>{node.icon}</span>
-                <span style={{ fontSize: 13, fontWeight: 600, color: '#ddd', flex: 1 }}>{node.label}</span>
-                {hasConnections && <span style={{ fontSize: 9, color: ct.color, fontFamily: 'JetBrains Mono' }}>{nodeEdges.length}</span>}
-                <button style={S.nodeDel} onClick={e => { e.stopPropagation(); removeNode(node.id); }}>×</button>
-              </div>
-              <div style={{ fontSize: 10, color: '#555', padding: '0 12px', fontFamily: 'JetBrains Mono' }}>{node.type}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 12px 8px' }}>
-                <span style={{ fontSize: 11, color: '#777', fontFamily: 'JetBrains Mono' }}>{node.name}</span>
-                {/* Connection port — drag from here to another node */}
-                <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${ct.color}55`, background: 'var(--bg-elev-2)',
-                  cursor: 'crosshair', flexShrink: 0 }}
-                  title="Drag to connect"
-                  onMouseDown={e => {
-                    e.stopPropagation();
-                    const rect = canvasRef.current!.getBoundingClientRect();
-                    setConnecting({ fromId: node.id, x: e.clientX - rect.left, y: e.clientY - rect.top });
-                  }} />
-              </div>
-            </div>
-          );})}
-            </>
-          )}
-        </main>
+        <CanvasPanel
+          canvasRef={canvasRef}
+          nodes={nodes}
+          edges={edges}
+          selectedNodeId={selectedNode}
+          selectedEdgeId={selectedEdge}
+          connecting={connecting}
+          layeredProject={layeredProject}
+          showEnvironmentSelector={showEnvironmentSelector}
+          activeEnvironment={activeEnvironment}
+          canvasMode={canvasMode}
+          toolMeta={ct}
+          onMouseMove={onMouseMove}
+          onDragEnd={onMouseUp}
+          onConnectionCancel={handleCancelConnection}
+          onNodeDragStart={onMouseDown}
+          onStartConnection={handleStartConnection}
+          onCompleteConnection={handleCompleteConnection}
+          onSelectNode={handleSelectNode}
+          onSelectEdge={handleSelectEdge}
+          onClearSelection={handleClearCanvasSelection}
+          onDeleteNode={removeNode}
+          onActiveEnvironmentChange={setActiveEnvironment}
+          onCanvasModeChange={setCanvasMode}
+        />
 
         {/* Right Panel */}
         {/* Right panel resize handle */}
