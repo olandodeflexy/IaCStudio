@@ -5,8 +5,9 @@
 Build Terraform, OpenTofu, and Ansible projects through a drag-and-drop UI with an AI assistant — while keeping full control of your files on disk.
 
 ![License](https://img.shields.io/badge/license-Apache%202.0-blue)
-![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)
+![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go)
 ![React](https://img.shields.io/badge/React-18+-61DAFB?logo=react)
+[![Docs](https://img.shields.io/badge/docs-GitHub%20Pages-1f6f5b)](https://olandodeflexy.github.io/IaCStudio/)
 
 ---
 
@@ -39,6 +40,11 @@ make deps && make build && ./bin/iac-studio --ai-model gemma4
 Then open **http://localhost:3000**.
 
 See [QUICKSTART.md](QUICKSTART.md) for detailed instructions.
+
+## Documentation
+
+The full user, operator, API, and developer guide is published at
+**https://olandodeflexy.github.io/IaCStudio/**.
 
 ## Features
 

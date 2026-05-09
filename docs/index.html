@@ -1,0 +1,705 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Comprehensive documentation for IaC Studio, the local-first visual Infrastructure-as-Code workspace.">
+    <title>IaC Studio Documentation</title>
+    <link rel="stylesheet" href="assets/styles.css">
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">IaC</span>
+        <div>
+          <strong>IaC Studio Docs</strong>
+          <span>Local-first visual Infrastructure as Code</span>
+        </div>
+      </div>
+      <div class="top-actions">
+        <a href="#quick-start">Quick Start</a>
+        <a href="https://github.com/olandodeflexy/IaCStudio" rel="noreferrer">GitHub</a>
+        <a href="https://github.com/olandodeflexy/IaCStudio/releases/latest" rel="noreferrer">Download</a>
+      </div>
+      <button class="nav-toggle" type="button" aria-expanded="false" aria-controls="sidebar">Menu</button>
+    </header>
+
+    <div class="layout">
+      <aside id="sidebar" class="sidebar" aria-label="Documentation navigation">
+        <div class="search-box">
+          <label for="docs-search">Search docs</label>
+          <input id="docs-search" type="search" placeholder="AI, Docker, policy, API...">
+        </div>
+        <nav>
+          <a href="#overview">Overview</a>
+          <a href="#quick-start">Quick Start</a>
+          <a href="#first-project">First Project</a>
+          <a href="#interface">Interface Tour</a>
+          <a href="#workflows">Core Workflows</a>
+          <a href="#ai">AI Setup</a>
+          <a href="#policy-security">Policy and Security</a>
+          <a href="#api-reference">API Reference</a>
+          <a href="#architecture">Architecture</a>
+          <a href="#development">Development</a>
+          <a href="#deployment">Deployment</a>
+          <a href="#troubleshooting">Troubleshooting</a>
+          <a href="#faq">FAQ</a>
+        </nav>
+      </aside>
+
+      <main id="main" class="content">
+        <section id="overview" class="hero doc-section" data-title="overview local first iac studio">
+          <div class="hero-copy">
+            <p class="eyebrow">Version 0.1.0</p>
+            <h1>IaC Studio Documentation</h1>
+            <p class="lead">
+              IaC Studio is a local-first workspace for designing, importing, editing,
+              validating, and running infrastructure projects across Terraform, OpenTofu,
+              Ansible, Pulumi, CDK, and CloudFormation export paths.
+            </p>
+            <div class="hero-actions">
+              <a class="button primary" href="#quick-start">Get running</a>
+              <a class="button" href="#workflows">See workflows</a>
+            </div>
+          </div>
+          <div class="product-map" aria-label="IaC Studio interface map">
+            <div class="product-header">Project, tool, provider, run controls</div>
+            <div class="product-body">
+              <div class="product-side">Resources<br>Files<br>Next<br>Guide</div>
+              <div class="product-canvas">Visual canvas<br><span>Freeform and layered swimlane views</span></div>
+              <div class="product-right">Inspector<br>Code<br>Policy<br>Scans<br>Modules</div>
+            </div>
+            <div class="product-bottom">AI chat, terminal output, plan/apply logs, fixes</div>
+          </div>
+        </section>
+
+        <section class="doc-section" data-title="what is iac studio why local first features">
+          <h2>What IaC Studio Does</h2>
+          <div class="feature-grid">
+            <article>
+              <h3>Design visually</h3>
+              <p>Drag resources onto a canvas, connect dependencies, edit properties, and preview generated code as the topology changes.</p>
+            </article>
+            <article>
+              <h3>Import real projects</h3>
+              <p>Browse local folders, inspect Terraform, OpenTofu, Ansible, Pulumi, and layered projects, then rebuild the visual graph from disk.</p>
+            </article>
+            <article>
+              <h3>Use AI without giving up control</h3>
+              <p>Run with local Ollama models or API-backed providers. AI can create topologies, explain failures, suggest next resources, and fix plan errors.</p>
+            </article>
+            <article>
+              <h3>Validate before apply</h3>
+              <p>Policy checks, security scans, drift detection, plan gates, command timeouts, and kill controls keep risky operations explicit.</p>
+            </article>
+            <article>
+              <h3>Round-trip code</h3>
+              <p>Canvas edits write IaC files, file changes resync the graph, and the Monaco editor supports Terraform, OpenTofu, Ansible, Pulumi, YAML, and JSON.</p>
+            </article>
+            <article>
+              <h3>Package and promote modules</h3>
+              <p>Inspect module usage, search registry metadata, and promote selected resources into reusable Terraform module structure.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="quick-start" class="doc-section" data-title="quick start install run binary docker source">
+          <h2>Quick Start</h2>
+          <p>
+            The fastest path is the interactive setup script. It checks dependencies,
+            asks how you want AI configured, builds the app, and starts the server.
+          </p>
+          <pre><code>./scripts/setup.sh</code></pre>
+
+          <h3>Manual local install</h3>
+          <p>Use this path when you want predictable commands for a development machine.</p>
+          <pre><code>git clone https://github.com/olandodeflexy/IaCStudio.git
+cd IaCStudio
+make deps
+make build
+./bin/iac-studio</code></pre>
+          <p>Open <a href="http://localhost:3000">http://localhost:3000</a>.</p>
+
+          <h3>Run with Docker</h3>
+          <p>The container includes the server, built web UI, Terraform, and OpenTofu.</p>
+          <pre><code>docker run --rm -it \
+  -p 3000:3000 \
+  -v "$HOME/iac-projects:/projects" \
+  ghcr.io/olandodeflexy/iacstudio:latest</code></pre>
+
+          <h3>Download a release binary</h3>
+          <p>
+            Release assets are published for Linux, macOS, and Windows on amd64 and arm64.
+            Download the right archive from GitHub Releases, unpack it, and run the binary.
+          </p>
+          <pre><code># Example after unpacking a release archive
+./iac-studio --projects-dir "$HOME/iac-projects"</code></pre>
+
+          <div class="callout">
+            <strong>Default server behavior:</strong>
+            the binary binds to <code>127.0.0.1:3000</code>, stores projects in
+            <code>~/iac-projects</code>, and expects Ollama at <code>http://localhost:11434</code>
+            unless you override flags or AI settings.
+          </div>
+        </section>
+
+        <section id="first-project" class="doc-section" data-title="first project first ten minutes create run plan apply">
+          <h2>First 10 Minutes</h2>
+          <ol class="steps">
+            <li>
+              <strong>Start IaC Studio.</strong>
+              Run <code>./bin/iac-studio</code> or the Docker command, then open the browser.
+            </li>
+            <li>
+              <strong>Create or import a project.</strong>
+              Start from an empty project, describe a topology, upload a diagram, or browse to an existing folder.
+            </li>
+            <li>
+              <strong>Pick the tool and provider.</strong>
+              Choose Terraform, OpenTofu, Ansible, Pulumi, or a layered multi-environment layout.
+            </li>
+            <li>
+              <strong>Add resources.</strong>
+              Use the left resource palette, AI chat, or topology builder. Connect nodes to encode dependencies.
+            </li>
+            <li>
+              <strong>Review generated code.</strong>
+              Open the Code tab, inspect files, and save edits back to disk.
+            </li>
+            <li>
+              <strong>Validate.</strong>
+              Run policy checks and security scans before running infrastructure commands.
+            </li>
+            <li>
+              <strong>Run safely.</strong>
+              Use Init, Plan, then Apply. Apply requires a successful plan and explicit confirmation.
+            </li>
+          </ol>
+        </section>
+
+        <section id="interface" class="doc-section" data-title="interface app header sidebar canvas inspector code terminal panels">
+          <h2>Interface Tour</h2>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Area</th>
+                  <th>Purpose</th>
+                  <th>Common actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Project Launcher</td>
+                  <td>Start, import, or restore projects.</td>
+                  <td>Create from scratch, build from text, upload diagram, open recent projects.</td>
+                </tr>
+                <tr>
+                  <td>App Header</td>
+                  <td>Global controls for tool, provider, environment, and command execution.</td>
+                  <td>Run init/plan/apply, open AI settings, reveal project folder, switch environment.</td>
+                </tr>
+                <tr>
+                  <td>Workspace Sidebar</td>
+                  <td>Resource catalog, generated file list, next-step suggestions, and starter guide.</td>
+                  <td>Search resources, add nodes, inspect generated files, use suggestions.</td>
+                </tr>
+                <tr>
+                  <td>Canvas</td>
+                  <td>Visual topology editing.</td>
+                  <td>Drag nodes, connect resources, switch between freeform and swimlane layouts.</td>
+                </tr>
+                <tr>
+                  <td>Inspector</td>
+                  <td>Edit selected node and edge details.</td>
+                  <td>Change names, properties, references, tags, and connection metadata.</td>
+                </tr>
+                <tr>
+                  <td>Code Editor</td>
+                  <td>Live generated files and manual code edits.</td>
+                  <td>Edit Terraform, OpenTofu, Pulumi TypeScript, YAML, JSON, and generated diffs.</td>
+                </tr>
+                <tr>
+                  <td>Policy Studio</td>
+                  <td>Run built-in and engine-backed policy checks.</td>
+                  <td>Review violations, acknowledge allowed exceptions, block unsafe apply attempts.</td>
+                </tr>
+                <tr>
+                  <td>Scan Panel</td>
+                  <td>Security scanner controls and findings.</td>
+                  <td>Run scanners, map findings to compliance frameworks, generate CI workflow snippets.</td>
+                </tr>
+                <tr>
+                  <td>Module Registry</td>
+                  <td>Reusable module discovery and promotion.</td>
+                  <td>Search modules, inspect versions, promote canvas resources to a module.</td>
+                </tr>
+                <tr>
+                  <td>Terminal</td>
+                  <td>Command logs and live process output.</td>
+                  <td>Read plan/apply output, kill running commands, send failures to AI fix.</td>
+                </tr>
+                <tr>
+                  <td>Chat Panel</td>
+                  <td>AI assistant grounded in the selected tool and current project.</td>
+                  <td>Generate resources, explain files, fix plan output, ask for suggestions.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="workflows" class="doc-section" data-title="workflows import topology vision policy scan modules drift export sync">
+          <h2>Core Workflows</h2>
+
+          <div class="workflow">
+            <h3>Create infrastructure from the canvas</h3>
+            <p>
+              Choose a provider, search the resource catalog, add nodes, then connect resources.
+              Connections are not decorative: for Terraform and OpenTofu they become real references
+              where the generator can infer safe relationships.
+            </p>
+          </div>
+
+          <div class="workflow">
+            <h3>Import an existing project</h3>
+            <p>
+              Use the Import Wizard to browse local folders. IaC Studio scans supported files,
+              detects the tool, parses resources, restores known coordinates, and writes a
+              <code>.iac-studio.json</code> state file next to the project.
+            </p>
+          </div>
+
+          <div class="workflow">
+            <h3>Build from a text topology</h3>
+            <p>
+              Describe the target architecture in natural language. The AI topology endpoint returns
+              resources and edges, then the UI turns them into editable canvas objects and generated code.
+            </p>
+          </div>
+
+          <div class="workflow">
+            <h3>Build from an image</h3>
+            <p>
+              Drop one or more architecture diagrams into the Vision import flow. The backend sends the
+              image payloads to the configured AI provider, converts the result into a topology, and keeps
+              the generated project editable.
+            </p>
+          </div>
+
+          <div class="workflow">
+            <h3>Round-trip Pulumi and layered projects</h3>
+            <p>
+              Pulumi TypeScript resources are parsed from <code>index.ts</code> files, while layered
+              projects use environment-aware folders such as <code>environments/dev</code> and shared
+              module paths. The environment selector limits the canvas and code view to the active layer.
+            </p>
+          </div>
+
+          <div class="workflow">
+            <h3>Run policy and security checks</h3>
+            <p>
+              Run policy engines and scanners before executing infrastructure commands. Blocking findings
+              stop apply unless the API receives an explicit acknowledgement for the current request.
+            </p>
+          </div>
+
+          <div class="workflow">
+            <h3>Detect drift and export</h3>
+            <p>
+              Drift detection compares state against code when Terraform state is present. Export converts
+              the current topology into alternate formats such as Pulumi TypeScript, CDK Python, and
+              CloudFormation where supported.
+            </p>
+          </div>
+        </section>
+
+        <section id="ai" class="doc-section" data-title="ai setup ollama openai anthropic models settings environment variables">
+          <h2>AI Setup</h2>
+          <p>
+            AI is optional. The app still works as a visual editor and runner without an AI provider.
+            When enabled, AI requests are used for chat, topology generation, image topology import,
+            plan fixes, suggestions, and agent workflows.
+          </p>
+
+          <h3>Local Ollama</h3>
+          <pre><code>ollama pull qwen2.5-coder:7b
+./bin/iac-studio --ai-endpoint http://localhost:11434 --ai-model qwen2.5-coder:7b</code></pre>
+
+          <h3>OpenAI-compatible providers</h3>
+          <pre><code>OPENAI_API_KEY=sk-... \
+OPENAI_MODEL=gpt-4o-mini \
+./bin/iac-studio</code></pre>
+
+          <h3>Anthropic</h3>
+          <pre><code>ANTHROPIC_API_KEY=sk-ant-... \
+ANTHROPIC_MODEL=claude-opus-4-7 \
+./bin/iac-studio</code></pre>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Setting</th>
+                  <th>Default</th>
+                  <th>Use</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>--ai-endpoint</code></td>
+                  <td><code>http://localhost:11434</code></td>
+                  <td>Ollama or OpenAI-compatible base endpoint.</td>
+                </tr>
+                <tr>
+                  <td><code>--ai-model</code></td>
+                  <td><code>deepseek-coder:6.7b</code></td>
+                  <td>Default model name used by the server.</td>
+                </tr>
+                <tr>
+                  <td><code>OPENAI_API_KEY</code></td>
+                  <td>unset</td>
+                  <td>Enables OpenAI-compatible API calls.</td>
+                </tr>
+                <tr>
+                  <td><code>OPENAI_ENDPOINT</code></td>
+                  <td><code>https://api.openai.com/v1</code></td>
+                  <td>Overrides the OpenAI-compatible API endpoint.</td>
+                </tr>
+                <tr>
+                  <td><code>OPENAI_MODEL</code></td>
+                  <td><code>gpt-4o-mini</code></td>
+                  <td>Overrides the OpenAI model.</td>
+                </tr>
+                <tr>
+                  <td><code>ANTHROPIC_API_KEY</code></td>
+                  <td>unset</td>
+                  <td>Enables Anthropic-backed requests.</td>
+                </tr>
+                <tr>
+                  <td><code>ANTHROPIC_MODEL</code></td>
+                  <td><code>claude-opus-4-7</code></td>
+                  <td>Overrides the Anthropic model.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout">
+            <strong>Privacy model:</strong>
+            local Ollama requests stay on your machine. API providers receive the prompt content needed
+            for the requested action. IaC Studio does not add telemetry or account tracking.
+          </div>
+        </section>
+
+        <section id="policy-security" class="doc-section" data-title="policy security scan guardrails local safety apply gate">
+          <h2>Policy, Security, and Runtime Safety</h2>
+          <div class="feature-grid compact">
+            <article>
+              <h3>Local binding</h3>
+              <p>The default server binds to <code>127.0.0.1</code>. Docker uses <code>0.0.0.0</code> inside the container so the host port can map correctly.</p>
+            </article>
+            <article>
+              <h3>Origin checks</h3>
+              <p>CORS and WebSocket origin validation are intended to accept localhost development and app origins only.</p>
+            </article>
+            <article>
+              <h3>Path sandboxing</h3>
+              <p>Project names and file paths are normalized and validated to prevent traversal outside the configured projects directory.</p>
+            </article>
+            <article>
+              <h3>Plan-before-apply</h3>
+              <p>Apply is gated by a successful plan and can be blocked by policy findings unless explicitly acknowledged.</p>
+            </article>
+            <article>
+              <h3>Command control</h3>
+              <p>Infrastructure commands run through a safe runner with timeouts, captured logs, and a kill path.</p>
+            </article>
+            <article>
+              <h3>Scanner output</h3>
+              <p>Findings include severity, policy IDs, affected resources, compliance mapping, and remediation text where available.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="api-reference" class="doc-section" data-title="api reference endpoints rest websocket">
+          <h2>API Reference</h2>
+          <p>
+            The browser talks to the Go backend over JSON REST endpoints and a WebSocket stream.
+            Endpoints are rooted at the same host as the web app.
+          </p>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Area</th>
+                  <th>Endpoints</th>
+                  <th>Notes</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Health and catalog</td>
+                  <td><code>GET /api/health</code><br><code>GET /api/tools</code><br><code>GET /api/catalog</code></td>
+                  <td>Detect installed tools and load provider resource catalogs.</td>
+                </tr>
+                <tr>
+                  <td>Projects</td>
+                  <td><code>GET /api/projects</code><br><code>POST /api/projects</code><br><code>DELETE /api/projects/{name}</code></td>
+                  <td>Create, list, and delete local project folders.</td>
+                </tr>
+                <tr>
+                  <td>State and resources</td>
+                  <td><code>GET /api/projects/{name}/resources</code><br><code>POST /api/projects/{name}/sync</code><br><code>GET /api/projects/{name}/state</code></td>
+                  <td>Parse IaC files, save generated files, and restore canvas metadata.</td>
+                </tr>
+                <tr>
+                  <td>Commands</td>
+                  <td><code>POST /api/projects/{name}/run</code><br><code>POST /api/projects/{name}/kill</code></td>
+                  <td>Run init, plan, apply, and stop active processes.</td>
+                </tr>
+                <tr>
+                  <td>Import</td>
+                  <td><code>GET /api/browse</code><br><code>POST /api/import</code></td>
+                  <td>Browse local directories and import existing projects.</td>
+                </tr>
+                <tr>
+                  <td>AI</td>
+                  <td><code>POST /api/ai/chat</code><br><code>POST /api/ai/chat/stream</code><br><code>POST /api/ai/topology</code><br><code>POST /api/ai/topology/image</code><br><code>POST /api/ai/fix</code><br><code>POST /api/ai/suggest</code><br><code>POST /api/ai/settings</code></td>
+                  <td>Chat, streaming responses, topology generation, image import, plan fixes, suggestions, and provider settings.</td>
+                </tr>
+                <tr>
+                  <td>Policy and scanning</td>
+                  <td><code>GET /api/policy/engines</code><br><code>POST /api/projects/{name}/policy/run</code><br><code>GET /api/security/scanners</code><br><code>POST /api/projects/{name}/security/scanners/run</code><br><code>GET /api/projects/{name}/security</code></td>
+                  <td>Run policy engines and security scanners against the current project.</td>
+                </tr>
+                <tr>
+                  <td>Modules, drift, export</td>
+                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET /api/projects/{name}/drift</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
+                  <td>Discover modules, promote resources, detect drift, and export alternate IaC formats.</td>
+                </tr>
+                <tr>
+                  <td>Realtime</td>
+                  <td><code>GET /ws</code></td>
+                  <td>Streams file changes, command output, process status, and UI refresh events.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+
+        <section id="architecture" class="doc-section" data-title="architecture backend frontend project layout files">
+          <h2>Architecture</h2>
+          <pre class="diagram"><code>Browser UI
+  React, Vite, Monaco, canvas panels
+        |
+        | REST + WebSocket
+        v
+Go server
+  API router
+  HCL, YAML, Pulumi parsers
+  Code generators and exporters
+  AI bridge
+  Policy, scan, drift, module services
+  Safe command runner
+        |
+        v
+Local project directory
+  main.tf, index.ts, playbooks, modules
+  .iac-studio.json
+  terraform.tfstate when present</code></pre>
+
+          <h3>Repository layout</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Path</th>
+                  <th>Purpose</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>cmd/server</code></td>
+                  <td>Single binary entrypoint and embedded production frontend.</td>
+                </tr>
+                <tr>
+                  <td><code>internal/api</code></td>
+                  <td>HTTP router, request validation, project handlers, command handlers, and API tests.</td>
+                </tr>
+                <tr>
+                  <td><code>internal/iac</code></td>
+                  <td>IaC parsing, generation, security, drift, modules, promotion, export, and tool integration.</td>
+                </tr>
+                <tr>
+                  <td><code>internal/ai</code></td>
+                  <td>AI providers, prompts, topology, agent, RAG, and tool calling support.</td>
+                </tr>
+                <tr>
+                  <td><code>web/src</code></td>
+                  <td>React UI, canvas, panels, API client, hooks, and tests.</td>
+                </tr>
+                <tr>
+                  <td><code>docs</code></td>
+                  <td>This static GitHub Pages documentation site.</td>
+                </tr>
+                <tr>
+                  <td><code>.github/workflows</code></td>
+                  <td>CI, release, Docker, and Pages publishing workflows.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Project state file</h3>
+          <p>
+            IaC Studio stores UI metadata in <code>.iac-studio.json</code>. It keeps canvas coordinates,
+            edges, environment metadata, selected layout, and other non-IaC state separate from generated
+            Terraform, OpenTofu, Ansible, or Pulumi files.
+          </p>
+        </section>
+
+        <section id="development" class="doc-section" data-title="development contributing tests make commands go node">
+          <h2>Development</h2>
+          <p>Prerequisites are Go 1.25+, Node.js 20+, npm, and the IaC CLIs you want to execute locally.</p>
+
+          <div class="command-grid">
+            <div>
+              <h3>Install dependencies</h3>
+              <pre><code>make deps</code></pre>
+            </div>
+            <div>
+              <h3>Run hot reload</h3>
+              <pre><code>make dev</code></pre>
+            </div>
+            <div>
+              <h3>Run tests</h3>
+              <pre><code>make test</code></pre>
+            </div>
+            <div>
+              <h3>Build binary</h3>
+              <pre><code>make build</code></pre>
+            </div>
+            <div>
+              <h3>Cross-compile releases</h3>
+              <pre><code>make release</code></pre>
+            </div>
+            <div>
+              <h3>Build Docker image</h3>
+              <pre><code>make docker</code></pre>
+            </div>
+          </div>
+
+          <h3>Development server ports</h3>
+          <p>
+            <code>make dev</code> runs the Go backend on <code>:3001</code> and the Vite frontend on
+            <code>:5173</code>. The production binary serves the built frontend and API from one process.
+          </p>
+        </section>
+
+        <section id="deployment" class="doc-section" data-title="deployment release docker github pages ci">
+          <h2>Deployment and Releases</h2>
+          <div class="feature-grid compact">
+            <article>
+              <h3>CI</h3>
+              <p>Pull requests and main branch pushes run Go tests, frontend tests, and production builds.</p>
+            </article>
+            <article>
+              <h3>Release tags</h3>
+              <p>Tags matching <code>v*</code> trigger cross-platform release artifacts and checksums.</p>
+            </article>
+            <article>
+              <h3>Docker</h3>
+              <p>Main branch and release tags publish container images with Terraform and OpenTofu installed.</p>
+            </article>
+            <article>
+              <h3>GitHub Pages</h3>
+              <p>The Pages workflow uploads <code>docs/</code> as a static artifact and deploys it to the project site.</p>
+            </article>
+          </div>
+        </section>
+
+        <section id="troubleshooting" class="doc-section" data-title="troubleshooting black screen ports ai docker terraform errors">
+          <h2>Troubleshooting</h2>
+          <div class="trouble-list">
+            <details open>
+              <summary>The app screen is blank or black</summary>
+              <p>
+                Open the browser console first. Most blank screens are frontend runtime errors. Refresh after pulling
+                the latest branch, then check the console stack trace for a component and line number. If the error
+                mentions null or undefined data, try reloading the project from disk or opening a fresh project.
+              </p>
+            </details>
+            <details>
+              <summary>Port 3000 is already in use</summary>
+              <pre><code>./bin/iac-studio --port 3002</code></pre>
+            </details>
+            <details>
+              <summary>Ollama is unavailable</summary>
+              <p>Start Ollama and verify the model exists.</p>
+              <pre><code>ollama list
+ollama pull qwen2.5-coder:7b</code></pre>
+            </details>
+            <details>
+              <summary>Terraform, OpenTofu, or Ansible command fails</summary>
+              <p>
+                Confirm the CLI is installed and available on <code>PATH</code>. Docker images include Terraform and
+                OpenTofu, but local binaries depend on your machine.
+              </p>
+            </details>
+            <details>
+              <summary>Apply is blocked by policy</summary>
+              <p>
+                Review the Policy Studio findings. Fix blocking issues when possible. Only acknowledge a block when
+                you deliberately accept the risk for the current operation.
+              </p>
+            </details>
+            <details>
+              <summary>Docker cannot write project files</summary>
+              <p>
+                Check the mounted host directory permissions. The default container command writes projects under
+                <code>/projects</code>, which should be backed by a writable host directory.
+              </p>
+            </details>
+          </div>
+        </section>
+
+        <section id="faq" class="doc-section" data-title="faq questions support telemetry cloud local">
+          <h2>FAQ</h2>
+          <div class="faq-list">
+            <details open>
+              <summary>Does IaC Studio require a cloud account?</summary>
+              <p>No. The app runs locally. Cloud credentials are only needed when you run real IaC commands that require provider access.</p>
+            </details>
+            <details>
+              <summary>Does it send telemetry?</summary>
+              <p>No telemetry is built into the app. External AI providers receive only the requests you choose to send to them.</p>
+            </details>
+            <details>
+              <summary>Can I use it without AI?</summary>
+              <p>Yes. The visual editor, parser, generator, command runner, policy, scan, module, and export paths can be used without AI.</p>
+            </details>
+            <details>
+              <summary>Where are projects stored?</summary>
+              <p>By default, projects live in <code>~/iac-projects</code>. Override this with <code>--projects-dir</code>.</p>
+            </details>
+            <details>
+              <summary>Can I commit generated files?</summary>
+              <p>Yes. IaC Studio writes normal IaC files. Commit them the same way you would commit hand-written Terraform, OpenTofu, Ansible, or Pulumi projects.</p>
+            </details>
+          </div>
+        </section>
+
+        <footer class="footer">
+          <p>IaC Studio is Apache 2.0 licensed and designed to keep infrastructure work local, inspectable, and versionable.</p>
+          <p><a href="#overview">Back to top</a></p>
+        </footer>
+      </main>
+    </div>
+
+    <script src="assets/app.js" defer></script>
+  </body>
+</html>
