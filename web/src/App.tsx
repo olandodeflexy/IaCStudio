@@ -185,11 +185,10 @@ export default function App() {
   const [bottomHeight, setBottomHeight] = useState(220);
   const [resizing, setResizing] = useState<{ panel: string; startPos: number; startSize: number } | null>(null);
 
-  const canvasRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLElement>(null);
   const chatEndRef = useRef<HTMLDivElement>(null);
   const isSyncing = useRef(false); // suppress file_changed echo from our own sync
   const notificationTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
   const showEnvironmentSelector = Boolean(layeredProject && (tool === 'multi' || layeredProject.environmentTools));
   const activeEnv = envForTool(tool || '', layeredProject, activeEnvironment);
   const activeTool = toolForEnv(tool || '', layeredProject, activeEnv);
@@ -1190,7 +1189,6 @@ export default function App() {
           showEnvironmentSelector={showEnvironmentSelector}
           activeEnvironment={activeEnvironment}
           canvasMode={canvasMode}
-          isSwimlaneMode={isSwimlaneMode}
           toolMeta={ct}
           onMouseMove={onMouseMove}
           onDragEnd={onMouseUp}

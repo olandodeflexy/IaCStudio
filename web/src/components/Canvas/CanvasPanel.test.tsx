@@ -49,7 +49,7 @@ const layeredProject: LayeredProject = {
   modules: [{ name: 'root', path: 'environments', environments: ['dev', 'prod'] }],
 };
 
-function makeCanvasRef(): RefObject<HTMLDivElement> {
+function makeCanvasRef(): RefObject<HTMLElement> {
   const element = document.createElement('div');
   element.getBoundingClientRect = vi.fn(() => ({
     left: 10,
@@ -77,7 +77,6 @@ function baseProps(): CanvasPanelProps {
     showEnvironmentSelector: false,
     activeEnvironment: null,
     canvasMode: 'freeform',
-    isSwimlaneMode: false,
     toolMeta: { color: '#2FB5A8' },
     onMouseMove: vi.fn(),
     onDragEnd: vi.fn(),
@@ -117,7 +116,7 @@ describe('CanvasPanel', () => {
 
     try {
       fireEvent.click(screen.getByText('VPC'));
-      fireEvent.keyDown(screen.getByRole('button', { name: 'Select connection vpc_id' }), { key: 'Enter' });
+      fireEvent.keyDown(screen.getByRole('button', { name: 'Select connection vpc_id' }), { key: 'Space', code: 'Space' });
       fireEvent.click(screen.getByRole('button', { name: 'Delete VPC' }));
       fireEvent.mouseDown(screen.getByRole('button', { name: 'Start connection from VPC' }), { clientX: 110, clientY: 140 });
       fireEvent.mouseUp(screen.getByText('Subnet'));

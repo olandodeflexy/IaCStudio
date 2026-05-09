@@ -36,7 +36,7 @@ export interface ConnectingPreview {
 }
 
 export interface CanvasPanelProps {
-  canvasRef: RefObject<HTMLDivElement>;
+  canvasRef: RefObject<HTMLElement>;
   nodes: CanvasResource[];
   edges: Edge[];
   selectedNodeId: string | null;
@@ -46,7 +46,6 @@ export interface CanvasPanelProps {
   showEnvironmentSelector: boolean;
   activeEnvironment: string | null;
   canvasMode: CanvasMode;
-  isSwimlaneMode: boolean;
   toolMeta: CanvasToolMeta;
   onMouseMove: (_event: ReactMouseEvent<HTMLElement>) => void;
   onDragEnd: () => void;
@@ -76,7 +75,6 @@ export function CanvasPanel({
   showEnvironmentSelector,
   activeEnvironment,
   canvasMode,
-  isSwimlaneMode,
   toolMeta,
   onMouseMove,
   onDragEnd,
@@ -91,12 +89,13 @@ export function CanvasPanel({
   onActiveEnvironmentChange,
   onCanvasModeChange,
 }: CanvasPanelProps) {
+  const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
   const selectEdge = (edgeId: string) => {
     onSelectEdge(edgeId);
   };
 
   const selectEdgeFromKeyboard = (event: ReactKeyboardEvent, edgeId: string) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (!['Enter', ' ', 'Space', 'Spacebar'].includes(event.key) && event.code !== 'Space') return;
     event.preventDefault();
     selectEdge(edgeId);
   };
