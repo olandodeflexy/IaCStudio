@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { api, ApiError, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, ImportResult, type PolicyFinding } from './api';
+import { api, ApiError, normalizeSuggestions, Resource, ToolInfo, CatalogResource, Suggestion, FileEntry, ImportResult, type PolicyFinding } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -723,7 +723,7 @@ export default function App() {
     if (!tool) return;
     const provider = detectProvider();
     const canvas = nodes.map(n => ({ type: n.type, name: n.name }));
-    api.suggest(tool, provider, canvas).then(setSuggestions).catch(() => {});
+    api.suggest(tool, provider, canvas).then(setSuggestions).catch(() => setSuggestions([]));
   }, [nodes, tool, detectProvider]);
 
   const chatInFlightRef = useRef(false);
@@ -778,7 +778,7 @@ export default function App() {
       // Replace the streamed raw text with the parsed clean message.
       pendingAiText = result.message;
       updateAiMessageText(pendingAiText);
-      if (result.suggestions) setSuggestions(result.suggestions);
+      setSuggestions(normalizeSuggestions(result.suggestions));
       if (result.resources) {
         result.resources.forEach(r => {
           const meta = catalogResources.find(def => def.type === r.type);

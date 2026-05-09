@@ -78,6 +78,13 @@ describe('WorkspaceSidebar', () => {
     expect(props.onAddResource).toHaveBeenCalledWith(resources[1]);
   });
 
+  it('handles null suggestion payloads without crashing', () => {
+    renderSidebar({ activePanel: 'suggest', suggestions: null as unknown as Suggestion[] });
+
+    expect(screen.getByText('Add resources to get smart suggestions based on IaC best practices.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Next' })).toBeInTheDocument();
+  });
+
   it('renders provider-specific guide content and switches to suggestions', () => {
     const props = renderSidebar({ activePanel: 'guide', provider: 'google' });
 

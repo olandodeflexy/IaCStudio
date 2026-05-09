@@ -55,6 +55,18 @@ export interface Suggestion {
   priority: number;
 }
 
+export function normalizeSuggestions(value: unknown): Suggestion[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is Suggestion => {
+    if (!item || typeof item !== 'object') return false;
+    const candidate = item as Partial<Suggestion>;
+    return typeof candidate.type === 'string' &&
+      typeof candidate.label === 'string' &&
+      typeof candidate.reason === 'string' &&
+      typeof candidate.priority === 'number';
+  });
+}
+
 export interface FileEntry {
   name: string;
   path: string;
@@ -469,7 +481,7 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ tool, provider, canvas }),
     });
-    return (await check(res)).json();
+    return normalizeSuggestions(await (await check(res)).json());
   },
 
   // Policy engines — the UI uses listPolicyEngines to render engine

@@ -76,3 +76,20 @@ describe('api.runCommand', () => {
     });
   });
 });
+
+describe('api.suggest', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('normalizes null suggestion responses to an empty array', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('null', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    await expect(api.suggest('terraform', 'aws', [])).resolves.toEqual([]);
+  });
+});
