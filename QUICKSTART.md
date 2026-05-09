@@ -20,7 +20,7 @@ This interactive script will:
 
 ### Prerequisites
 
-- **Go 1.22+** — [go.dev/dl](https://go.dev/dl/)
+- **Go 1.25+** — [go.dev/dl](https://go.dev/dl/)
 - **Node.js 20+** — [nodejs.org](https://nodejs.org/)
 
 ### Install & Run
