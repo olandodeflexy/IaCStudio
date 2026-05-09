@@ -670,10 +670,17 @@ export default function App() {
   }, []);
 
   const handleCompleteConnection = useCallback((targetNodeId: string) => {
-    if (!connecting || connecting.fromId === targetNodeId) return;
+    if (!connecting) return;
+    if (connecting.fromId === targetNodeId) {
+      setConnecting(null);
+      return;
+    }
     const fromNode = nodes.find(n => n.id === connecting.fromId);
     const toNode = nodes.find(n => n.id === targetNodeId);
-    if (!fromNode || !toNode) return;
+    if (!fromNode || !toNode) {
+      setConnecting(null);
+      return;
+    }
 
     const catEntry = catalogResources.find(c => c.type === fromNode.type);
     let field = 'depends_on';
