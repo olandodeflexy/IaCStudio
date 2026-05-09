@@ -355,7 +355,7 @@ export const api = {
     },
     onDelta: (text: string) => void,
     signal?: AbortSignal,
-  ): Promise<{ message: string; resources: Resource[] | null; suggestions?: Suggestion[] }> {
+  ): Promise<{ message: string; resources: Resource[] | null; suggestions?: Suggestion[] | null }> {
     const res = await fetch(`${BASE}/api/ai/chat/stream`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'text/event-stream' },
@@ -377,7 +377,7 @@ export const api = {
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
-    let complete: { message: string; resources: Resource[] | null; suggestions?: Suggestion[] } | null = null;
+    let complete: { message: string; resources: Resource[] | null; suggestions?: Suggestion[] | null } | null = null;
     let streamError: Error | null = null;
 
     // SSE events are separated by "\n\n"; each event has "event: X\ndata: Y\n"

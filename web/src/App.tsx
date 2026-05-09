@@ -778,7 +778,9 @@ export default function App() {
       // Replace the streamed raw text with the parsed clean message.
       pendingAiText = result.message;
       updateAiMessageText(pendingAiText);
-      setSuggestions(normalizeSuggestions(result.suggestions));
+      if (result.suggestions !== undefined) {
+        setSuggestions(normalizeSuggestions(result.suggestions));
+      }
       if (result.resources) {
         result.resources.forEach(r => {
           const meta = catalogResources.find(def => def.type === r.type);

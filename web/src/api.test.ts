@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { api, ApiError } from './api';
+import { api, ApiError, normalizeSuggestions } from './api';
 
 describe('api.generateTopologyFromImages', () => {
   afterEach(() => {
@@ -91,5 +91,12 @@ describe('api.suggest', () => {
     ));
 
     await expect(api.suggest('terraform', 'aws', [])).resolves.toEqual([]);
+  });
+});
+
+describe('normalizeSuggestions', () => {
+  it('normalizes omitted and explicit null suggestions to empty arrays', () => {
+    expect(normalizeSuggestions(undefined)).toEqual([]);
+    expect(normalizeSuggestions(null)).toEqual([]);
   });
 });
