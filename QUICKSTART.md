@@ -16,6 +16,10 @@ This interactive script will:
 5. Download the model and build the app
 6. Start IaC Studio
 
+The setup script builds `bin/iac-studio` from source. It does not download the
+prebuilt release binaries. To download the latest release binary from a script,
+use `scripts/install.sh` instead.
+
 ## Manual Setup
 
 ### Prerequisites
@@ -27,8 +31,8 @@ This interactive script will:
 
 ```bash
 # Clone the repo
-git clone https://github.com/iac-studio/iac-studio.git
-cd iac-studio
+git clone https://github.com/olandodeflexy/IaCStudio.git
+cd IaCStudio
 
 # Install dependencies
 make deps
@@ -41,6 +45,52 @@ make build
 ```
 
 Open **http://localhost:3000** in your browser.
+
+## Release Binaries
+
+Release binaries are the local server that serves the web UI and API. Download
+the asset for your machine, make it executable on macOS or Linux, run it, then
+open **http://localhost:3000**.
+
+| Machine | Asset |
+|---------|-------|
+| Apple Silicon Mac | `iac-studio-darwin-arm64` |
+| Intel Mac | `iac-studio-darwin-amd64` |
+| Linux x86_64 | `iac-studio-linux-amd64` |
+| Linux ARM64 | `iac-studio-linux-arm64` |
+| Windows x64 | `iac-studio-windows-amd64.exe` |
+| Windows ARM64 | `iac-studio-windows-arm64.exe` |
+
+macOS or Linux:
+
+```bash
+chmod +x ./iac-studio-darwin-arm64
+./iac-studio-darwin-arm64
+```
+
+Optional rename:
+
+```bash
+mv iac-studio-darwin-arm64 iac-studio
+chmod +x ./iac-studio
+./iac-studio
+```
+
+If macOS blocks an unsigned binary:
+
+```bash
+xattr -d com.apple.quarantine ./iac-studio
+./iac-studio
+```
+
+`checksums.txt` verifies download integrity. It is not executable.
+
+Scripted release install:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/olandodeflexy/IaCStudio/main/scripts/install.sh | bash
+iac-studio
+```
 
 ### AI Setup (Optional)
 

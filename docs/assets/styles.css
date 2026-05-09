@@ -397,6 +397,12 @@ p {
   color: #23352f;
 }
 
+.callout.secondary {
+  border-left-color: var(--accent-3);
+  background: #eef2f8;
+  color: #24304a;
+}
+
 .steps {
   display: grid;
   gap: 12px;
@@ -418,6 +424,14 @@ p {
   margin-top: 18px;
   border: 1px solid var(--border);
   border-radius: 8px;
+}
+
+.table-wrap.compact-table table {
+  min-width: 820px;
+}
+
+.table-wrap.compact-table td {
+  font-size: 0.92rem;
 }
 
 table {
