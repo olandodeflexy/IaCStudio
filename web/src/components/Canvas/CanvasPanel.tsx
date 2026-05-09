@@ -165,6 +165,7 @@ export function CanvasPanel({
               style={{ ...S.cmd, background: canvasMode === mode ? toolMeta.color + '22' : 'transparent', color: canvasMode === mode ? toolMeta.color : 'var(--text-muted)', padding: '5px 9px' }}
               onClick={(event) => {
                 event.stopPropagation();
+                if (connecting) onConnectionCancel();
                 onCanvasModeChange(mode);
               }}
             >

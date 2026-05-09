@@ -1,6 +1,6 @@
 import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import type { RefObject } from 'react';
+import { createRef, type RefObject } from 'react';
 
 import type { Edge } from '../../legacy';
 import type { LayeredProject } from '../../types';
@@ -50,19 +50,7 @@ const layeredProject: LayeredProject = {
 };
 
 function makeCanvasRef(): RefObject<HTMLElement> {
-  const element = document.createElement('div');
-  element.getBoundingClientRect = vi.fn(() => ({
-    left: 10,
-    top: 20,
-    right: 510,
-    bottom: 420,
-    width: 500,
-    height: 400,
-    x: 10,
-    y: 20,
-    toJSON: () => ({}),
-  }));
-  return { current: element };
+  return createRef<HTMLElement>();
 }
 
 function baseProps(): CanvasPanelProps {
@@ -183,5 +171,23 @@ describe('CanvasPanel', () => {
     expect(screen.getByRole('button', { name: 'Swimlane' })).toHaveAttribute('aria-pressed', 'true');
     expect(props.onActiveEnvironmentChange).toHaveBeenCalledWith('dev');
     expect(props.onCanvasModeChange).toHaveBeenCalledWith('freeform');
+  });
+
+  it('cancels an active connection before switching canvas modes', () => {
+    const props = renderCanvas({
+      layeredProject,
+      showEnvironmentSelector: true,
+      activeEnvironment: 'dev',
+      canvasMode: 'freeform',
+      connecting: { fromId: 'vpc', x: 100, y: 120 },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Swimlane' }));
+
+    expect(props.onConnectionCancel).toHaveBeenCalled();
+    expect(props.onCanvasModeChange).toHaveBeenCalledWith('swimlane');
+    const cancelOrder = (props.onConnectionCancel as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0];
+    const modeChangeOrder = (props.onCanvasModeChange as unknown as { mock: { invocationCallOrder: number[] } }).mock.invocationCallOrder[0];
+    expect(cancelOrder).toBeLessThan(modeChangeOrder);
   });
 });
