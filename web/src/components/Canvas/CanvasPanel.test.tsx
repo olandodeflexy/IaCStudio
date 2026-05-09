@@ -5,7 +5,7 @@ import type { RefObject } from 'react';
 import type { Edge } from '../../legacy';
 import type { LayeredProject } from '../../types';
 
-import { CanvasPanel, type CanvasPanelProps, type CanvasResource } from './index';
+import { CanvasPanel, type CanvasPanelProps, type CanvasResource } from './CanvasPanel';
 
 const nodes: CanvasResource[] = [
   {
@@ -128,6 +128,7 @@ describe('CanvasPanel', () => {
       expect(props.onDeleteNode).toHaveBeenCalledWith('vpc');
       expect(props.onStartConnection).toHaveBeenCalledWith('vpc', { x: 100, y: 120 });
       expect(props.onCompleteConnection).toHaveBeenCalledWith('subnet');
+      expect(props.onConnectionCancel).not.toHaveBeenCalled();
     } finally {
       rect.mockRestore();
     }
@@ -139,6 +140,15 @@ describe('CanvasPanel', () => {
     fireEvent.mouseUp(screen.getByText('Subnet'));
 
     expect(props.onCompleteConnection).not.toHaveBeenCalled();
+  });
+
+  it('does not cancel a connection when leaving the canvas without an active connection drag', () => {
+    const props = renderCanvas();
+
+    fireEvent.mouseLeave(screen.getByRole('main'));
+
+    expect(props.onDragEnd).toHaveBeenCalled();
+    expect(props.onConnectionCancel).not.toHaveBeenCalled();
   });
 
   it('renders the empty state and cancels in-progress connection drags on canvas mouseup', () => {
