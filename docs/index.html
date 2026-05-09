@@ -109,9 +109,26 @@
           <h2>Quick Start</h2>
           <p>
             The fastest path is the interactive setup script. It checks dependencies,
-            asks how you want AI configured, builds the app, and starts the server.
+            asks how you want AI configured, builds the app from source, and starts
+            the local server.
           </p>
           <pre><code>./scripts/setup.sh</code></pre>
+
+          <div class="callout">
+            <strong>What the setup script does:</strong>
+            <code>./scripts/setup.sh</code> does not download the release binaries.
+            It checks your platform, installs missing dependencies when you approve,
+            configures optional AI, builds <code>bin/iac-studio</code> locally, and
+            can start that freshly built local server for you.
+          </div>
+
+          <div class="callout secondary">
+            <strong>What the install script does:</strong>
+            <code>scripts/install.sh</code> downloads the latest matching release
+            binary from GitHub, verifies it with <code>checksums.txt</code> when
+            available, installs it as <code>iac-studio</code>, and leaves source
+            builds out of the path.
+          </div>
 
           <h3>Manual local install</h3>
           <p>Use this path when you want predictable commands for a development machine.</p>
@@ -122,20 +139,90 @@ make build
 ./bin/iac-studio</code></pre>
           <p>Open <a href="http://localhost:3000">http://localhost:3000</a>.</p>
 
+          <h3>Download a release binary</h3>
+          <p>
+            Release assets are local server binaries. They are useful when you want to
+            run IaC Studio without Docker and without building from source. Download the
+            file that matches your operating system and CPU, make it executable on macOS
+            or Linux, run it, then open <code>http://localhost:3000</code>.
+          </p>
+
+          <div class="table-wrap compact-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>Machine</th>
+                  <th>Release asset</th>
+                  <th>How to run</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Apple Silicon Mac</td>
+                  <td><code>iac-studio-darwin-arm64</code></td>
+                  <td><code>chmod +x ./iac-studio-darwin-arm64 && ./iac-studio-darwin-arm64</code></td>
+                </tr>
+                <tr>
+                  <td>Intel Mac</td>
+                  <td><code>iac-studio-darwin-amd64</code></td>
+                  <td><code>chmod +x ./iac-studio-darwin-amd64 && ./iac-studio-darwin-amd64</code></td>
+                </tr>
+                <tr>
+                  <td>Linux x86_64</td>
+                  <td><code>iac-studio-linux-amd64</code></td>
+                  <td><code>chmod +x ./iac-studio-linux-amd64 && ./iac-studio-linux-amd64</code></td>
+                </tr>
+                <tr>
+                  <td>Linux ARM64</td>
+                  <td><code>iac-studio-linux-arm64</code></td>
+                  <td><code>chmod +x ./iac-studio-linux-arm64 && ./iac-studio-linux-arm64</code></td>
+                </tr>
+                <tr>
+                  <td>Windows x64</td>
+                  <td><code>iac-studio-windows-amd64.exe</code></td>
+                  <td><code>.\iac-studio-windows-amd64.exe</code></td>
+                </tr>
+                <tr>
+                  <td>Windows ARM64</td>
+                  <td><code>iac-studio-windows-arm64.exe</code></td>
+                  <td><code>.\iac-studio-windows-arm64.exe</code></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <pre><code># Optional: rename the downloaded macOS or Linux asset first
+mv iac-studio-darwin-arm64 iac-studio
+chmod +x ./iac-studio
+./iac-studio --projects-dir "$HOME/iac-projects"</code></pre>
+
+          <p>
+            On macOS, unsigned release binaries may be quarantined by Gatekeeper after
+            download. If the binary is blocked, remove the quarantine attribute and run it again.
+          </p>
+          <pre><code>xattr -d com.apple.quarantine ./iac-studio
+./iac-studio</code></pre>
+
+          <p>
+            <code>checksums.txt</code> is for verifying download integrity. It is not an
+            executable and does not start the app.
+          </p>
+
+          <h3>Install the latest release with a script</h3>
+          <p>
+            Use this when you want the release binary path but do not want to manually
+            pick the asset. The installer detects your OS and CPU, downloads the matching
+            asset, verifies the checksum, and installs <code>iac-studio</code>.
+          </p>
+          <pre><code>curl -fsSL https://raw.githubusercontent.com/olandodeflexy/IaCStudio/main/scripts/install.sh | bash
+iac-studio</code></pre>
+
           <h3>Run with Docker</h3>
           <p>The container includes the server, built web UI, Terraform, and OpenTofu.</p>
           <pre><code>docker run --rm -it \
   -p 3000:3000 \
   -v "$HOME/iac-projects:/projects" \
   ghcr.io/olandodeflexy/iacstudio:latest</code></pre>
-
-          <h3>Download a release binary</h3>
-          <p>
-            Release assets are published for Linux, macOS, and Windows on amd64 and arm64.
-            Download the right archive from GitHub Releases, unpack it, and run the binary.
-          </p>
-          <pre><code># Example after unpacking a release archive
-./iac-studio --projects-dir "$HOME/iac-projects"</code></pre>
 
           <div class="callout">
             <strong>Default server behavior:</strong>

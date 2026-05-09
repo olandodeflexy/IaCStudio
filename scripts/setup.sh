@@ -6,7 +6,7 @@ set -euo pipefail
 # configures the AI model based on your system, and gets you running.
 #
 # Usage:
-#   curl -fsSL https://raw.githubusercontent.com/iac-studio/iac-studio/main/scripts/setup.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/olandodeflexy/IaCStudio/main/scripts/setup.sh | bash
 #   or:  ./scripts/setup.sh
 
 # ─── Colors & Helpers ───
@@ -19,6 +19,7 @@ CYAN='\033[0;36m'
 BOLD='\033[1m'
 DIM='\033[2m'
 NC='\033[0m'
+MIN_GO_VERSION="1.25.0"
 
 info()    { echo -e "${BLUE}  ℹ${NC}  $1"; }
 ok()      { echo -e "${GREEN}  ✓${NC}  $1"; }
@@ -115,6 +116,47 @@ check_command() {
     fi
 }
 
+version_at_least() {
+    local current="$1"
+    local required="$2"
+    local c_major c_minor c_patch r_major r_minor r_patch
+
+    IFS=. read -r c_major c_minor c_patch <<< "$current"
+    IFS=. read -r r_major r_minor r_patch <<< "$required"
+
+    c_major=${c_major:-0}
+    c_minor=${c_minor:-0}
+    c_patch=${c_patch:-0}
+    r_major=${r_major:-0}
+    r_minor=${r_minor:-0}
+    r_patch=${r_patch:-0}
+
+    if [ "$c_major" -gt "$r_major" ]; then return 0; fi
+    if [ "$c_major" -lt "$r_major" ]; then return 1; fi
+    if [ "$c_minor" -gt "$r_minor" ]; then return 0; fi
+    if [ "$c_minor" -lt "$r_minor" ]; then return 1; fi
+    [ "$c_patch" -ge "$r_patch" ]
+}
+
+check_go() {
+    if ! command -v go &>/dev/null; then
+        return 1
+    fi
+
+    local display raw version
+    display=$(go version 2>&1 | head -1 || echo "go version unknown")
+    raw=$(echo "$display" | awk '{print $3}' | sed 's/^go//')
+    version=$(echo "$raw" | sed 's/[^0-9.].*$//')
+
+    if version_at_least "$version" "$MIN_GO_VERSION"; then
+        ok "go found — ${DIM}${display}${NC}"
+        return 0
+    fi
+
+    warn "go found, but ${display} is older than required Go ${MIN_GO_VERSION}"
+    return 1
+}
+
 install_go() {
     case "$PLATFORM" in
         macos)
@@ -128,7 +170,7 @@ install_go() {
             ;;
         linux)
             info "Installing Go..."
-            local GO_VERSION="1.22.5"
+            local GO_VERSION="${MIN_GO_VERSION}"
             curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-${ARCH}.tar.gz" -o /tmp/go.tar.gz
             sudo rm -rf /usr/local/go
             sudo tar -C /usr/local -xzf /tmp/go.tar.gz
@@ -212,9 +254,9 @@ main() {
 
     MISSING_DEPS=()
 
-    if check_command "go" "go version"; then true
+    if check_go; then true
     else
-        warn "Go not found"
+        warn "Go ${MIN_GO_VERSION}+ not found"
         MISSING_DEPS+=("go")
     fi
 

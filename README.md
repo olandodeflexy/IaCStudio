@@ -46,6 +46,12 @@ See [QUICKSTART.md](QUICKSTART.md) for detailed instructions.
 The full user, operator, API, and developer guide is published at
 **https://olandodeflexy.github.io/IaCStudio/**.
 
+The release assets are local server binaries. Download the asset for your OS
+and CPU, run it, then open **http://localhost:3000**. `scripts/install.sh`
+downloads and installs the latest release binary. `scripts/setup.sh` is a
+source-build path: it checks dependencies, builds `bin/iac-studio`, and can
+start the local server for you.
+
 ## Features
 
 | Feature | Description |
@@ -136,8 +142,8 @@ IaC Studio runs locally and is designed to be secure by default:
 ## Development
 
 ```bash
-git clone https://github.com/iac-studio/iac-studio.git
-cd iac-studio
+git clone https://github.com/olandodeflexy/IaCStudio.git
+cd IaCStudio
 
 ./scripts/setup.sh    # Interactive setup (recommended)
 # or:
