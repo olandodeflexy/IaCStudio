@@ -5,58 +5,56 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
-	"runtime"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 )
 
 // SafeRunner wraps Runner with timeouts, cancellation, approval gates, and kill switch.
 type SafeRunner struct {
-	runner    *Runner
-	mu        sync.Mutex
-	active    map[string]*Execution // projectDir -> running execution
-	defaults  SafetyConfig
+	runner   *Runner
+	mu       sync.Mutex
+	active   map[string]*Execution // projectDir -> running execution
+	defaults SafetyConfig
 }
 
 // SafetyConfig defines execution safety parameters.
 type SafetyConfig struct {
-	DefaultTimeout time.Duration `json:"default_timeout"` // max time for any command
-	PlanTimeout    time.Duration `json:"plan_timeout"`
-	ApplyTimeout   time.Duration `json:"apply_timeout"`
-	InitTimeout    time.Duration `json:"init_timeout"`
-	RequireApproval bool         `json:"require_approval"` // require plan review before apply
-	MaxOutputBytes  int          `json:"max_output_bytes"` // prevent OOM from huge plans
+	DefaultTimeout  time.Duration `json:"default_timeout"` // max time for any command
+	PlanTimeout     time.Duration `json:"plan_timeout"`
+	ApplyTimeout    time.Duration `json:"apply_timeout"`
+	InitTimeout     time.Duration `json:"init_timeout"`
+	RequireApproval bool          `json:"require_approval"` // require plan review before apply
+	MaxOutputBytes  int           `json:"max_output_bytes"` // prevent OOM from huge plans
 }
 
 // Execution tracks a running command with cancellation support.
 type Execution struct {
-	ID         string        `json:"id"`
-	Project    string        `json:"project"`
-	Tool       string        `json:"tool"`
-	Command    string        `json:"command"`
-	StartedAt  time.Time     `json:"started_at"`
-	Status     string        `json:"status"` // running | completed | failed | cancelled | timed_out
-	cancel     context.CancelFunc
+	ID        string    `json:"id"`
+	Project   string    `json:"project"`
+	Tool      string    `json:"tool"`
+	Command   string    `json:"command"`
+	StartedAt time.Time `json:"started_at"`
+	Status    string    `json:"status"` // running | completed | failed | cancelled | timed_out
+	cancel    context.CancelFunc
 }
 
 // ExecutionResult is returned when a command completes.
 type ExecutionResult struct {
-	ID         string        `json:"id"`
-	Output     string        `json:"output"`
-	ExitCode   int           `json:"exit_code"`
-	Duration   time.Duration `json:"duration"`
-	Status     string        `json:"status"`
-	Truncated  bool          `json:"truncated"` // true if output was cut
+	ID        string        `json:"id"`
+	Output    string        `json:"output"`
+	ExitCode  int           `json:"exit_code"`
+	Duration  time.Duration `json:"duration"`
+	Status    string        `json:"status"`
+	Truncated bool          `json:"truncated"` // true if output was cut
 }
 
 // PlanGate holds a pending plan that needs approval before apply.
 type PlanGate struct {
-	Project    string `json:"project"`
-	Tool       string `json:"tool"`
-	PlanOutput string `json:"plan_output"`
-	Summary    string `json:"summary"` // "3 to add, 1 to change, 0 to destroy"
+	Project    string     `json:"project"`
+	Tool       string     `json:"tool"`
+	PlanOutput string     `json:"plan_output"`
+	Summary    string     `json:"summary"` // "3 to add, 1 to change, 0 to destroy"
 	ApprovedAt *time.Time `json:"approved_at,omitempty"`
 }
 
@@ -130,23 +128,7 @@ func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command, en
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = projectDir
 
-	// Create a new process group so we can kill Terraform AND its child
-	// provider plugin processes (terraform-provider-aws, etc.) together.
-	// Without this, context cancellation only kills the parent process,
-	// orphaning provider plugins that hold state locks and leak memory.
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		if runtime.GOOS == "windows" {
-			return cmd.Process.Kill()
-		}
-		// Kill the entire process group (negative PID)
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+	configureCommandCancel(cmd)
 
 	var stdout, stderr bytes.Buffer
 	// Limit output to prevent OOM
@@ -244,18 +226,7 @@ func (sr *SafeRunner) ExecutePlanJSON(ctx context.Context, projectDir, tool stri
 
 	cmd := exec.CommandContext(ctx, binary, "plan", "-json", "-no-color")
 	cmd.Dir = projectDir
-	if runtime.GOOS != "windows" {
-		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	}
-	cmd.Cancel = func() error {
-		if cmd.Process == nil {
-			return nil
-		}
-		if runtime.GOOS == "windows" {
-			return cmd.Process.Kill()
-		}
-		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-	}
+	configureCommandCancel(cmd)
 
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &limitedWriter{buf: &stdout, limit: sr.defaults.MaxOutputBytes}
