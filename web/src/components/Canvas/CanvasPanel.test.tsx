@@ -112,7 +112,9 @@ describe('CanvasPanel', () => {
       y: 20,
       toJSON: () => ({}),
     });
-    const props = renderCanvas();
+    const props = renderCanvas({
+      connecting: { fromId: 'vpc', x: 100, y: 120 },
+    });
 
     try {
       fireEvent.click(screen.getByText('VPC'));
@@ -129,6 +131,14 @@ describe('CanvasPanel', () => {
     } finally {
       rect.mockRestore();
     }
+  });
+
+  it('does not complete a connection when no drag is in progress', () => {
+    const props = renderCanvas();
+
+    fireEvent.mouseUp(screen.getByText('Subnet'));
+
+    expect(props.onCompleteConnection).not.toHaveBeenCalled();
   });
 
   it('renders the empty state and cancels in-progress connection drags on canvas mouseup', () => {
@@ -159,6 +169,8 @@ describe('CanvasPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'dev (pulumi)' }));
     fireEvent.click(screen.getByRole('button', { name: 'Freeform' }));
 
+    expect(screen.getByRole('button', { name: 'prod (terraform)' })).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByRole('button', { name: 'Swimlane' })).toHaveAttribute('aria-pressed', 'true');
     expect(props.onActiveEnvironmentChange).toHaveBeenCalledWith('dev');
     expect(props.onCanvasModeChange).toHaveBeenCalledWith('freeform');
   });

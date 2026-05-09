@@ -1,4 +1,4 @@
-import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent, RefObject } from 'react';
+import { useMemo, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type RefObject } from 'react';
 
 import type { Resource } from '../../api';
 import type { Edge } from '../../legacy';
@@ -90,6 +90,16 @@ export function CanvasPanel({
   onCanvasModeChange,
 }: CanvasPanelProps) {
   const isSwimlaneMode = Boolean(layeredProject && canvasMode === 'swimlane');
+  const nodeById = useMemo(() => new Map(nodes.map(node => [node.id, node])), [nodes]);
+  const connectionCountByNodeId = useMemo(() => {
+    const counts = new Map<string, number>();
+    edges.forEach(edge => {
+      counts.set(edge.from, (counts.get(edge.from) ?? 0) + 1);
+      counts.set(edge.to, (counts.get(edge.to) ?? 0) + 1);
+    });
+    return counts;
+  }, [edges]);
+
   const selectEdge = (edgeId: string) => {
     onSelectEdge(edgeId);
   };
@@ -110,7 +120,7 @@ export function CanvasPanel({
     });
   };
 
-  const previewFromNode = connecting ? nodes.find(node => node.id === connecting.fromId) : null;
+  const previewFromNode = connecting ? nodeById.get(connecting.fromId) : null;
 
   return (
     <main
@@ -137,6 +147,8 @@ export function CanvasPanel({
             return (
               <button
                 key={env}
+                type="button"
+                aria-pressed={activeEnvironment === env}
                 style={{ ...S.cmd, background: activeEnvironment === env ? toolMeta.color + '22' : 'transparent', color: activeEnvironment === env ? toolMeta.color : 'var(--text-muted)', padding: '5px 9px' }}
                 onClick={(event) => {
                   event.stopPropagation();
@@ -151,6 +163,8 @@ export function CanvasPanel({
           {(['swimlane', 'freeform'] as const).map(mode => (
             <button
               key={mode}
+              type="button"
+              aria-pressed={canvasMode === mode}
               style={{ ...S.cmd, background: canvasMode === mode ? toolMeta.color + '22' : 'transparent', color: canvasMode === mode ? toolMeta.color : 'var(--text-muted)', padding: '5px 9px' }}
               onClick={(event) => {
                 event.stopPropagation();
@@ -183,8 +197,8 @@ export function CanvasPanel({
               </marker>
             </defs>
             {edges.map(edge => {
-              const fromNode = nodes.find(node => node.id === edge.from);
-              const toNode = nodes.find(node => node.id === edge.to);
+              const fromNode = nodeById.get(edge.from);
+              const toNode = nodeById.get(edge.to);
               if (!fromNode || !toNode) return null;
               const x1 = fromNode.x + NODE_W / 2;
               const y1 = fromNode.y + NODE_H;
@@ -250,8 +264,8 @@ export function CanvasPanel({
           )}
 
           {nodes.map(node => {
-            const nodeEdges = edges.filter(edge => edge.from === node.id || edge.to === node.id);
-            const hasConnections = nodeEdges.length > 0;
+            const connectionCount = connectionCountByNodeId.get(node.id) ?? 0;
+            const hasConnections = connectionCount > 0;
             return (
               <div
                 key={node.id}
@@ -269,13 +283,18 @@ export function CanvasPanel({
                   event.stopPropagation();
                   onSelectNode(node.id);
                 }}
-                onMouseUp={() => onCompleteConnection(node.id)}
+                onMouseUp={() => {
+                  if (connecting && connecting.fromId !== node.id) {
+                    onCompleteConnection(node.id);
+                  }
+                }}
               >
                 <div style={S.nodeHead}>
                   <span style={{ fontSize: 18 }}>{node.icon}</span>
                   <span style={{ fontSize: 13, fontWeight: 600, color: '#ddd', flex: 1 }}>{node.label}</span>
-                  {hasConnections && <span style={{ fontSize: 9, color: toolMeta.color, fontFamily: 'JetBrains Mono' }}>{nodeEdges.length}</span>}
+                  {hasConnections && <span style={{ fontSize: 9, color: toolMeta.color, fontFamily: 'JetBrains Mono' }}>{connectionCount}</span>}
                   <button
+                    type="button"
                     style={S.nodeDel}
                     aria-label={`Delete ${node.label}`}
                     onClick={event => {
