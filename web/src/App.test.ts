@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeLayeredProject, resourcesForEnv } from './App';
+import { normalizeLayeredProject, resourcesForEnv } from './app/layered';
 
 describe('normalizeLayeredProject', () => {
   it('drops empty or invalid environment tool maps', () => {
