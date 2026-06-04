@@ -88,6 +88,71 @@ func TestManagerKeepsExistingSecretOnMaskedUpdate(t *testing.T) {
 	}
 }
 
+func TestManagerPersistsSecretContainingMaskCharacters(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	created, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "old-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Save create: %v", err)
+	}
+
+	want := "{\"private_key\":\"abc*def\u2022ghi\"}"
+	if _, err := manager.Save(Connection{
+		ID:         created.ID,
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": want},
+	}); err != nil {
+		t.Fatalf("Save update: %v", err)
+	}
+
+	stored, err := manager.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != want {
+		t.Fatalf("secret containing mask characters should persist, got %q", got)
+	}
+}
+
+func TestManagerSaveUsesAtomicFileModeAndCleansTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	if _, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_profile",
+		Metadata:   map[string]string{"profile": "default"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	info, err := os.Stat(manager.path)
+	if err != nil {
+		t.Fatalf("stat persisted file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("connection file mode should be 0600, got %o", got)
+	}
+
+	tmpFiles, err := filepath.Glob(filepath.Join(dir, ".iac-studio-connections.json.*.tmp"))
+	if err != nil {
+		t.Fatalf("glob temp files: %v", err)
+	}
+	if len(tmpFiles) != 0 {
+		t.Fatalf("atomic temp files should be cleaned up: %#v", tmpFiles)
+	}
+}
+
 func TestManagerTestReportsMissingRequiredFields(t *testing.T) {
 	manager := NewManager(t.TempDir())
 
@@ -123,6 +188,31 @@ func TestManagerRejectsUnsupportedAuthMethod(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected unsupported auth method error")
+	}
+}
+
+func TestIsMaskedRequiresOnlyMaskCharacters(t *testing.T) {
+	tests := []struct {
+		name  string
+		value string
+		want  bool
+	}{
+		{name: "empty", value: "", want: false},
+		{name: "stars", value: "********", want: true},
+		{name: "bullets", value: "\u2022\u2022\u2022\u2022", want: true},
+		{name: "mixed masks", value: "***\u2022\u2022", want: true},
+		{name: "trimmed masks", value: "  ********  ", want: true},
+		{name: "embedded star", value: "abc*def", want: false},
+		{name: "embedded bullet", value: "abc\u2022def", want: false},
+		{name: "json credential", value: `{"private_key":"abc*def"}`, want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := isMasked(tt.value); got != tt.want {
+				t.Fatalf("isMasked(%q) = %t, want %t", tt.value, got, tt.want)
+			}
+		})
 	}
 }
 

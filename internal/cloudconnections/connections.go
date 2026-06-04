@@ -257,7 +257,60 @@ func (m *Manager) saveUnlocked(connections []Connection) error {
 	if err != nil {
 		return fmt.Errorf("marshal cloud connections: %w", err)
 	}
-	return os.WriteFile(m.path, data, 0o600)
+	if err := writeFileAtomic(m.path, data, 0o600); err != nil {
+		return fmt.Errorf("write cloud connections: %w", err)
+	}
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+
+	tmpFile, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := tmpFile.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if _, err := tmpFile.Write(data); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Chmod(mode); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Sync(); err != nil {
+		_ = tmpFile.Close()
+		return err
+	}
+	if err := tmpFile.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		return err
+	}
+	cleanup = false
+	syncDirBestEffort(dir)
+	return nil
+}
+
+func syncDirBestEffort(dir string) {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer func() { _ = handle.Close() }()
+	_ = handle.Sync()
 }
 
 func normalizeAndValidate(connection *Connection) error {
@@ -421,7 +474,16 @@ func cloneMap(values map[string]string) map[string]string {
 }
 
 func isMasked(value string) bool {
-	return strings.Contains(value, "*") || strings.Contains(value, "\u2022")
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return false
+	}
+	for _, r := range value {
+		if r != '*' && r != '\u2022' {
+			return false
+		}
+	}
+	return true
 }
 
 func newID() string {
