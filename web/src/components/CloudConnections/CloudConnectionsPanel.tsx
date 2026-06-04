@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { CheckCircle2, CloudCog, PlugZap, Trash2 } from 'lucide-react';
+import { CheckCircle2, CloudCog, PlugZap, Trash2, XCircle } from 'lucide-react';
 
 import {
   api,
@@ -346,7 +346,11 @@ export function CloudConnectionsPanel({ client = api }: CloudConnectionsPanelPro
       {testResult && (
         <section className={`rounded-md border px-3 py-2 text-xs ${testResult.ok ? 'border-primary/40 bg-primary/10' : 'border-destructive/50 bg-destructive/10'}`}>
           <div className="mb-2 flex items-center gap-2 font-semibold text-foreground">
-            <CheckCircle2 className="h-3.5 w-3.5" />
+            {testResult.ok ? (
+              <CheckCircle2 className="h-3.5 w-3.5 text-primary" aria-label="Connection test passed" />
+            ) : (
+              <XCircle className="h-3.5 w-3.5 text-destructive" aria-label="Connection test failed" />
+            )}
             {testResult.summary}
           </div>
           <div className="grid gap-1 font-mono text-[11px]">

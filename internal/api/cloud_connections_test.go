@@ -26,7 +26,7 @@ func TestCloudConnectionRoutesRedactSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST connection: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("create should 201, got %d", resp.StatusCode)
 	}
@@ -50,7 +50,7 @@ func TestCloudConnectionRoutesRedactSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GET connections: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	var raw bytes.Buffer
 	if _, err := raw.ReadFrom(resp.Body); err != nil {
 		t.Fatalf("read list: %v", err)
@@ -73,7 +73,7 @@ func TestCloudConnectionTestReportsMissingFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST connection: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	var created struct {
 		ID string `json:"id"`
 	}
@@ -85,7 +85,7 @@ func TestCloudConnectionTestReportsMissingFields(t *testing.T) {
 	if err != nil {
 		t.Fatalf("POST test: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	var result struct {
 		OK     bool `json:"ok"`
 		Checks []struct {
@@ -119,7 +119,7 @@ func TestCloudConnectionUpdateMissingConnectionReturns404(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PUT missing connection: %v", err)
 	}
-	defer func() { _ = resp.Body.Close() }()
+	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("missing update should 404, got %d", resp.StatusCode)
 	}

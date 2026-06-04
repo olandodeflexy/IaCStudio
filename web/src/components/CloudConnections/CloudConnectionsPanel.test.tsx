@@ -127,6 +127,7 @@ describe('CloudConnectionsPanel', () => {
       expect(client.testCloudConnection).toHaveBeenCalledWith('conn_1');
     });
     expect(await screen.findByText(/client_secret is required/)).toBeInTheDocument();
+    expect(screen.getByLabelText('Connection test failed')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Delete sp' }));
     await waitFor(() => {
