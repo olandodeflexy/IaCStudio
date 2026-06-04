@@ -1,12 +1,13 @@
 import type { Resource } from '../../api';
 import type { Edge } from '../../legacy';
 import { S } from '../../styles';
+import { CloudConnectionsPanel } from '../CloudConnections';
 import { CodeEditor } from '../CodeEditor';
 import { ModuleRegistryPanel } from '../ModuleRegistry';
 import { PolicyStudioPanel } from '../PolicyStudio';
 import { ScanPanel } from '../ScanPanel';
 
-export type RightPanelTab = 'inspect' | 'policy' | 'scan' | 'modules';
+export type RightPanelTab = 'inspect' | 'cloud' | 'policy' | 'scan' | 'modules';
 
 export interface InspectorResource extends Resource {
   icon: string;
@@ -93,6 +94,7 @@ export function InspectorPanel({
 
   const tabs: { key: RightPanelTab; label: string }[] = [
     { key: 'inspect', label: selected || selectedEdge ? 'Inspect' : 'Code' },
+    { key: 'cloud', label: 'Cloud' },
     { key: 'policy', label: 'Policy' },
     { key: 'scan', label: 'Scan' },
     ...(tool === 'ansible' ? [] : [{ key: 'modules' as const, label: 'Modules' }]),
@@ -247,6 +249,12 @@ export function InspectorPanel({
             </div>
           </div>
         </>
+      )}
+
+      {activeTab === 'cloud' && (
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <CloudConnectionsPanel />
+        </div>
       )}
 
       {activeTab === 'policy' && (

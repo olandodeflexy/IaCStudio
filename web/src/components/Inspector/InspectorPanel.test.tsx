@@ -18,6 +18,12 @@ vi.mock('../CodeEditor', () => ({
   ),
 }));
 
+vi.mock('../CloudConnections', () => ({
+  CloudConnectionsPanel: () => (
+    <div>Cloud connections panel</div>
+  ),
+}));
+
 vi.mock('../PolicyStudio', () => ({
   PolicyStudioPanel: ({ projectName, tool, env }: any) => (
     <div>Policy panel {projectName} {tool} {env}</div>
@@ -193,8 +199,15 @@ describe('InspectorPanel', () => {
   it('renders tool tabs and mounted panels', () => {
     renderInspector({ activeTab: 'modules' });
 
+    expect(screen.getByRole('button', { name: 'Cloud' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Modules' })).toBeInTheDocument();
     expect(screen.getByText('Module registry vpc')).toBeInTheDocument();
+  });
+
+  it('renders the cloud connections tab', () => {
+    renderInspector({ activeTab: 'cloud' });
+
+    expect(screen.getByText('Cloud connections panel')).toBeInTheDocument();
   });
 
   it('guards unresolved hybrid environments', () => {

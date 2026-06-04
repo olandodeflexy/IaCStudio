@@ -37,6 +37,79 @@ describe('api.generateTopologyFromImages', () => {
   });
 });
 
+describe('api.cloudConnections', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('creates cloud connections with provider metadata and secrets', async () => {
+    const response = {
+      id: 'conn_1',
+      name: 'prod-admin',
+      provider: 'aws',
+      auth_method: 'aws_static',
+      metadata: { access_key_id: 'AKIAEXAMPLE' },
+      secret_fields: ['secret_access_key'],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.createCloudConnection({
+      name: 'prod-admin',
+      provider: 'aws',
+      auth_method: 'aws_static',
+      region: 'us-east-1',
+      metadata: { access_key_id: 'AKIAEXAMPLE' },
+      secrets: { secret_access_key: 'super-secret' },
+    })).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/cloud/connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'prod-admin',
+        provider: 'aws',
+        auth_method: 'aws_static',
+        region: 'us-east-1',
+        metadata: { access_key_id: 'AKIAEXAMPLE' },
+        secrets: { secret_access_key: 'super-secret' },
+      }),
+    });
+  });
+
+  it('tests cloud connections through the scoped test endpoint', async () => {
+    const response = {
+      ok: true,
+      summary: 'Connection is ready for local IaC workflows.',
+      connection: {
+        id: 'conn_1',
+        name: 'prod-admin',
+        provider: 'aws',
+        auth_method: 'aws_profile',
+      },
+      checks: [{ name: 'auth_method', status: 'pass', message: 'configured' }],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.testCloudConnection('conn_1')).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/cloud/connections/conn_1/test', {
+      method: 'POST',
+    });
+  });
+});
+
 describe('api.runCommand', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
