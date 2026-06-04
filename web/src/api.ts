@@ -98,6 +98,46 @@ export interface CatalogResource {
   connects_via?: Record<string, string>;
 }
 
+export type CloudProvider = 'aws' | 'azure' | 'gcp';
+
+export type CloudAuthMethod =
+  | 'aws_profile'
+  | 'aws_sso'
+  | 'aws_static'
+  | 'azure_cli'
+  | 'azure_service_principal'
+  | 'gcp_gcloud'
+  | 'gcp_service_account';
+
+export interface CloudConnection {
+  id: string;
+  name: string;
+  provider: CloudProvider;
+  auth_method: CloudAuthMethod;
+  region?: string;
+  metadata?: Record<string, string>;
+  secret_fields?: string[];
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface CloudConnectionInput {
+  id?: string;
+  name: string;
+  provider: CloudProvider;
+  auth_method: CloudAuthMethod;
+  region?: string;
+  metadata?: Record<string, string>;
+  secrets?: Record<string, string>;
+}
+
+export interface CloudConnectionTestResult {
+  ok: boolean;
+  summary: string;
+  connection: CloudConnection;
+  checks: { name: string; status: 'pass' | 'warn' | 'error'; message: string }[];
+}
+
 // Checks res.ok and throws with the backend's error message instead of
 // letting callers hit an opaque JSON parse failure on text/plain errors.
 async function check(res: Response): Promise<Response> {
@@ -117,6 +157,39 @@ async function check(res: Response): Promise<Response> {
 }
 
 export const api = {
+  async listCloudConnections(): Promise<CloudConnection[]> {
+    const res = await fetch(`${BASE}/api/cloud/connections`);
+    return (await check(res)).json();
+  },
+
+  async createCloudConnection(input: CloudConnectionInput): Promise<CloudConnection> {
+    const res = await fetch(`${BASE}/api/cloud/connections`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return (await check(res)).json();
+  },
+
+  async updateCloudConnection(id: string, input: CloudConnectionInput): Promise<CloudConnection> {
+    const res = await fetch(`${BASE}/api/cloud/connections/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return (await check(res)).json();
+  },
+
+  async deleteCloudConnection(id: string): Promise<{ status: string }> {
+    const res = await fetch(`${BASE}/api/cloud/connections/${encodeURIComponent(id)}`, { method: 'DELETE' });
+    return (await check(res)).json();
+  },
+
+  async testCloudConnection(id: string): Promise<CloudConnectionTestResult> {
+    const res = await fetch(`${BASE}/api/cloud/connections/${encodeURIComponent(id)}/test`, { method: 'POST' });
+    return (await check(res)).json();
+  },
+
   // Fetch resource catalog for a tool (optionally filtered by provider)
   async getCatalog(tool: string, provider?: string): Promise<{ tool: string; resources: CatalogResource[] }> {
     const params = new URLSearchParams({ tool });

@@ -20,6 +20,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/ai"
 	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/catalog"
+	"github.com/iac-studio/iac-studio/internal/cloudconnections"
 	"github.com/iac-studio/iac-studio/internal/drift"
 	"github.com/iac-studio/iac-studio/internal/exporter"
 	"github.com/iac-studio/iac-studio/internal/generator"
@@ -1408,6 +1409,94 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// ─── Project State Persistence ───
 
 	pm := project.NewManager(projectsDir)
+	cloudConnections := cloudconnections.NewManager(projectsDir)
+
+	// Cloud connection broker - stores named cloud targets for later plan/apply,
+	// drift, import, and MCP workflows. Route responses always use public views
+	// so secret values are never echoed back to the browser.
+	mux.HandleFunc("GET /api/cloud/auth-methods", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string][]string{
+			"aws":   cloudconnections.SupportedAuthMethods(cloudconnections.ProviderAWS),
+			"azure": cloudconnections.SupportedAuthMethods(cloudconnections.ProviderAzure),
+			"gcp":   cloudconnections.SupportedAuthMethods(cloudconnections.ProviderGCP),
+		})
+	})
+
+	mux.HandleFunc("GET /api/cloud/connections", func(w http.ResponseWriter, _ *http.Request) {
+		connections, err := cloudConnections.List()
+		if err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(connections)
+	})
+
+	mux.HandleFunc("POST /api/cloud/connections", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		var req cloudconnections.Connection
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		req.ID = ""
+		connection, err := cloudConnections.Save(req)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(connection)
+	})
+
+	mux.HandleFunc("PUT /api/cloud/connections/{id}", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		id := r.PathValue("id")
+		if _, err := cloudConnections.Get(id); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				http.Error(w, "connection not found", 404)
+				return
+			}
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		var req cloudconnections.Connection
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", 400)
+			return
+		}
+		req.ID = id
+		connection, err := cloudConnections.Save(req)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(connection)
+	})
+
+	mux.HandleFunc("DELETE /api/cloud/connections/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := cloudConnections.Delete(r.PathValue("id")); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				http.Error(w, "connection not found", 404)
+				return
+			}
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	})
+
+	mux.HandleFunc("POST /api/cloud/connections/{id}/test", func(w http.ResponseWriter, r *http.Request) {
+		result, err := cloudConnections.Test(r.PathValue("id"))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				http.Error(w, "connection not found", 404)
+				return
+			}
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(result)
+	})
 
 	// List all projects with their saved state
 	mux.HandleFunc("GET /api/projects/states", func(w http.ResponseWriter, _ *http.Request) {
