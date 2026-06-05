@@ -366,8 +366,8 @@ export const api = {
     projectName: string,
     tool: string,
     command: string,
-    opts: { approved?: boolean; env?: string; acknowledged?: boolean } = {},
-  ): Promise<{ status: string }> {
+    opts: { approved?: boolean; env?: string; acknowledged?: boolean; connectionId?: string | null } = {},
+  ): Promise<{ status: string; connection?: CloudConnection }> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/run`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -377,6 +377,7 @@ export const api = {
         approved: opts.approved ?? false,
         env: opts.env,
         acknowledged: opts.acknowledged ?? false,
+        connection_id: opts.connectionId || undefined,
       }),
     });
     return (await check(res)).json();

@@ -22,6 +22,8 @@ type CloudClient = Pick<
 
 export interface CloudConnectionsPanelProps {
   client?: CloudClient;
+  selectedConnectionId?: string | null;
+  onConnectionSelected?: (_connection: CloudConnection | null) => void;
 }
 
 const providerMethods: Record<CloudProvider, { key: CloudAuthMethod; label: string }[]> = {
@@ -111,7 +113,11 @@ function fromConnection(connection: CloudConnection): CloudConnectionInput {
   };
 }
 
-export function CloudConnectionsPanel({ client = api }: CloudConnectionsPanelProps) {
+export function CloudConnectionsPanel({
+  client = api,
+  selectedConnectionId = null,
+  onConnectionSelected,
+}: CloudConnectionsPanelProps) {
   const [connections, setConnections] = useState<CloudConnection[]>([]);
   const [form, setForm] = useState<CloudConnectionInput>(defaultInput);
   const [loading, setLoading] = useState(false);
@@ -141,6 +147,13 @@ export function CloudConnectionsPanel({ client = api }: CloudConnectionsPanelPro
     load();
   }, []);
 
+  useEffect(() => {
+    if (!selectedConnectionId || connections.length === 0) return;
+    if (!connections.some(connection => connection.id === selectedConnectionId)) {
+      onConnectionSelected?.(null);
+    }
+  }, [connections, onConnectionSelected, selectedConnectionId]);
+
   const updateField = (key: string, value: string, secret?: boolean) => {
     setForm(current => ({
       ...current,
@@ -166,6 +179,7 @@ export function CloudConnectionsPanel({ client = api }: CloudConnectionsPanelPro
         ? await client.updateCloudConnection(form.id, payload)
         : await client.createCloudConnection(payload);
       setForm(fromConnection(saved));
+      if (selectedConnectionId === saved.id) onConnectionSelected?.(saved);
       setTestResult(null);
       await load();
     } catch (err) {
@@ -210,6 +224,12 @@ export function CloudConnectionsPanel({ client = api }: CloudConnectionsPanelPro
           New
         </Button>
       </header>
+
+      {selectedConnectionId && (
+        <div className="rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs text-foreground">
+          Run target: {connections.find(connection => connection.id === selectedConnectionId)?.name || 'selected connection'}
+        </div>
+      )}
 
       {error && (
         <div className="rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -331,10 +351,26 @@ export function CloudConnectionsPanel({ client = api }: CloudConnectionsPanelPro
                 {connection.auth_method}{connection.region ? ` / ${connection.region}` : ''}
               </div>
               <div className="flex gap-2">
+                <Button
+                  size="sm"
+                  variant={selectedConnectionId === connection.id ? 'default' : 'outline'}
+                  onClick={() => onConnectionSelected?.(connection)}
+                  disabled={!onConnectionSelected || selectedConnectionId === connection.id}
+                >
+                  {selectedConnectionId === connection.id ? 'Selected' : 'Use for runs'}
+                </Button>
                 <Button size="sm" variant="outline" onClick={() => test(connection.id)} disabled={testingId === connection.id}>
                   {testingId === connection.id ? 'Testing...' : 'Test'}
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => remove(connection.id)} aria-label={`Delete ${connection.name}`}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    if (selectedConnectionId === connection.id) onConnectionSelected?.(null);
+                    remove(connection.id);
+                  }}
+                  aria-label={`Delete ${connection.name}`}
+                >
                   <Trash2 className="h-3.5 w-3.5" />
                 </Button>
               </div>

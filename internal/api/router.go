@@ -1072,6 +1072,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		})
 	})
 
+	cloudConnections := cloudconnections.NewManager(projectsDir)
+
 	// Run IaC command (init, plan, apply)
 	mux.HandleFunc("POST /api/projects/{name}/run", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
@@ -1095,7 +1097,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			// layered-v1 projects (environments/<env>/...). Empty runs
 			// commands at the project root (flat layout). Validated as a
 			// safe path segment so a bad value can't traverse.
-			Env string `json:"env,omitempty"`
+			Env          string `json:"env,omitempty"`
+			ConnectionID string `json:"connection_id,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -1121,6 +1124,37 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 			runPath = subPath
+		}
+
+		var commandEnv map[string]string
+		var connectionSummary cloudconnections.PublicConnection
+		if req.ConnectionID != "" {
+			connection, connErr := cloudConnections.Get(req.ConnectionID)
+			if connErr != nil {
+				if errors.Is(connErr, os.ErrNotExist) {
+					http.Error(w, "connection not found", 404)
+					return
+				}
+				http.Error(w, connErr.Error(), 500)
+				return
+			}
+			testResult, testErr := cloudConnections.Test(req.ConnectionID)
+			if testErr != nil {
+				http.Error(w, testErr.Error(), 500)
+				return
+			}
+			if !testResult.OK {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"error":  "connection_not_ready",
+					"detail": testResult.Summary,
+					"checks": testResult.Checks,
+				})
+				return
+			}
+			commandEnv = cloudconnections.CommandEnvironment(*connection)
+			connectionSummary = testResult.Connection
 		}
 
 		// Block apply/destroy unless:
@@ -1173,7 +1207,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		// a request-scoped context and kill the command. SafeRunner applies its
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
-			result, err := run.Execute(context.Background(), runPath, effectiveTool, req.Command, req.Env)
+			result, err := run.ExecuteWithEnv(context.Background(), runPath, effectiveTool, req.Command, req.Env, commandEnv)
 			// Only record a successful plan — failed/cancelled plans don't count.
 			// 'preview' is Pulumi's equivalent of terraform plan; without it
 			// here, a pulumi up following a successful preview would be
@@ -1186,6 +1220,13 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			msg := map[string]interface{}{
 				"type":    "terminal",
 				"project": name,
+			}
+			if connectionSummary.ID != "" {
+				msg["connection"] = map[string]string{
+					"id":       connectionSummary.ID,
+					"name":     connectionSummary.Name,
+					"provider": connectionSummary.Provider,
+				}
 			}
 			if result != nil {
 				msg["output"] = result.Output
@@ -1200,7 +1241,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		}()
 
 		w.WriteHeader(http.StatusAccepted)
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "running"})
+		response := map[string]any{"status": "running"}
+		if connectionSummary.ID != "" {
+			response["connection"] = connectionSummary
+		}
+		_ = json.NewEncoder(w).Encode(response)
 	})
 
 	// Kill a running command
@@ -1409,7 +1454,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	// ─── Project State Persistence ───
 
 	pm := project.NewManager(projectsDir)
-	cloudConnections := cloudconnections.NewManager(projectsDir)
 
 	// Cloud connection broker - stores named cloud targets for later plan/apply,
 	// drift, import, and MCP workflows. Route responses always use public views

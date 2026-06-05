@@ -1,4 +1,4 @@
-import type { Resource } from '../../api';
+import type { CloudConnection, Resource } from '../../api';
 import type { Edge } from '../../legacy';
 import { S } from '../../styles';
 import { CloudConnectionsPanel } from '../CloudConnections';
@@ -35,6 +35,7 @@ export interface InspectorPanelProps {
   codeEditorFilePath: string;
   codeSaving: boolean;
   unresolvedHybridEnv: boolean;
+  selectedCloudConnection?: CloudConnection | null;
   onTabChange: (_tab: RightPanelTab) => void;
   onDeleteEdge: (_edgeId: string) => void;
   onSelectEdge: (_edgeId: string) => void;
@@ -42,6 +43,7 @@ export interface InspectorPanelProps {
   onUpdateNodeProp: (_nodeId: string, _key: string, _value: any) => void;
   onSyncCodeChange: (_value: string) => void;
   onSaveCode: (_value: string) => void;
+  onCloudConnectionSelect?: (_connection: CloudConnection | null) => void;
   onCopyCode?: (_value: string) => void;
 }
 
@@ -67,6 +69,7 @@ export function InspectorPanel({
   codeEditorFilePath,
   codeSaving,
   unresolvedHybridEnv,
+  selectedCloudConnection,
   onTabChange,
   onDeleteEdge,
   onSelectEdge,
@@ -74,6 +77,7 @@ export function InspectorPanel({
   onUpdateNodeProp,
   onSyncCodeChange,
   onSaveCode,
+  onCloudConnectionSelect,
   onCopyCode,
 }: InspectorPanelProps) {
   const selected = nodes.find(node => node.id === selectedNodeId);
@@ -253,7 +257,10 @@ export function InspectorPanel({
 
       {activeTab === 'cloud' && (
         <div style={{ flex: 1, minHeight: 0 }}>
-          <CloudConnectionsPanel />
+          <CloudConnectionsPanel
+            selectedConnectionId={selectedCloudConnection?.id}
+            onConnectionSelected={onCloudConnectionSelect}
+          />
         </div>
       )}
 

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -84,6 +85,12 @@ func NewSafeRunner(config SafetyConfig) *SafeRunner {
 // `--stack <env>`. Empty env runs in projectDir's own workspace
 // (flat layouts).
 func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command, env string) (*ExecutionResult, error) {
+	return sr.ExecuteWithEnv(ctx, projectDir, tool, command, env, nil)
+}
+
+// ExecuteWithEnv runs a command with additional environment variables. Values
+// in extraEnv override the inherited process environment for this command only.
+func (sr *SafeRunner) ExecuteWithEnv(ctx context.Context, projectDir, tool, command, env string, extraEnv map[string]string) (*ExecutionResult, error) {
 	// Project-level lock — prevent concurrent executions on the same project
 	// which would cause terraform state lock contention and corruption.
 	sr.mu.Lock()
@@ -127,6 +134,9 @@ func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command, en
 
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = projectDir
+	if len(extraEnv) > 0 {
+		cmd.Env = mergeEnv(os.Environ(), extraEnv)
+	}
 
 	configureCommandCancel(cmd)
 
@@ -180,6 +190,35 @@ func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command, en
 		result.ExitCode = 0
 		return result, nil
 	}
+}
+
+func mergeEnv(base []string, overrides map[string]string) []string {
+	values := map[string]string{}
+	order := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" {
+			continue
+		}
+		if _, exists := values[key]; !exists {
+			order = append(order, key)
+		}
+		values[key] = value
+	}
+	for key, value := range overrides {
+		if strings.TrimSpace(key) == "" {
+			continue
+		}
+		if _, exists := values[key]; !exists {
+			order = append(order, key)
+		}
+		values[key] = value
+	}
+	out := make([]string, 0, len(order))
+	for _, key := range order {
+		out = append(out, key+"="+values[key])
+	}
+	return out
 }
 
 // Kill cancels a running execution for a project (the kill switch).
