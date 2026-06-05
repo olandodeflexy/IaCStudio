@@ -129,6 +129,7 @@ Supported: OpenAI, Anthropic, Groq, Together, Azure OpenAI, or any OpenAI-compat
 | **AI generate** | Type in the chat: "Add a VPC with 3 subnets" |
 | **Build from description** | Click "Build from Description" on the start screen |
 | **Import existing project** | Click "Import Existing Project" → browse to your .tf files |
+| **Connect cloud target** | Open Cloud tab → save/test a named AWS, Azure, or GCP connection → click "Use for runs" |
 | **Run terraform** | Click Init → Plan → Apply in the header |
 | **Undo/Redo** | Ctrl+Z / Ctrl+Shift+Z or the ↩↪ buttons |
 | **Delete** | Select a node or connection, press Delete |
@@ -136,6 +137,41 @@ Supported: OpenAI, Anthropic, Groq, Together, Azure OpenAI, or any OpenAI-compat
 | **Open in Finder** | Click 📂 next to the project name |
 | **Resize panels** | Drag the borders between sidebar, canvas, and bottom panel |
 | **AI settings** | Click ⚙ in the header |
+
+## Cloud Connections
+
+Cloud Connections are named deployment targets for real infrastructure runs.
+They let you choose the account, subscription, project, and region before
+running `init`, `plan`, or `apply`.
+
+Recommended auth paths:
+
+| Provider | Prefer | Fallback |
+|----------|--------|----------|
+| AWS | Local AWS profile or AWS SSO profile | Static access key |
+| Azure | Azure CLI login | Service principal |
+| GCP | gcloud auth | Service account JSON |
+
+Use them like this:
+
+1. Open a project.
+2. Open the **Cloud** tab in the inspector.
+3. Save a named connection, for example `platform-dev`.
+4. Click **Test** and fix any missing fields.
+5. Click **Use for runs**.
+6. Confirm the selected target appears in the header before running `Plan` or `Apply`.
+
+Secrets are stored locally under your configured projects directory in
+`.iac-studio-connections.json`. API responses, WebSocket terminal messages, and
+generated IaC files do not echo secret values.
+
+For local auth flows, make sure the provider CLI is already logged in:
+
+```bash
+aws sso login --profile platform-dev
+az login
+gcloud auth application-default login
+```
 
 ## Development Mode
 

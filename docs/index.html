@@ -38,6 +38,7 @@
           <a href="#first-project">First Project</a>
           <a href="#interface">Interface Tour</a>
           <a href="#workflows">Core Workflows</a>
+          <a href="#cloud-connections">Cloud Connections</a>
           <a href="#ai">AI Setup</a>
           <a href="#policy-security">Policy and Security</a>
           <a href="#api-reference">API Reference</a>
@@ -338,7 +339,7 @@ iac-studio</code></pre>
           </div>
         </section>
 
-        <section id="workflows" class="doc-section" data-title="workflows import topology vision policy scan modules drift export sync">
+        <section id="workflows" class="doc-section" data-title="workflows import topology vision policy scan modules drift export sync cloud connections">
           <h2>Core Workflows</h2>
 
           <div class="workflow">
@@ -400,6 +401,128 @@ iac-studio</code></pre>
               the current topology into alternate formats such as Pulumi TypeScript, CDK Python, and
               CloudFormation where supported.
             </p>
+          </div>
+        </section>
+
+        <section id="cloud-connections" class="doc-section" data-title="cloud connections aws azure gcp profile sso static service principal gcloud secrets run target">
+          <h2>Cloud Connections</h2>
+          <p>
+            Cloud Connections are named run targets for real infrastructure work. They let you
+            keep provider authentication explicit, test the connection before use, and attach a
+            selected account, subscription, project, and region to <code>init</code>,
+            <code>plan</code>, <code>apply</code>, import, drift, and future agent workflows.
+          </p>
+
+          <div class="callout">
+            <strong>Recommended model:</strong>
+            use cloud-native local auth first. Prefer AWS profiles or SSO, Azure CLI login,
+            and gcloud auth. Use static secrets only when there is no better option for the
+            environment you are testing.
+          </div>
+
+          <h3>How to use a connection</h3>
+          <ol class="steps">
+            <li>
+              <strong>Create a named target.</strong>
+              Open the Cloud tab in the right inspector, choose AWS, Azure, or GCP, then save
+              the metadata needed for that auth method.
+            </li>
+            <li>
+              <strong>Test it before running commands.</strong>
+              The test action verifies required local fields and reports missing values in plain
+              language. Today this is readiness validation, not a full IAM permission simulator.
+            </li>
+            <li>
+              <strong>Select it for runs.</strong>
+              Click <strong>Use for runs</strong>. The app header shows the selected cloud target
+              so you can see the account context before using plan or apply.
+            </li>
+            <li>
+              <strong>Run normal IaC commands.</strong>
+              IaC Studio passes provider-specific environment variables only to that command
+              process. The terminal and WebSocket payloads show the public connection name, not
+              secret values.
+            </li>
+          </ol>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Provider</th>
+                  <th>Preferred paths</th>
+                  <th>Fallback path</th>
+                  <th>Command environment</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>AWS</td>
+                  <td><code>aws_profile</code>, <code>aws_sso</code></td>
+                  <td><code>aws_static</code></td>
+                  <td><code>AWS_PROFILE</code>, <code>AWS_SDK_LOAD_CONFIG</code>, or static key env plus region.</td>
+                </tr>
+                <tr>
+                  <td>Azure</td>
+                  <td><code>azure_cli</code></td>
+                  <td><code>azure_service_principal</code></td>
+                  <td><code>ARM_SUBSCRIPTION_ID</code>, <code>ARM_TENANT_ID</code>, service principal env when provided.</td>
+                </tr>
+                <tr>
+                  <td>GCP</td>
+                  <td><code>gcp_gcloud</code></td>
+                  <td><code>gcp_service_account</code></td>
+                  <td><code>GOOGLE_PROJECT</code>, <code>GOOGLE_CLOUD_PROJECT</code>, <code>GOOGLE_CREDENTIALS</code>, region env.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Provider setup examples</h3>
+          <p>AWS profile or SSO is the cleanest local path because IaC Studio only needs the profile name.</p>
+          <pre><code>aws configure sso
+aws sso login --profile platform-dev</code></pre>
+
+          <p>Azure CLI login keeps refresh and token storage in Azure tooling.</p>
+          <pre><code>az login
+az account set --subscription 00000000-0000-0000-0000-000000000000</code></pre>
+
+          <p>GCP gcloud auth lets Application Default Credentials handle local provider access.</p>
+          <pre><code>gcloud auth application-default login
+gcloud config set project my-platform-dev</code></pre>
+
+          <h3>Secret handling</h3>
+          <div class="feature-grid compact">
+            <article>
+              <h3>Stored locally</h3>
+              <p>
+                Connections are saved under the configured projects directory in
+                <code>.iac-studio-connections.json</code>. Treat this as a local secret file
+                when static credentials or service account JSON are used.
+              </p>
+            </article>
+            <article>
+              <h3>Redacted by API design</h3>
+              <p>
+                List, create, update, test, run, and WebSocket responses use public connection
+                views. Secret values are not echoed back to the browser or terminal output.
+              </p>
+            </article>
+            <article>
+              <h3>Scoped to one command</h3>
+              <p>
+                Selected connection variables are injected into the runner process for the
+                requested command only. They do not become generated IaC code.
+              </p>
+            </article>
+            <article>
+              <h3>Static credentials are fallback</h3>
+              <p>
+                Static access keys, service principal secrets, and service account JSON are
+                supported for practical demos and restricted environments, but should be rotated
+                and avoided for day-to-day team workflows when profiles or CLI auth are available.
+              </p>
+            </article>
           </div>
         </section>
 
@@ -505,6 +628,10 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
               <p>Infrastructure commands run through a safe runner with timeouts, captured logs, and a kill path.</p>
             </article>
             <article>
+              <h3>Cloud target context</h3>
+              <p>Selected Cloud Connections are validated before command execution and inject provider env only for that run.</p>
+            </article>
+            <article>
               <h3>Scanner output</h3>
               <p>Findings include severity, policy IDs, affected resources, compliance mapping, and remediation text where available.</p>
             </article>
@@ -546,7 +673,12 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
                 <tr>
                   <td>Commands</td>
                   <td><code>POST /api/projects/{name}/run</code><br><code>POST /api/projects/{name}/kill</code></td>
-                  <td>Run init, plan, apply, and stop active processes.</td>
+                  <td>Run init, plan, apply, and stop active processes. Optional <code>connection_id</code> attaches a selected cloud target.</td>
+                </tr>
+                <tr>
+                  <td>Cloud connections</td>
+                  <td><code>GET /api/cloud/auth-methods</code><br><code>GET /api/cloud/connections</code><br><code>POST /api/cloud/connections</code><br><code>PUT /api/cloud/connections/{id}</code><br><code>DELETE /api/cloud/connections/{id}</code><br><code>POST /api/cloud/connections/{id}/test</code></td>
+                  <td>Create, list, update, delete, test, and select local AWS, Azure, and GCP run targets. Responses redact secrets.</td>
                 </tr>
                 <tr>
                   <td>Import</td>
@@ -738,6 +870,14 @@ ollama pull qwen2.5-coder:7b</code></pre>
               </p>
             </details>
             <details>
+              <summary>A selected cloud connection is not ready</summary>
+              <p>
+                Open the Cloud tab and run the connection test. Missing required fields are reported by name.
+                For local profile, SSO, Azure CLI, and gcloud flows, also verify the matching cloud CLI is logged in
+                and can run a simple account command outside IaC Studio.
+              </p>
+            </details>
+            <details>
               <summary>Apply is blocked by policy</summary>
               <p>
                 Review the Policy Studio findings. Fix blocking issues when possible. Only acknowledge a block when
@@ -760,6 +900,10 @@ ollama pull qwen2.5-coder:7b</code></pre>
             <details open>
               <summary>Does IaC Studio require a cloud account?</summary>
               <p>No. The app runs locally. Cloud credentials are only needed when you run real IaC commands that require provider access.</p>
+            </details>
+            <details>
+              <summary>Where are cloud connection credentials stored?</summary>
+              <p>Named connections are stored locally in <code>.iac-studio-connections.json</code> under your configured projects directory. API responses redact secret values.</p>
             </details>
             <details>
               <summary>Does it send telemetry?</summary>
