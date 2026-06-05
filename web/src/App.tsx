@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { api, Resource, ToolInfo, CatalogResource, Suggestion } from './api';
+import { api, Resource, ToolInfo, CatalogResource, Suggestion, type CloudConnection } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -57,6 +57,7 @@ export default function App() {
   const [layeredProject, setLayeredProject] = useState<LayeredProject | null>(null);
   const [activeEnvironment, setActiveEnvironment] = useState<string | null>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>('freeform');
+  const [selectedCloudConnection, setSelectedCloudConnection] = useState<CloudConnection | null>(null);
 
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
   const [dragging, setDragging] = useState<{ id: string; ox: number; oy: number } | null>(null);
@@ -158,6 +159,7 @@ export default function App() {
     concreteTool,
     projectId,
     activeEnv,
+    selectedCloudConnection,
     activeResourceFile,
     unresolvedHybridEnv,
     nodes,
@@ -516,6 +518,7 @@ export default function App() {
       codeEditorFilePath={codeEditorFilePath}
       codeSaving={codeSaving}
       activeEnv={activeEnv}
+      selectedCloudConnection={selectedCloudConnection}
       unresolvedHybridEnv={unresolvedHybridEnv}
       hoveredResource={hoveredResource}
       hoverPos={hoverPos}
@@ -549,6 +552,7 @@ export default function App() {
       onClearSelection={actions.handleClearCanvasSelection}
       onDeleteNode={actions.removeNode}
       onActiveEnvironmentChange={setActiveEnvironment}
+      onCloudConnectionSelect={setSelectedCloudConnection}
       onCanvasModeChange={setCanvasMode}
       onRightTabChange={setRightTab}
       onDeleteEdge={(edgeId) => {

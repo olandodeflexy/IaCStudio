@@ -6,6 +6,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -124,6 +126,58 @@ func TestCloudConnectionUpdateMissingConnectionReturns404(t *testing.T) {
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("missing update should 404, got %d", resp.StatusCode)
 	}
+}
+
+func TestRunWithMissingCloudConnectionReturns404(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "demo"), 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	body := `{"tool":"terraform","command":"plan","connection_id":"missing"}`
+	resp, err := http.Post(srv.URL+"/api/projects/demo/run", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST run: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("run with missing connection should 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestRunWithIncompleteCloudConnectionReturns400(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "demo"), 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	createBody := `{"name":"sp","provider":"azure","auth_method":"azure_service_principal","metadata":{"tenant_id":"tenant-1"}}`
+	resp, err := http.Post(srv.URL+"/api/cloud/connections", "application/json", strings.NewReader(createBody))
+	if err != nil {
+		t.Fatalf("POST connection: %v", err)
+	}
+	defer closeBody(resp.Body)
+	var created struct {
+		ID string `json:"id"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
+		t.Fatalf("decode create: %v", err)
+	}
+
+	runBody := `{"tool":"terraform","command":"plan","connection_id":"` + created.ID + `"}`
+	resp, err = http.Post(srv.URL+"/api/projects/demo/run", "application/json", strings.NewReader(runBody))
+	if err != nil {
+		t.Fatalf("POST run: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("run with incomplete connection should 400, got %d", resp.StatusCode)
+	}
+	assertResponseBodyContains(t, resp, "connection_not_ready", "client_secret")
 }
 
 func routeHasCheck(checks []struct {

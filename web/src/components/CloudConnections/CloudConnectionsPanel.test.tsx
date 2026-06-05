@@ -93,6 +93,52 @@ describe('CloudConnectionsPanel', () => {
     expect(screen.getByPlaceholderText('Stored secret; leave blank to keep it')).toBeInTheDocument();
   });
 
+  it('selects a connection as the run target', async () => {
+    const connection: CloudConnection = {
+      id: 'conn_1',
+      name: 'prod-admin',
+      provider: 'aws',
+      auth_method: 'aws_profile',
+      metadata: { profile: 'prod-admin' },
+    };
+    const client = makeClient([connection]);
+    const onConnectionSelected = vi.fn();
+    render(<CloudConnectionsPanel client={client} onConnectionSelected={onConnectionSelected} />);
+
+    await screen.findByText('prod-admin');
+    fireEvent.click(screen.getByRole('button', { name: 'Use for runs' }));
+
+    expect(onConnectionSelected).toHaveBeenCalledWith(connection);
+  });
+
+  it('clears the selected run target when it is deleted', async () => {
+    const client = makeClient([
+      {
+        id: 'conn_1',
+        name: 'prod-admin',
+        provider: 'aws',
+        auth_method: 'aws_profile',
+        metadata: { profile: 'prod-admin' },
+      },
+    ]);
+    const onConnectionSelected = vi.fn();
+    render(
+      <CloudConnectionsPanel
+        client={client}
+        selectedConnectionId="conn_1"
+        onConnectionSelected={onConnectionSelected}
+      />,
+    );
+
+    await screen.findByText('Run target: prod-admin');
+    fireEvent.click(screen.getByRole('button', { name: 'Delete prod-admin' }));
+
+    expect(onConnectionSelected).toHaveBeenCalledWith(null);
+    await waitFor(() => {
+      expect(client.deleteCloudConnection).toHaveBeenCalledWith('conn_1');
+    });
+  });
+
   it('preserves draft identity fields when switching providers', async () => {
     const client = makeClient();
     render(<CloudConnectionsPanel client={client} />);

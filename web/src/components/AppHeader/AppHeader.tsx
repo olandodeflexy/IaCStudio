@@ -1,5 +1,6 @@
 import { UIButton } from '../../ui';
 import { S } from '../../styles';
+import type { CloudConnection } from '../../api';
 
 export interface AppHeaderTool {
   color: string;
@@ -16,6 +17,7 @@ export interface AppHeaderProps {
   wsConnected: boolean;
   canUndo: boolean;
   canRedo: boolean;
+  selectedCloudConnection?: CloudConnection | null;
   onBack: () => void | Promise<void>;
   onProjectNameChange: (_name: string) => void;
   onRevealProject: (_projectId: string) => void;
@@ -34,6 +36,7 @@ export function AppHeader({
   wsConnected,
   canUndo,
   canRedo,
+  selectedCloudConnection,
   onBack,
   onProjectNameChange,
   onRevealProject,
@@ -72,6 +75,21 @@ export function AppHeader({
       </div>
       <div style={S.hRight}>
         <span style={S.count}>{resourceCount} resource{resourceCount !== 1 ? 's' : ''}</span>
+        {selectedCloudConnection && (
+          <span
+            style={{
+              ...S.count,
+              color: toolMeta.color,
+              maxWidth: 220,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap',
+            }}
+            title={`${selectedCloudConnection.name} (${selectedCloudConnection.provider}${selectedCloudConnection.region ? ` / ${selectedCloudConnection.region}` : ''})`}
+          >
+            CLOUD {selectedCloudConnection.name}
+          </span>
+        )}
         <button
           style={{ ...S.cmd, background: 'var(--bg-elev-2)', color: canUndo ? 'var(--text-main)' : '#4b5551' }}
           onClick={onUndo}

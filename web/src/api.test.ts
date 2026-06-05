@@ -148,6 +148,31 @@ describe('api.runCommand', () => {
       payload,
     });
   });
+
+  it('sends the selected cloud connection when running commands', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: 'running' }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.runCommand('demo', 'terraform', 'plan', { connectionId: 'conn_1', env: 'dev' });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'terraform',
+        command: 'plan',
+        approved: false,
+        env: 'dev',
+        acknowledged: false,
+        connection_id: 'conn_1',
+      }),
+    });
+  });
 });
 
 describe('api.suggest', () => {

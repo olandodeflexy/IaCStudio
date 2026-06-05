@@ -1,5 +1,5 @@
 import { useCallback, useRef, type Dispatch, type MouseEvent, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
-import { api, ApiError, normalizeSuggestions, type CatalogResource, type PolicyFinding, type Suggestion } from '../api';
+import { api, ApiError, normalizeSuggestions, type CatalogResource, type CloudConnection, type PolicyFinding, type Suggestion } from '../api';
 import {
   TOOLS,
   edgeId,
@@ -29,6 +29,7 @@ export interface UseWorkspaceActionsInput {
   concreteTool: string;
   projectId: string;
   activeEnv: string | null;
+  selectedCloudConnection: CloudConnection | null;
   activeResourceFile?: string;
   unresolvedHybridEnv: boolean;
   nodes: AppResource[];
@@ -62,6 +63,7 @@ export function useWorkspaceActions({
   concreteTool,
   projectId,
   activeEnv,
+  selectedCloudConnection,
   activeResourceFile,
   unresolvedHybridEnv,
   nodes,
@@ -326,10 +328,12 @@ export function useWorkspaceActions({
     if (needsApproval && !confirm(`Are you sure you want to run "${command}"? This will modify real infrastructure.`)) {
       return;
     }
-    setTerminalOutput(prev => [...prev, `$ ${command}`, '']);
+    const connectionLabel = selectedCloudConnection ? ` --connection ${selectedCloudConnection.name}` : '';
+    setTerminalOutput(prev => [...prev, `$ ${command}${connectionLabel}`, '']);
     api.runCommand(projectId, tool, command, {
       approved: needsApproval,
       env: activeEnv,
+      connectionId: selectedCloudConnection?.id,
     }).catch(err => {
       if (needsApproval && isPolicyBlockedError(err)) {
         const findings = err.payload?.findings ?? [];
@@ -344,11 +348,12 @@ export function useWorkspaceActions({
         if (!confirm(`Policy checks blocked "${command}".\n\n${summary}\n\nRun it anyway and acknowledge these findings?`)) {
           return;
         }
-        setTerminalOutput(prev => [...prev, `$ ${command} --acknowledged`, '']);
+        setTerminalOutput(prev => [...prev, `$ ${command} --acknowledged${connectionLabel}`, '']);
         api.runCommand(projectId, tool, command, {
           approved: true,
           env: activeEnv,
           acknowledged: true,
+          connectionId: selectedCloudConnection?.id,
         }).catch(overrideErr => {
           setTerminalOutput(prev => [...prev, `Error: ${overrideErr.message}`]);
         });
@@ -356,7 +361,7 @@ export function useWorkspaceActions({
       }
       setTerminalOutput(prev => [...prev, `Error: ${err.message}`]);
     });
-  }, [activeEnv, projectId, setTerminalOutput, tool, unresolvedHybridEnv]);
+  }, [activeEnv, projectId, selectedCloudConnection, setTerminalOutput, tool, unresolvedHybridEnv]);
 
   const fixLastError = useCallback(async () => {
     if (!lastCmdError || !tool) return;

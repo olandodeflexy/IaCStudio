@@ -8,7 +8,7 @@ import { InspectorPanel, type RightPanelTab } from '../Inspector';
 import { ResourceTooltip } from '../ResourceTooltip';
 import { WorkspaceSidebar, type SidebarPanel } from '../Sidebar';
 import { TerminalPanel } from '../Terminal';
-import type { CatalogResource, Suggestion } from '../../api';
+import type { CatalogResource, CloudConnection, Suggestion } from '../../api';
 import type { Edge } from '../../legacy';
 import { S } from '../../styles';
 import type { LayeredProject } from '../../types';
@@ -63,6 +63,7 @@ export interface WorkspaceShellProps {
   codeEditorFilePath: string;
   codeSaving: boolean;
   activeEnv: string | null;
+  selectedCloudConnection: CloudConnection | null;
   unresolvedHybridEnv: boolean;
   hoveredResource: CatalogResource | null;
   hoverPos: { x: number; y: number };
@@ -93,6 +94,7 @@ export interface WorkspaceShellProps {
   onClearSelection: () => void;
   onDeleteNode: (_nodeId: string) => void;
   onActiveEnvironmentChange: (_env: string) => void;
+  onCloudConnectionSelect: (_connection: CloudConnection | null) => void;
   onCanvasModeChange: (_mode: CanvasMode) => void;
   onRightTabChange: (_tab: RightPanelTab) => void;
   onDeleteEdge: (_edgeId: string) => void;
@@ -149,6 +151,7 @@ export function WorkspaceShell({
   codeEditorFilePath,
   codeSaving,
   activeEnv,
+  selectedCloudConnection,
   unresolvedHybridEnv,
   hoveredResource,
   hoverPos,
@@ -179,6 +182,7 @@ export function WorkspaceShell({
   onClearSelection,
   onDeleteNode,
   onActiveEnvironmentChange,
+  onCloudConnectionSelect,
   onCanvasModeChange,
   onRightTabChange,
   onDeleteEdge,
@@ -211,6 +215,7 @@ export function WorkspaceShell({
         onRedo={onRedo}
         onRunCommand={onRunCommand}
         onOpenSettings={onOpenSettings}
+        selectedCloudConnection={selectedCloudConnection}
       />
 
       {showSettings && (
@@ -298,6 +303,7 @@ export function WorkspaceShell({
           codeEditorFilePath={codeEditorFilePath}
           codeSaving={codeSaving}
           unresolvedHybridEnv={unresolvedHybridEnv}
+          selectedCloudConnection={selectedCloudConnection}
           onTabChange={onRightTabChange}
           onDeleteEdge={onDeleteEdge}
           onSelectEdge={onSelectEdge}
@@ -305,6 +311,7 @@ export function WorkspaceShell({
           onUpdateNodeProp={onUpdateNodeProp}
           onSyncCodeChange={onSyncCodeChange}
           onSaveCode={onSaveCode}
+          onCloudConnectionSelect={onCloudConnectionSelect}
         />
       </div>
 

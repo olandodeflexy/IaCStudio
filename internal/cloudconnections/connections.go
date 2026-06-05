@@ -103,6 +103,65 @@ func SupportedAuthMethods(provider string) []string {
 	return slices.Clone(methods)
 }
 
+// CommandEnvironment translates a saved connection into process environment
+// variables understood by Terraform/OpenTofu, Pulumi, and cloud CLIs. It never
+// returns display text, so callers can attach it to command execution without
+// echoing secrets back to the terminal or websocket payloads.
+func CommandEnvironment(connection Connection) map[string]string {
+	env := map[string]string{}
+	set := func(key, value string) {
+		if value = strings.TrimSpace(value); value != "" {
+			env[key] = value
+		}
+	}
+
+	switch connection.AuthMethod {
+	case "aws_profile", "aws_sso":
+		set("AWS_PROFILE", connection.Metadata["profile"])
+		set("AWS_SDK_LOAD_CONFIG", "1")
+	case "aws_static":
+		set("AWS_ACCESS_KEY_ID", connection.Metadata["access_key_id"])
+		set("AWS_SECRET_ACCESS_KEY", connection.Secrets["secret_access_key"])
+		set("AWS_SESSION_TOKEN", connection.Secrets["session_token"])
+	case "azure_cli":
+		set("ARM_SUBSCRIPTION_ID", connection.Metadata["subscription_id"])
+		set("ARM_TENANT_ID", connection.Metadata["tenant_id"])
+	case "azure_service_principal":
+		set("ARM_SUBSCRIPTION_ID", connection.Metadata["subscription_id"])
+		set("ARM_TENANT_ID", connection.Metadata["tenant_id"])
+		set("ARM_CLIENT_ID", connection.Metadata["client_id"])
+		set("ARM_CLIENT_SECRET", connection.Secrets["client_secret"])
+	case "gcp_gcloud":
+		setGCPProject(env, connection.Metadata["project_id"])
+	case "gcp_service_account":
+		setGCPProject(env, connection.Metadata["project_id"])
+		set("GOOGLE_CREDENTIALS", connection.Secrets["service_account_json"])
+	}
+
+	switch connection.Provider {
+	case ProviderAWS:
+		set("AWS_REGION", connection.Region)
+		set("AWS_DEFAULT_REGION", connection.Region)
+	case ProviderGCP:
+		set("CLOUDSDK_COMPUTE_REGION", connection.Region)
+		set("GOOGLE_REGION", connection.Region)
+	}
+
+	if len(env) == 0 {
+		return nil
+	}
+	return env
+}
+
+func setGCPProject(env map[string]string, projectID string) {
+	if projectID = strings.TrimSpace(projectID); projectID == "" {
+		return
+	}
+	env["GOOGLE_PROJECT"] = projectID
+	env["GOOGLE_CLOUD_PROJECT"] = projectID
+	env["CLOUDSDK_CORE_PROJECT"] = projectID
+}
+
 func (m *Manager) List() ([]PublicConnection, error) {
 	connections, err := m.load()
 	if err != nil {

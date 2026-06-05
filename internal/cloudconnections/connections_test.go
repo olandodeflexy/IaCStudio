@@ -191,6 +191,86 @@ func TestManagerRejectsUnsupportedAuthMethod(t *testing.T) {
 	}
 }
 
+func TestCommandEnvironmentAWSProfile(t *testing.T) {
+	env := CommandEnvironment(Connection{
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_profile",
+		Region:     "us-east-1",
+		Metadata:   map[string]string{"profile": "prod-admin"},
+	})
+
+	if env["AWS_PROFILE"] != "prod-admin" {
+		t.Fatalf("AWS_PROFILE not set from profile: %#v", env)
+	}
+	if env["AWS_SDK_LOAD_CONFIG"] != "1" {
+		t.Fatalf("AWS_SDK_LOAD_CONFIG should be enabled for profile auth: %#v", env)
+	}
+	if env["AWS_REGION"] != "us-east-1" || env["AWS_DEFAULT_REGION"] != "us-east-1" {
+		t.Fatalf("AWS region env not set: %#v", env)
+	}
+}
+
+func TestCommandEnvironmentAWSStatic(t *testing.T) {
+	env := CommandEnvironment(Connection{
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Region:     "us-west-2",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets: map[string]string{
+			"secret_access_key": "secret-value",
+			"session_token":     "session-value",
+		},
+	})
+
+	if env["AWS_ACCESS_KEY_ID"] != "AKIAEXAMPLE" ||
+		env["AWS_SECRET_ACCESS_KEY"] != "secret-value" ||
+		env["AWS_SESSION_TOKEN"] != "session-value" {
+		t.Fatalf("AWS static credential env not set: %#v", env)
+	}
+}
+
+func TestCommandEnvironmentAzureServicePrincipal(t *testing.T) {
+	env := CommandEnvironment(Connection{
+		Provider:   ProviderAzure,
+		AuthMethod: "azure_service_principal",
+		Metadata: map[string]string{
+			"subscription_id": "sub-1",
+			"tenant_id":       "tenant-1",
+			"client_id":       "client-1",
+		},
+		Secrets: map[string]string{"client_secret": "secret-value"},
+	})
+
+	if env["ARM_SUBSCRIPTION_ID"] != "sub-1" ||
+		env["ARM_TENANT_ID"] != "tenant-1" ||
+		env["ARM_CLIENT_ID"] != "client-1" ||
+		env["ARM_CLIENT_SECRET"] != "secret-value" {
+		t.Fatalf("Azure service principal env not set: %#v", env)
+	}
+}
+
+func TestCommandEnvironmentGCPServiceAccount(t *testing.T) {
+	env := CommandEnvironment(Connection{
+		Provider:   ProviderGCP,
+		AuthMethod: "gcp_service_account",
+		Region:     "us-central1",
+		Metadata:   map[string]string{"project_id": "prod-project"},
+		Secrets:    map[string]string{"service_account_json": `{"type":"service_account"}`},
+	})
+
+	if env["GOOGLE_PROJECT"] != "prod-project" ||
+		env["GOOGLE_CLOUD_PROJECT"] != "prod-project" ||
+		env["CLOUDSDK_CORE_PROJECT"] != "prod-project" {
+		t.Fatalf("GCP project env not set: %#v", env)
+	}
+	if env["GOOGLE_CREDENTIALS"] != `{"type":"service_account"}` {
+		t.Fatalf("GCP credentials env not set: %#v", env)
+	}
+	if env["GOOGLE_REGION"] != "us-central1" || env["CLOUDSDK_COMPUTE_REGION"] != "us-central1" {
+		t.Fatalf("GCP region env not set: %#v", env)
+	}
+}
+
 func TestIsMaskedRequiresOnlyMaskCharacters(t *testing.T) {
 	tests := []struct {
 		name  string

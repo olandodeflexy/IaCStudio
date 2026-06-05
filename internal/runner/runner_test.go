@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -98,8 +99,8 @@ func TestBuildArgs_Pulumi(t *testing.T) {
 		// server-side approval gate handles that instead).
 		wantHasYes bool
 	}{
-		{"init", "npm", false},     // npm install, not pulumi stack init
-		{"plan", "pulumi", false},  // preview
+		{"init", "npm", false},    // npm install, not pulumi stack init
+		{"plan", "pulumi", false}, // preview
 		{"preview", "pulumi", false},
 		{"apply", "pulumi", true},
 		{"up", "pulumi", true},
@@ -201,5 +202,37 @@ func TestRequiresApproval_CoversPulumiUp(t *testing.T) {
 		if got := sr.RequiresApproval(cmd); got != want {
 			t.Errorf("RequiresApproval(%q) = %v, want %v", cmd, got, want)
 		}
+	}
+}
+
+func TestMergeEnvOverridesBase(t *testing.T) {
+	got := mergeEnv(
+		[]string{"PATH=/usr/bin", "AWS_PROFILE=default", "BROKEN", "EMPTYKEY"},
+		map[string]string{
+			"AWS_PROFILE":   "prod-admin",
+			"AWS_REGION":    "us-east-1",
+			"GOOGLE_REGION": "",
+		},
+	)
+
+	values := map[string]string{}
+	for _, entry := range got {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			t.Fatalf("env entry missing separator: %q", entry)
+		}
+		values[key] = value
+	}
+	if values["PATH"] != "/usr/bin" {
+		t.Fatalf("PATH should be preserved: %#v", values)
+	}
+	if values["AWS_PROFILE"] != "prod-admin" {
+		t.Fatalf("AWS_PROFILE should be overridden: %#v", values)
+	}
+	if values["AWS_REGION"] != "us-east-1" {
+		t.Fatalf("AWS_REGION should be added: %#v", values)
+	}
+	if values["GOOGLE_REGION"] != "" {
+		t.Fatalf("empty override value should be preserved: %#v", values)
 	}
 }
