@@ -26,6 +26,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/generator"
 	"github.com/iac-studio/iac-studio/internal/importer"
 	"github.com/iac-studio/iac-studio/internal/parser"
+	iacplan "github.com/iac-studio/iac-studio/internal/plan"
 	"github.com/iac-studio/iac-studio/internal/project"
 	pulumigen "github.com/iac-studio/iac-studio/internal/pulumi"
 	"github.com/iac-studio/iac-studio/internal/registry"
@@ -1093,6 +1094,12 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			// is telling us they've read the findings and still want to
 			// proceed. Logged server-side so the override is audit-trailable.
 			Acknowledged bool `json:"acknowledged"`
+			// RiskAcknowledged explicitly overrides the semantic plan risk
+			// gate after the caller has reviewed risky, destructive, or
+			// unknown changes. Kept separate from policy acknowledgement so
+			// the audit trail can distinguish plan semantics from policy
+			// violations.
+			RiskAcknowledged bool `json:"risk_acknowledged"`
 			// Env names the environment subdirectory to execute in for
 			// layered-v1 projects (environments/<env>/...). Empty runs
 			// commands at the project root (flat layout). Validated as a
@@ -1181,6 +1188,25 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				})
 				return
 			}
+			if planSupportsSemanticClassification(effectiveTool) {
+				classification := classifySavedPlan(runPath)
+				if req.Command == "destroy" {
+					classification = iacplan.UnknownClassification("destroy does not consume the saved apply plan; review the destructive command separately")
+				}
+				if classification.Summary.RequiresAcknowledgment && !req.RiskAcknowledged {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusConflict)
+					_ = json.NewEncoder(w).Encode(map[string]any{
+						"error":          "plan_risk_blocked",
+						"detail":         "semantic plan classifier found risky, destructive, or unknown changes — re-submit with risk_acknowledged:true to proceed",
+						"classification": classification,
+					})
+					return
+				}
+				if req.RiskAcknowledged {
+					log.Printf("apply gate: semantic plan risk acknowledged by client for %s (command=%s tool=%s)", name, req.Command, effectiveTool)
+				}
+			}
 			if !req.Acknowledged {
 				// Walk every available engine against the project so we can
 				// surface blocking findings before the apply runs. On any
@@ -1202,24 +1228,53 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			}
 		}
 
+		if commandProducesPlan(req.Command) {
+			invalidatePlan(runPath)
+			if planSupportsSemanticClassification(effectiveTool) {
+				_ = os.Remove(filepath.Join(runPath, savedPlanJSONFile))
+			}
+		}
+
 		// Execute in background. Use context.Background() — not r.Context() —
 		// because the HTTP handler returns 202 immediately, which would cancel
 		// a request-scoped context and kill the command. SafeRunner applies its
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
 			result, err := run.ExecuteWithEnv(context.Background(), runPath, effectiveTool, req.Command, req.Env, commandEnv)
+			var classification *iacplan.ClassificationResult
 			// Only record a successful plan — failed/cancelled plans don't count.
 			// 'preview' is Pulumi's equivalent of terraform plan; without it
 			// here, a pulumi up following a successful preview would be
 			// blocked with 'plan_required'. runPath reflects any env rebase
 			// so dev + prod track their plan state
 			// independently.
-			if err == nil && (req.Command == "plan" || req.Command == "preview" || req.Command == "check") {
+			if err == nil && commandProducesPlan(req.Command) {
+				if planSupportsSemanticClassification(effectiveTool) {
+					exported, exportErr := run.ExportSavedPlanJSON(context.Background(), runPath, effectiveTool, commandEnv)
+					if exportErr != nil {
+						classification = iacplan.UnknownClassification("saved plan JSON export failed; rerun plan before applying")
+						_ = os.Remove(filepath.Join(runPath, savedPlanJSONFile))
+					} else if classified, classifyErr := iacplan.New().ClassifyFullPlan(exported.Output); classifyErr != nil {
+						classification = iacplan.UnknownClassification("saved plan JSON could not be classified; rerun plan before applying")
+						_ = os.Remove(filepath.Join(runPath, savedPlanJSONFile))
+					} else if writeErr := os.WriteFile(filepath.Join(runPath, savedPlanJSONFile), []byte(exported.Output), 0600); writeErr != nil {
+						classification = iacplan.UnknownClassification("saved plan JSON could not be written; rerun plan before applying")
+						_ = os.Remove(filepath.Join(runPath, savedPlanJSONFile))
+					} else {
+						classification = classified
+					}
+					if result != nil {
+						result.Output = appendPlanClassificationOutput(result.Output, classification)
+					}
+				}
 				recordPlan(runPath)
 			}
 			msg := map[string]interface{}{
 				"type":    "terminal",
 				"project": name,
+			}
+			if classification != nil {
+				msg["plan_classification"] = classification
 			}
 			if connectionSummary.ID != "" {
 				msg["connection"] = map[string]string{
@@ -1954,6 +2009,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 	// Policy engines — builtin + OPA (embedded) + Conftest + Sentinel (shell-out).
 	registerPolicyRoutes(mux, projectsDir)
+
+	// Semantic plan classifier — turns Terraform/OpenTofu plan JSON into
+	// safe/risky/destructive/unknown reviewer summaries.
+	registerPlanClassificationRoutes(mux, projectsDir)
 
 	// Security scanner plugins — graph + Checkov + Trivy + Terrascan + KICS.
 	registerScannerRoutes(mux, projectsDir)

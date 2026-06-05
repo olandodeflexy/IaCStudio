@@ -106,9 +106,9 @@ func (r *Runner) terraformArgs(command, binary string) []string {
 	case "init":
 		return []string{binary, "init"}
 	case "plan":
-		return []string{binary, "plan", "-no-color"}
+		return []string{binary, "plan", "-out=tfplan", "-no-color"}
 	case "apply":
-		return []string{binary, "apply", "-auto-approve", "-no-color"}
+		return []string{binary, "apply", "-no-color", "tfplan"}
 	case "destroy":
 		return []string{binary, "destroy", "-auto-approve", "-no-color"}
 	case "validate":

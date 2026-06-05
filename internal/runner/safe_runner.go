@@ -293,6 +293,71 @@ func (sr *SafeRunner) ExecutePlanJSON(ctx context.Context, projectDir, tool stri
 	return result, nil
 }
 
+// ExportSavedPlanJSON renders the saved Terraform/OpenTofu plan file created
+// by `plan -out=tfplan` into full JSON (`show -json tfplan`). The result is
+// used by policy engines and the semantic apply gate.
+func (sr *SafeRunner) ExportSavedPlanJSON(ctx context.Context, projectDir, tool string, extraEnv map[string]string) (*ExecutionResult, error) {
+	timeout := sr.defaults.PlanTimeout
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	binary := "terraform"
+	switch tool {
+	case "terraform":
+		binary = "terraform"
+	case "opentofu":
+		binary = "tofu"
+	default:
+		return nil, fmt.Errorf("saved plan JSON export is not supported for %s", tool)
+	}
+
+	cmd := exec.CommandContext(ctx, binary, "show", "-json", "tfplan")
+	cmd.Dir = projectDir
+	if len(extraEnv) > 0 {
+		cmd.Env = mergeEnv(os.Environ(), extraEnv)
+	}
+	configureCommandCancel(cmd)
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &limitedWriter{buf: &stdout, limit: sr.defaults.MaxOutputBytes}
+	cmd.Stderr = &limitedWriter{buf: &stderr, limit: sr.defaults.MaxOutputBytes}
+
+	start := time.Now()
+	err := cmd.Run()
+
+	result := &ExecutionResult{
+		ID:       fmt.Sprintf("plan-show-json-%d", time.Now().UnixNano()),
+		Output:   stdout.String(),
+		Duration: time.Since(start),
+	}
+	if stderr.Len() > 0 {
+		result.Output += "\n" + stderr.String()
+	}
+	if lw, ok := cmd.Stdout.(*limitedWriter); ok && lw.truncated {
+		result.Truncated = true
+		result.Output += "\n\n--- OUTPUT TRUNCATED (exceeded limit) ---"
+	}
+
+	switch {
+	case ctx.Err() == context.DeadlineExceeded:
+		result.Status = "timed_out"
+		return result, fmt.Errorf("command timed out after %v", timeout)
+	case ctx.Err() == context.Canceled:
+		result.Status = "cancelled"
+		return result, fmt.Errorf("command was cancelled")
+	case err != nil:
+		result.Status = "failed"
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			result.ExitCode = exitErr.ExitCode()
+		}
+		return result, err
+	default:
+		result.Status = "completed"
+		result.ExitCode = 0
+		return result, nil
+	}
+}
+
 // RequiresApproval returns true if the command needs plan review first.
 // Covers both the Terraform/Ansible vocabulary ("apply", "destroy")
 // and Pulumi's native verbs ("up", "refresh") so every state-mutating

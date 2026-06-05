@@ -69,6 +69,7 @@ start the local server for you.
 | **Smart Suggestions** | AI predicts your next resource based on IaC best practices |
 | **Import Projects** | Browse filesystem, scan existing .tf/.yml files, auto-detect topology |
 | **Cloud Connections** | Save, test, and select named AWS, Azure, or GCP targets before plan/apply |
+| **Semantic Plan Gate** | Classifies Terraform/OpenTofu changes as safe, risky, destructive, or unknown before apply |
 | **Live Code Preview** | Every canvas change updates the code in real time |
 | **Project Persistence** | Auto-save canvas state, restore on reopen |
 | **Undo/Redo** | Ctrl+Z / Ctrl+Shift+Z with 100-step history |
@@ -136,9 +137,10 @@ IaC Studio runs locally and is designed to be secure by default:
 - **Localhost-only binding** — not exposed to the network
 - **CORS/WebSocket origin verification** — only localhost origins accepted
 - **Path traversal protection** — project names validated and sandboxed
-- **Request size limits** — 1MB cap on all endpoints
+- **Request size limits** — 1MB cap on normal JSON endpoints; plan classification accepts larger plan JSON payloads
 - **Execution safety** — command timeouts, process group kill, approval gates
 - **Plan-before-apply** — server-side gate requires successful plan before apply
+- **Semantic plan review** — Terraform/OpenTofu plans are classified before apply; risky, destructive, or unknown changes require explicit acknowledgement
 - **Cloud target checks** — selected Cloud Connections are tested before command execution
 - **Secret redaction** — static credentials are not echoed in API responses, terminal messages, or generated IaC
 - **No telemetry** — zero data collection, no phone-home

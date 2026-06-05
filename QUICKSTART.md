@@ -131,6 +131,7 @@ Supported: OpenAI, Anthropic, Groq, Together, Azure OpenAI, or any OpenAI-compat
 | **Import existing project** | Click "Import Existing Project" → browse to your .tf files |
 | **Connect cloud target** | Open Cloud tab → save/test a named AWS, Azure, or GCP connection → click "Use for runs" |
 | **Run terraform** | Click Init → Plan → Apply in the header |
+| **Review plan risk** | After Plan, read the semantic summary. Risky, destructive, or unknown Terraform/OpenTofu changes require acknowledgement before Apply |
 | **Undo/Redo** | Ctrl+Z / Ctrl+Shift+Z or the ↩↪ buttons |
 | **Delete** | Select a node or connection, press Delete |
 | **Fix errors** | When Plan fails, click "Fix with AI" in the terminal |
@@ -172,6 +173,24 @@ aws sso login --profile platform-dev
 az login
 gcloud auth application-default login
 ```
+
+## Semantic Plan Gate
+
+Terraform and OpenTofu runs save the exact plan artifact as `tfplan`, export it
+to `tfplan.json`, then classify each planned change before apply.
+
+The summary groups changes into:
+
+| Risk | Meaning |
+|------|---------|
+| `safe` | Metadata-only or no-op changes, such as tag refreshes |
+| `risky` | IAM, network exposure, or stateful resource changes that need review |
+| `destructive` | Deletes or replacements that can remove existing infrastructure |
+| `unknown` | Changes the classifier cannot safely explain |
+
+`Apply` uses the saved `tfplan` file. If the classifier finds risky,
+destructive, or unknown changes, IaC Studio shows the reviewer summary and
+requires explicit acknowledgement before continuing.
 
 ## Development Mode
 

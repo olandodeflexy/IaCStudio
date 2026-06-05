@@ -1,5 +1,7 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 
+import type { PlanClassification } from './api';
+
 export interface WSMessage {
   type: 'file_changed' | 'terminal' | 'error' | 'ai_progress' | 'ai_topology_result';
   project?: string;
@@ -10,6 +12,7 @@ export interface WSMessage {
   status?: string;
   message?: string;
   resources?: any[];
+  plan_classification?: PlanClassification;
 }
 
 export function useWebSocket(onMessage: (msg: WSMessage) => void) {

@@ -149,6 +149,52 @@ describe('api.runCommand', () => {
     });
   });
 
+  it('preserves structured plan_risk_blocked errors for the UI override flow', async () => {
+    const payload = {
+      error: 'plan_risk_blocked',
+      detail: 'semantic plan classifier found risky changes',
+      classification: {
+        summary: {
+          safe: 0,
+          risky: 1,
+          destructive: 0,
+          unknown: 0,
+          total: 1,
+          requires_acknowledgment: true,
+          text: 'Semantic plan: 1 risky',
+        },
+        changes: [{
+          address: 'aws_security_group.web',
+          action: 'update',
+          risk: 'risky',
+          categories: ['network_exposure'],
+          reason: 'public CIDR exposure',
+          reviewer_focus: ['Check ingress.'],
+        }],
+      },
+    };
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(payload), {
+        status: 409,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    let caught: unknown;
+    try {
+      await api.runCommand('demo', 'terraform', 'apply', { approved: true, env: 'dev' });
+    } catch (err) {
+      caught = err;
+    }
+
+    expect(caught).toBeInstanceOf(ApiError);
+    expect(caught).toMatchObject({
+      name: 'ApiError',
+      status: 409,
+      payload,
+    });
+  });
+
   it('sends the selected cloud connection when running commands', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
       new Response(JSON.stringify({ status: 'running' }), {
@@ -169,6 +215,7 @@ describe('api.runCommand', () => {
         approved: false,
         env: 'dev',
         acknowledged: false,
+        risk_acknowledged: false,
         connection_id: 'conn_1',
       }),
     });
