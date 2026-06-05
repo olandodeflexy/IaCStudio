@@ -18,6 +18,7 @@ Most IaC tools are CLI-only. Visual tools are either cloud-hosted SaaS or locked
 - **Runs locally** — your infrastructure code never leaves your machine
 - **Multi-cloud** — AWS, GCP, and Azure with 250+ resources across all three
 - **Multi-tool** — Terraform, OpenTofu, and Ansible in one interface
+- **Cloud connection targets** — test and select AWS, Azure, or GCP auth context before deployment
 - **Topology-aware** — visual connection lines that generate real Terraform references
 - **AI-powered** — local LLM or external API converts natural language to infrastructure
 - **Security scanning** — graph-based checks with CIS, SOC2, HIPAA compliance mapping
@@ -67,6 +68,7 @@ start the local server for you.
 | **Multi-Format Export** | Export to Pulumi TypeScript, CDK Python, CloudFormation |
 | **Smart Suggestions** | AI predicts your next resource based on IaC best practices |
 | **Import Projects** | Browse filesystem, scan existing .tf/.yml files, auto-detect topology |
+| **Cloud Connections** | Save, test, and select named AWS, Azure, or GCP targets before plan/apply |
 | **Live Code Preview** | Every canvas change updates the code in real time |
 | **Project Persistence** | Auto-save canvas state, restore on reopen |
 | **Undo/Redo** | Ctrl+Z / Ctrl+Shift+Z with 100-step history |
@@ -137,7 +139,16 @@ IaC Studio runs locally and is designed to be secure by default:
 - **Request size limits** — 1MB cap on all endpoints
 - **Execution safety** — command timeouts, process group kill, approval gates
 - **Plan-before-apply** — server-side gate requires successful plan before apply
+- **Cloud target checks** — selected Cloud Connections are tested before command execution
+- **Secret redaction** — static credentials are not echoed in API responses, terminal messages, or generated IaC
 - **No telemetry** — zero data collection, no phone-home
+
+Cloud Connections support AWS profiles and SSO, Azure CLI login, and gcloud auth
+as the preferred paths. Static AWS keys, Azure service principals, and GCP
+service account JSON are available as explicit fallback paths. See
+[QUICKSTART.md](QUICKSTART.md#cloud-connections) and the
+[published docs](https://olandodeflexy.github.io/IaCStudio/#cloud-connections)
+for the full workflow.
 
 ## Development
 
@@ -188,6 +199,7 @@ All flags have sensible defaults. Just run `iac-studio` and go.
 - [x] Resizable panels and resource search
 - [x] Execution safety (timeouts, approval gates, kill switch)
 - [x] Policy engine (15+ built-in guardrails)
+- [x] Cloud Connections for AWS, Azure, and GCP run targets
 - [x] Cost estimation (30+ resource types)
 - [x] CI/CD pipeline generator (GitHub Actions, GitLab CI)
 - [x] Environment promotion (dev/staging/prod workspaces)
