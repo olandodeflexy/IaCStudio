@@ -301,7 +301,7 @@ func (sr *SafeRunner) ExportSavedPlanJSON(ctx context.Context, projectDir, tool 
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	binary := "terraform"
+	var binary string
 	switch tool {
 	case "terraform":
 		binary = "terraform"
