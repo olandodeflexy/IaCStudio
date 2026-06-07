@@ -73,6 +73,19 @@ describe('DriftPanel', () => {
     expect(screen.getByText('0 findings')).toBeInTheDocument();
   });
 
+  it('shows the error banner when the API call fails', async () => {
+    const client = {
+      runDrift: vi.fn().mockRejectedValue(new Error('connection refused')),
+    };
+
+    render(<DriftPanel projectName="demo" tool="terraform" client={client} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run drift' }));
+
+    expect(await screen.findByText('Error: connection refused')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Run drift' })).not.toBeDisabled();
+  });
+
   it('disables drift for tools the backend does not support yet', () => {
     const client = { runDrift: vi.fn() };
 
