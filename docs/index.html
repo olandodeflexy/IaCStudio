@@ -398,9 +398,10 @@ iac-studio</code></pre>
           <div class="workflow">
             <h3>Detect drift and export</h3>
             <p>
-              Drift detection compares state against code when Terraform state is present. Export converts
-              the current topology into alternate formats such as Pulumi TypeScript, CDK Python, and
-              CloudFormation where supported.
+              Drift detection compares Terraform/OpenTofu state against code when state is present,
+              classifies each finding, and recommends whether to investigate, codify, import, or
+              revert. Export converts the current topology into alternate formats such as Pulumi
+              TypeScript, CDK Python, and CloudFormation where supported.
             </p>
           </div>
         </section>
@@ -735,8 +736,8 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
                 </tr>
                 <tr>
                   <td>Modules, drift, export</td>
-                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET /api/projects/{name}/drift</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
-                  <td>Discover modules, promote resources, detect drift, and export alternate IaC formats.</td>
+                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET/POST /api/projects/{name}/drift</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
+                  <td>Discover modules, promote resources, detect classified Terraform/OpenTofu state drift, and export alternate IaC formats.</td>
                 </tr>
                 <tr>
                   <td>Realtime</td>

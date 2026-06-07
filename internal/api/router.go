@@ -1949,16 +1949,54 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 	driftDetector := drift.New()
 
-	mux.HandleFunc("POST /api/projects/{name}/drift", func(w http.ResponseWriter, r *http.Request) {
+	handleDrift := func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
-		tool := r.URL.Query().Get("tool")
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+
+		limitBody(w, r)
+		var req struct {
+			Tool string `json:"tool,omitempty"`
+			Env  string `json:"env,omitempty"`
+		}
+		if r.Method == http.MethodPost {
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+				http.Error(w, "invalid request body: "+err.Error(), 400)
+				return
+			}
+		}
+		if req.Tool == "" {
+			req.Tool = r.URL.Query().Get("tool")
+		}
+		if req.Env == "" {
+			req.Env = r.URL.Query().Get("env")
+		}
+
+		tool := effectiveProjectTool(projectPath, req.Tool, req.Env)
+		if tool == "multi" {
+			http.Error(w, hybridToolResolutionMessage("env is required when detecting drift for hybrid projects", req.Env), 400)
+			return
+		}
+		if tool != "terraform" && tool != "opentofu" {
+			http.Error(w, "drift detection currently supports Terraform and OpenTofu state", 400)
+			return
+		}
+
+		workDir := projectPath
+		if req.Env != "" {
+			subPath, subErr := safeSubdir(projectPath, "environments", req.Env)
+			if subErr != nil {
+				http.Error(w, "invalid env: "+subErr.Error(), 400)
+				return
+			}
+			workDir = subPath
+		}
+
 		p := parser.ForTool(tool)
-		resources, err := p.ParseDir(projectPath)
+		resources, err := p.ParseDir(workDir)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
@@ -1968,13 +2006,15 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		for _, res := range resources {
 			codeResources[res.Type+"."+res.Name] = res.Properties
 		}
-		report, err := driftDetector.Detect(projectPath, codeResources)
+		report, err := driftDetector.Detect(workDir, codeResources)
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(report)
-	})
+	}
+	mux.HandleFunc("GET /api/projects/{name}/drift", handleDrift)
+	mux.HandleFunc("POST /api/projects/{name}/drift", handleDrift)
 
 	// ─── Multi-Format Export ───
 
