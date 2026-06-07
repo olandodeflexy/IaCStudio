@@ -96,7 +96,7 @@ type tfStateInstance struct {
 
 // Detect compares terraform.tfstate with the parsed code resources.
 func (d *Detector) Detect(projectDir string, codeResources map[string]map[string]interface{}) (*DriftReport, error) {
-	report := &DriftReport{Classifications: map[string]int{}}
+	report := &DriftReport{Findings: []DriftFinding{}, Classifications: map[string]int{}}
 
 	// Find state file
 	statePaths := []string{
@@ -232,9 +232,6 @@ func (d *Detector) Detect(projectDir string, codeResources map[string]map[string
 
 func (r *DriftReport) addFinding(f DriftFinding) {
 	r.Findings = append(r.Findings, f)
-	if r.Classifications == nil {
-		r.Classifications = map[string]int{}
-	}
 	r.Classifications[f.Classification]++
 }
 
