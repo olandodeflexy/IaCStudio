@@ -222,6 +222,42 @@ describe('api.runCommand', () => {
   });
 });
 
+describe('api.runDrift', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts tool and environment to the drift endpoint', async () => {
+    const response = {
+      has_state: true,
+      state_path: '/tmp/demo/terraform.tfstate',
+      drifted: [],
+      findings: [],
+      missing: [],
+      unmanaged: [],
+      in_sync: 1,
+      total: 1,
+      classifications: {},
+      summary: '1 resources: 1 in sync, 0 drifted, 0 missing from state, 0 unmanaged',
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.runDrift('demo', { tool: 'terraform', env: 'dev' })).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/drift', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'terraform', env: 'dev' }),
+    });
+  });
+});
+
 describe('api.suggest', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

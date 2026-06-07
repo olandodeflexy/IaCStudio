@@ -15,25 +15,43 @@ func New() *Detector {
 	return &Detector{}
 }
 
+const (
+	ClassificationLegitimateConfigChange = "legitimate_config_change"
+	ClassificationUnauthorizedChange     = "unauthorized_change"
+	ClassificationMissingFromState       = "missing_from_state"
+	ClassificationUnknown                = "unknown"
+
+	ActionCodifyOrAccept            = "codify_or_accept"
+	ActionImportOrApply             = "import_or_apply"
+	ActionInvestigate               = "investigate"
+	ActionReviewImportOrRemove      = "review_import_or_remove"
+	ActionRevertOrCodifyAfterReview = "revert_or_codify_after_review"
+)
+
 // DriftReport describes differences between code and deployed state.
 type DriftReport struct {
-	HasState    bool           `json:"has_state"`
-	StatePath   string         `json:"state_path"`
-	Drifted     []DriftedResource `json:"drifted"`
-	Missing     []string       `json:"missing"`       // in code but not in state
-	Unmanaged   []string       `json:"unmanaged"`     // in state but not in code
-	InSync      int            `json:"in_sync"`       // resources matching
-	Total       int            `json:"total"`
-	Summary     string         `json:"summary"`
+	HasState        bool              `json:"has_state"`
+	StatePath       string            `json:"state_path"`
+	Drifted         []DriftedResource `json:"drifted"`
+	Findings        []DriftFinding    `json:"findings"`
+	Missing         []string          `json:"missing"`   // in code but not in state
+	Unmanaged       []string          `json:"unmanaged"` // in state but not in code
+	InSync          int               `json:"in_sync"`   // resources matching
+	Total           int               `json:"total"`
+	Classifications map[string]int    `json:"classifications,omitempty"`
+	Summary         string            `json:"summary"`
 }
 
 // DriftedResource is a resource where state differs from code.
 type DriftedResource struct {
-	Address  string       `json:"address"`
-	Type     string       `json:"type"`
-	Name     string       `json:"name"`
-	Changes  []DriftField `json:"changes"`
-	Status   string       `json:"status"` // drifted | missing | unmanaged
+	Address           string       `json:"address"`
+	Type              string       `json:"type"`
+	Name              string       `json:"name"`
+	Changes           []DriftField `json:"changes"`
+	Status            string       `json:"status"` // drifted | missing | unmanaged
+	Classification    string       `json:"classification,omitempty"`
+	RecommendedAction string       `json:"recommended_action,omitempty"`
+	Reason            string       `json:"reason,omitempty"`
 }
 
 // DriftField is a single attribute that drifted.
@@ -43,16 +61,32 @@ type DriftField struct {
 	LiveValue interface{} `json:"live_value"`
 }
 
+// DriftFinding is a single reviewer-facing drift item. The names use
+// expected/current so future cloud reads can reuse the same API shape even
+// though the first implementation compares HCL against Terraform state.
+type DriftFinding struct {
+	Address           string      `json:"address"`
+	Type              string      `json:"type"`
+	Name              string      `json:"name"`
+	Status            string      `json:"status"` // drifted | missing | unmanaged
+	Path              string      `json:"path,omitempty"`
+	ExpectedValue     interface{} `json:"expected_value,omitempty"`
+	CurrentValue      interface{} `json:"current_value,omitempty"`
+	Classification    string      `json:"classification"`
+	RecommendedAction string      `json:"recommended_action"`
+	Reason            string      `json:"reason"`
+}
+
 // tfState represents the minimal Terraform state file structure we need.
 type tfState struct {
-	Version   int `json:"version"`
+	Version   int               `json:"version"`
 	Resources []tfStateResource `json:"resources"`
 }
 
 type tfStateResource struct {
-	Mode      string `json:"mode"` // "managed" or "data"
-	Type      string `json:"type"`
-	Name      string `json:"name"`
+	Mode      string            `json:"mode"` // "managed" or "data"
+	Type      string            `json:"type"`
+	Name      string            `json:"name"`
 	Instances []tfStateInstance `json:"instances"`
 }
 
@@ -62,7 +96,7 @@ type tfStateInstance struct {
 
 // Detect compares terraform.tfstate with the parsed code resources.
 func (d *Detector) Detect(projectDir string, codeResources map[string]map[string]interface{}) (*DriftReport, error) {
-	report := &DriftReport{}
+	report := &DriftReport{Findings: []DriftFinding{}, Classifications: map[string]int{}}
 
 	// Find state file
 	statePaths := []string{
@@ -115,8 +149,17 @@ func (d *Detector) Detect(projectDir string, codeResources map[string]map[string
 		stateAttrs, inState := stateIndex[addr]
 		if !inState {
 			report.Missing = append(report.Missing, addr)
-			report.Drifted = append(report.Drifted, DriftedResource{
+			resource := DriftedResource{
 				Address: addr, Type: resType, Name: resName, Status: "missing",
+				Classification:    ClassificationMissingFromState,
+				RecommendedAction: ActionImportOrApply,
+				Reason:            "Resource exists in code but is not present in Terraform state.",
+			}
+			report.Drifted = append(report.Drifted, resource)
+			report.addFinding(DriftFinding{
+				Address: resource.Address, Type: resource.Type, Name: resource.Name,
+				Status: resource.Status, Classification: resource.Classification,
+				RecommendedAction: resource.RecommendedAction, Reason: resource.Reason,
 			})
 			continue
 		}
@@ -137,10 +180,19 @@ func (d *Detector) Detect(projectDir string, codeResources map[string]map[string
 		}
 
 		if len(changes) > 0 {
+			classification, action, reason := classifyResourceDrift(resType, changes)
 			report.Drifted = append(report.Drifted, DriftedResource{
 				Address: addr, Type: resType, Name: resName,
 				Changes: changes, Status: "drifted",
+				Classification: classification, RecommendedAction: action, Reason: reason,
 			})
+			for _, change := range changes {
+				report.addFinding(DriftFinding{
+					Address: addr, Type: resType, Name: resName, Status: "drifted",
+					Path: change.Path, ExpectedValue: change.CodeValue, CurrentValue: change.LiveValue,
+					Classification: classification, RecommendedAction: action, Reason: reason,
+				})
+			}
 		} else {
 			report.InSync++
 		}
@@ -155,8 +207,17 @@ func (d *Detector) Detect(projectDir string, codeResources map[string]map[string
 			if len(parts) == 2 {
 				resType, resName = parts[0], parts[1]
 			}
-			report.Drifted = append(report.Drifted, DriftedResource{
+			resource := DriftedResource{
 				Address: addr, Type: resType, Name: resName, Status: "unmanaged",
+				Classification:    ClassificationUnauthorizedChange,
+				RecommendedAction: ActionReviewImportOrRemove,
+				Reason:            "Resource exists in Terraform state but not in code.",
+			}
+			report.Drifted = append(report.Drifted, resource)
+			report.addFinding(DriftFinding{
+				Address: resource.Address, Type: resource.Type, Name: resource.Name,
+				Status: resource.Status, Classification: resource.Classification,
+				RecommendedAction: resource.RecommendedAction, Reason: resource.Reason,
 			})
 		}
 	}
@@ -167,4 +228,94 @@ func (d *Detector) Detect(projectDir string, codeResources map[string]map[string
 		report.Total, report.InSync, driftCount-len(report.Missing)-len(report.Unmanaged), len(report.Missing), len(report.Unmanaged))
 
 	return report, nil
+}
+
+func (r *DriftReport) addFinding(f DriftFinding) {
+	r.Findings = append(r.Findings, f)
+	r.Classifications[f.Classification]++
+}
+
+func classifyResourceDrift(resourceType string, changes []DriftField) (classification, action, reason string) {
+	if len(changes) == 0 {
+		return ClassificationUnknown, ActionInvestigate, "No field-level drift details were available."
+	}
+	if isMetadataOnlyDrift(changes) {
+		return ClassificationLegitimateConfigChange, ActionCodifyOrAccept, "Only metadata fields drifted."
+	}
+	switch {
+	case isIdentityResource(resourceType):
+		return ClassificationUnauthorizedChange, ActionRevertOrCodifyAfterReview, "Identity drift can expand permissions or trust boundaries."
+	case isNetworkResource(resourceType):
+		return ClassificationUnauthorizedChange, ActionRevertOrCodifyAfterReview, "Network drift can change reachability or public exposure."
+	case isStatefulResource(resourceType):
+		return ClassificationUnauthorizedChange, ActionRevertOrCodifyAfterReview, "Stateful drift can affect durability, availability, or spend."
+	default:
+		return ClassificationUnknown, ActionInvestigate, "Drift does not match a known low-risk pattern."
+	}
+}
+
+func isMetadataOnlyDrift(changes []DriftField) bool {
+	for _, change := range changes {
+		root := strings.Split(change.Path, ".")[0]
+		switch root {
+		case "tags", "labels", "annotations", "description":
+			continue
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+func isIdentityResource(resourceType string) bool {
+	t := strings.ToLower(resourceType)
+	return strings.Contains(t, "_iam_") ||
+		strings.Contains(t, "iam") ||
+		strings.Contains(t, "role_assignment") ||
+		strings.Contains(t, "role_binding") ||
+		strings.Contains(t, "service_account")
+}
+
+func isNetworkResource(resourceType string) bool {
+	t := strings.ToLower(resourceType)
+	needles := []string{
+		"security_group",
+		"firewall",
+		"network_acl",
+		"network_security_group",
+		"route",
+		"listener",
+		"load_balancer",
+		"vpc_peering",
+		"internet_gateway",
+	}
+	for _, needle := range needles {
+		if strings.Contains(t, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func isStatefulResource(resourceType string) bool {
+	t := strings.ToLower(resourceType)
+	needles := []string{
+		"db_instance",
+		"db_cluster",
+		"rds",
+		"dynamodb",
+		"s3_bucket",
+		"storage_bucket",
+		"sql_database",
+		"disk",
+		"volume",
+		"redis",
+		"elasticache",
+	}
+	for _, needle := range needles {
+		if strings.Contains(t, needle) {
+			return true
+		}
+	}
+	return false
 }

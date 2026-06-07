@@ -178,6 +178,49 @@ export interface PlanClassification {
   markdown?: string;
 }
 
+export interface DriftField {
+  path: string;
+  code_value?: unknown;
+  live_value?: unknown;
+}
+
+export interface DriftResource {
+  address: string;
+  type: string;
+  name: string;
+  changes?: DriftField[];
+  status: 'drifted' | 'missing' | 'unmanaged';
+  classification?: string;
+  recommended_action?: string;
+  reason?: string;
+}
+
+export interface DriftFinding {
+  address: string;
+  type: string;
+  name: string;
+  status: 'drifted' | 'missing' | 'unmanaged';
+  path?: string;
+  expected_value?: unknown;
+  current_value?: unknown;
+  classification: string;
+  recommended_action: string;
+  reason: string;
+}
+
+export interface DriftReport {
+  has_state: boolean;
+  state_path: string;
+  drifted: DriftResource[];
+  findings: DriftFinding[];
+  missing: string[];
+  unmanaged: string[];
+  in_sync: number;
+  total: number;
+  classifications?: Record<string, number>;
+  summary: string;
+}
+
 // Checks res.ok and throws with the backend's error message instead of
 // letting callers hit an opaque JSON parse failure on text/plain errors.
 async function check(res: Response): Promise<Response> {
@@ -426,6 +469,15 @@ export const api = {
 
   async classifyPlan(projectName: string, req: { tool?: string; env?: string; plan_json?: unknown; plan_text?: string } = {}): Promise<PlanClassification> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/plan/classify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
+  async runDrift(projectName: string, req: { tool?: string; env?: string } = {}): Promise<DriftReport> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/drift`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
