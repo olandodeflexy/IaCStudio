@@ -39,6 +39,7 @@
           <a href="#interface">Interface Tour</a>
           <a href="#workflows">Core Workflows</a>
           <a href="#cloud-connections">Cloud Connections</a>
+          <a href="#semantic-plan-gate">Semantic Plan Gate</a>
           <a href="#ai">AI Setup</a>
           <a href="#policy-security">Policy and Security</a>
           <a href="#api-reference">API Reference</a>
@@ -526,6 +527,43 @@ gcloud config set project my-platform-dev</code></pre>
           </div>
         </section>
 
+        <section id="semantic-plan-gate" class="doc-section" data-title="semantic plan classifier apply gate safe risky destructive unknown terraform opentofu">
+          <h2>Semantic Plan Gate</h2>
+          <p>
+            Terraform and OpenTofu plans are saved as <code>tfplan</code>, exported to
+            <code>tfplan.json</code>, and classified before apply. The goal is to turn a long
+            raw plan into a reviewer summary that explains what needs attention before real
+            infrastructure changes run.
+          </p>
+
+          <div class="feature-grid compact">
+            <article>
+              <h3>Safe</h3>
+              <p>Metadata-only or no-op changes, such as tag, label, annotation, or description updates.</p>
+            </article>
+            <article>
+              <h3>Risky</h3>
+              <p>IAM, network exposure, or stateful resource changes that can alter access, reachability, durability, or spend.</p>
+            </article>
+            <article>
+              <h3>Destructive</h3>
+              <p>Deletes and replacements. Stateful replacements call out backup, snapshot, retention, and restore review.</p>
+            </article>
+            <article>
+              <h3>Unknown</h3>
+              <p>Unsupported actions, missing plan JSON, or changes that do not match a known safe pattern.</p>
+            </article>
+          </div>
+
+          <h3>Apply behavior</h3>
+          <ol class="steps">
+            <li><strong>Run Plan.</strong> IaC Studio writes the plan artifact and classifier JSON for the active project or environment.</li>
+            <li><strong>Read the summary.</strong> The terminal shows counts and the highest-priority reviewer focus items.</li>
+            <li><strong>Apply uses the saved plan.</strong> Terraform/OpenTofu apply consumes <code>tfplan</code>, so the reviewed artifact is the one being applied.</li>
+            <li><strong>Acknowledge risk when needed.</strong> Risky, destructive, or unknown summaries block apply until the request includes <code>risk_acknowledged:true</code>.</li>
+          </ol>
+        </section>
+
         <section id="ai" class="doc-section" data-title="ai setup ollama openai anthropic models settings environment variables">
           <h2>AI Setup</h2>
           <p>
@@ -621,7 +659,7 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
             </article>
             <article>
               <h3>Plan-before-apply</h3>
-              <p>Apply is gated by a successful plan and can be blocked by policy findings unless explicitly acknowledged.</p>
+              <p>Apply is gated by a successful plan, semantic risk review, and policy findings unless explicitly acknowledged.</p>
             </article>
             <article>
               <h3>Command control</h3>
@@ -672,8 +710,8 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
                 </tr>
                 <tr>
                   <td>Commands</td>
-                  <td><code>POST /api/projects/{name}/run</code><br><code>POST /api/projects/{name}/kill</code></td>
-                  <td>Run init, plan, apply, and stop active processes. Optional <code>connection_id</code> attaches a selected cloud target.</td>
+                  <td><code>POST /api/projects/{name}/run</code><br><code>POST /api/projects/{name}/kill</code><br><code>POST /api/projects/{name}/plan/classify</code></td>
+                  <td>Run init, plan, apply, stop active processes, and classify Terraform/OpenTofu plan JSON. Optional <code>connection_id</code> attaches a selected cloud target.</td>
                 </tr>
                 <tr>
                   <td>Cloud connections</td>

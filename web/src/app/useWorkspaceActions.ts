@@ -1,5 +1,5 @@
 import { useCallback, useRef, type Dispatch, type MouseEvent, type MutableRefObject, type RefObject, type SetStateAction } from 'react';
-import { api, ApiError, normalizeSuggestions, type CatalogResource, type CloudConnection, type PolicyFinding, type Suggestion } from '../api';
+import { api, ApiError, normalizeSuggestions, type CatalogResource, type CloudConnection, type PlanClassification, type PolicyFinding, type Suggestion } from '../api';
 import {
   TOOLS,
   edgeId,
@@ -22,6 +22,28 @@ const summarizePolicyFindings = (findings: PolicyFinding[]) => {
 
 const isPolicyBlockedError = (err: unknown): err is ApiError => (
   err instanceof ApiError && err.status === 409 && err.payload?.error === 'policy_blocked'
+);
+
+const summarizePlanClassification = (classification?: PlanClassification) => {
+  if (!classification) return 'No classifier details were returned.';
+  const lines = [classification.summary.text];
+  const priority = { destructive: 4, risky: 3, unknown: 2, safe: 1 } as const;
+  const changes = [...classification.changes]
+    .sort((a, b) => priority[b.risk] - priority[a.risk])
+    .slice(0, 5)
+    .map((change, index) => {
+      const focus = change.reviewer_focus?.length ? ` Focus: ${change.reviewer_focus.join(' ')}` : '';
+      return `${index + 1}. [${change.risk}] ${change.action} ${change.address}: ${change.reason}${focus}`;
+    });
+  lines.push(...changes);
+  if (classification.changes.length > changes.length) {
+    lines.push(`...and ${classification.changes.length - changes.length} more.`);
+  }
+  return lines.join('\n');
+};
+
+const isPlanRiskBlockedError = (err: unknown): err is ApiError => (
+  err instanceof ApiError && err.status === 409 && err.payload?.error === 'plan_risk_blocked'
 );
 
 export interface UseWorkspaceActionsInput {
@@ -330,33 +352,64 @@ export function useWorkspaceActions({
     }
     const connectionLabel = selectedCloudConnection ? ` --connection ${selectedCloudConnection.name}` : '';
     setTerminalOutput(prev => [...prev, `$ ${command}${connectionLabel}`, '']);
+
+    const handlePolicyBlock = (err: ApiError, riskAcknowledged: boolean) => {
+      const findings = err.payload?.findings ?? [];
+      const blockingCount = findings.filter(finding => finding.severity === 'error').length;
+      const summary = summarizePolicyFindings(findings);
+      const summaryLines = summary.split('\n');
+      setTerminalOutput(prev => [
+        ...prev,
+        `Policy blocked ${command}: ${blockingCount} blocking finding${blockingCount === 1 ? '' : 's'}`,
+        ...summaryLines,
+      ]);
+      if (!confirm(`Policy checks blocked "${command}".\n\n${summary}\n\nRun it anyway and acknowledge these findings?`)) {
+        return;
+      }
+      setTerminalOutput(prev => [...prev, `$ ${command} --acknowledged${connectionLabel}`, '']);
+      api.runCommand(projectId, tool, command, {
+        approved: true,
+        env: activeEnv,
+        acknowledged: true,
+        riskAcknowledged,
+        connectionId: selectedCloudConnection?.id,
+      }).catch(overrideErr => {
+        setTerminalOutput(prev => [...prev, `Error: ${overrideErr.message}`]);
+      });
+    };
+
     api.runCommand(projectId, tool, command, {
       approved: needsApproval,
       env: activeEnv,
       connectionId: selectedCloudConnection?.id,
     }).catch(err => {
-      if (needsApproval && isPolicyBlockedError(err)) {
-        const findings = err.payload?.findings ?? [];
-        const blockingCount = findings.filter(finding => finding.severity === 'error').length;
-        const summary = summarizePolicyFindings(findings);
-        const summaryLines = summary.split('\n');
+      if (needsApproval && isPlanRiskBlockedError(err)) {
+        const summary = summarizePlanClassification(err.payload?.classification);
         setTerminalOutput(prev => [
           ...prev,
-          `Policy blocked ${command}: ${blockingCount} blocking finding${blockingCount === 1 ? '' : 's'}`,
-          ...summaryLines,
+          `Semantic plan gate blocked ${command}:`,
+          ...summary.split('\n'),
         ]);
-        if (!confirm(`Policy checks blocked "${command}".\n\n${summary}\n\nRun it anyway and acknowledge these findings?`)) {
+        if (!confirm(`Semantic plan review flagged "${command}".\n\n${summary}\n\nRun it anyway and acknowledge this risk?`)) {
           return;
         }
-        setTerminalOutput(prev => [...prev, `$ ${command} --acknowledged${connectionLabel}`, '']);
+        setTerminalOutput(prev => [...prev, `$ ${command} --risk-acknowledged${connectionLabel}`, '']);
         api.runCommand(projectId, tool, command, {
           approved: true,
           env: activeEnv,
-          acknowledged: true,
+          riskAcknowledged: true,
           connectionId: selectedCloudConnection?.id,
         }).catch(overrideErr => {
+          if (needsApproval && isPolicyBlockedError(overrideErr)) {
+            handlePolicyBlock(overrideErr, true);
+            return;
+          }
           setTerminalOutput(prev => [...prev, `Error: ${overrideErr.message}`]);
         });
+        return;
+      }
+      if (needsApproval && isPolicyBlockedError(err)) {
+        handlePolicyBlock(err, false);
         return;
       }
       setTerminalOutput(prev => [...prev, `Error: ${err.message}`]);

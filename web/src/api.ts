@@ -6,6 +6,7 @@ export interface ApiErrorPayload {
   error?: string;
   detail?: string;
   findings?: PolicyFinding[];
+  classification?: PlanClassification;
 }
 
 export class ApiError extends Error {
@@ -136,6 +137,45 @@ export interface CloudConnectionTestResult {
   summary: string;
   connection: CloudConnection;
   checks: { name: string; status: 'pass' | 'warn' | 'error'; message: string }[];
+}
+
+export type PlanRiskLevel = 'safe' | 'risky' | 'destructive' | 'unknown';
+
+export interface PlanFieldChange {
+  path: string;
+  old_value?: unknown;
+  new_value?: unknown;
+  sensitive?: boolean;
+  computed?: boolean;
+}
+
+export interface PlanClassifiedChange {
+  address: string;
+  type?: string;
+  name?: string;
+  provider?: string;
+  action: string;
+  risk: PlanRiskLevel;
+  categories: string[];
+  reason: string;
+  reviewer_focus: string[];
+  field_changes?: PlanFieldChange[];
+}
+
+export interface PlanClassificationSummary {
+  safe: number;
+  risky: number;
+  destructive: number;
+  unknown: number;
+  total: number;
+  requires_acknowledgment: boolean;
+  text: string;
+}
+
+export interface PlanClassification {
+  summary: PlanClassificationSummary;
+  changes: PlanClassifiedChange[];
+  markdown?: string;
 }
 
 // Checks res.ok and throws with the backend's error message instead of
@@ -366,7 +406,7 @@ export const api = {
     projectName: string,
     tool: string,
     command: string,
-    opts: { approved?: boolean; env?: string; acknowledged?: boolean; connectionId?: string | null } = {},
+    opts: { approved?: boolean; env?: string; acknowledged?: boolean; riskAcknowledged?: boolean; connectionId?: string | null } = {},
   ): Promise<{ status: string; connection?: CloudConnection }> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/run`, {
       method: 'POST',
@@ -377,8 +417,18 @@ export const api = {
         approved: opts.approved ?? false,
         env: opts.env,
         acknowledged: opts.acknowledged ?? false,
+        risk_acknowledged: opts.riskAcknowledged ?? false,
         connection_id: opts.connectionId || undefined,
       }),
+    });
+    return (await check(res)).json();
+  },
+
+  async classifyPlan(projectName: string, req: { tool?: string; env?: string; plan_json?: unknown; plan_text?: string } = {}): Promise<PlanClassification> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/plan/classify`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
     });
     return (await check(res)).json();
   },
