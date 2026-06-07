@@ -3,11 +3,12 @@ import type { Edge } from '../../legacy';
 import { S } from '../../styles';
 import { CloudConnectionsPanel } from '../CloudConnections';
 import { CodeEditor } from '../CodeEditor';
+import { DriftPanel } from '../DriftPanel';
 import { ModuleRegistryPanel } from '../ModuleRegistry';
 import { PolicyStudioPanel } from '../PolicyStudio';
 import { ScanPanel } from '../ScanPanel';
 
-export type RightPanelTab = 'inspect' | 'cloud' | 'policy' | 'scan' | 'modules';
+export type RightPanelTab = 'inspect' | 'cloud' | 'drift' | 'policy' | 'scan' | 'modules';
 
 export interface InspectorResource extends Resource {
   icon: string;
@@ -99,6 +100,7 @@ export function InspectorPanel({
   const tabs: { key: RightPanelTab; label: string }[] = [
     { key: 'inspect', label: selected || selectedEdge ? 'Inspect' : 'Code' },
     { key: 'cloud', label: 'Cloud' },
+    { key: 'drift', label: 'Drift' },
     { key: 'policy', label: 'Policy' },
     { key: 'scan', label: 'Scan' },
     ...(tool === 'ansible' ? [] : [{ key: 'modules' as const, label: 'Modules' }]),
@@ -272,6 +274,18 @@ export function InspectorPanel({
             </div>
           ) : (
             <PolicyStudioPanel projectName={projectId} tool={tool} env={activeEnv || undefined} />
+          )}
+        </div>
+      )}
+
+      {activeTab === 'drift' && (
+        <div style={{ flex: 1, minHeight: 0 }}>
+          {unresolvedHybridEnv ? (
+            <div style={{ padding: 16, color: 'var(--text-muted)', fontSize: 13 }}>
+              Environment "{activeEnv}" has no configured IaC tool in .iac-studio.json.
+            </div>
+          ) : (
+            <DriftPanel projectName={projectId} tool={tool} env={activeEnv || undefined} />
           )}
         </div>
       )}

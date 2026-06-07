@@ -316,6 +316,11 @@ iac-studio</code></pre>
                   <td>Review violations, acknowledge allowed exceptions, block unsafe apply attempts.</td>
                 </tr>
                 <tr>
+                  <td>Drift Monitor</td>
+                  <td>Terraform/OpenTofu state drift checks.</td>
+                  <td>Run drift from the right panel, review classified findings, and choose whether to investigate, codify, import, or revert.</td>
+                </tr>
+                <tr>
                   <td>Scan Panel</td>
                   <td>Security scanner controls and findings.</td>
                   <td>Run scanners, map findings to compliance frameworks, generate CI workflow snippets.</td>
@@ -398,10 +403,11 @@ iac-studio</code></pre>
           <div class="workflow">
             <h3>Detect drift and export</h3>
             <p>
-              Drift detection compares Terraform/OpenTofu state against code when state is present,
-              classifies each finding, and recommends whether to investigate, codify, import, or
-              revert. Export converts the current topology into alternate formats such as Pulumi
-              TypeScript, CDK Python, and CloudFormation where supported.
+              Open the Drift tab in the right panel to compare Terraform/OpenTofu state against
+              code when state is present. IaC Studio classifies each finding and recommends
+              whether to investigate, codify, import, or revert. Export converts the current
+              topology into alternate formats such as Pulumi TypeScript, CDK Python, and
+              CloudFormation where supported.
             </p>
           </div>
         </section>

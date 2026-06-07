@@ -64,7 +64,7 @@ start the local server for you.
 | **AI Topology Builder** | Describe an architecture in plain text, AI generates everything |
 | **AI Plan Fix** | When terraform plan fails, AI diagnoses and auto-fixes the issue |
 | **Security Scanner** | Graph-based checks: CIS, SOC2, HIPAA, OWASP compliance |
-| **Drift Detection** | Compare terraform.tfstate against code, find what changed |
+| **Drift Monitor** | Run Terraform/OpenTofu state drift checks from the right panel with classified findings |
 | **Multi-Format Export** | Export to Pulumi TypeScript, CDK Python, CloudFormation |
 | **Smart Suggestions** | AI predicts your next resource based on IaC best practices |
 | **Import Projects** | Browse filesystem, scan existing .tf/.yml files, auto-detect topology |
