@@ -407,11 +407,12 @@ type projectDriftRequest struct {
 }
 
 type projectDriftRun struct {
-	Report    *drift.DriftReport
-	Resources []parser.Resource
-	WorkDir   string
-	Tool      string
-	Env       string
+	Report      *drift.DriftReport
+	Resources   []parser.Resource
+	ProjectPath string
+	WorkDir     string
+	Tool        string
+	Env         string
 }
 
 func runProjectDrift(projectsDir, name string, req projectDriftRequest, detector *drift.Detector) (*projectDriftRun, int, string) {
@@ -459,11 +460,12 @@ func runProjectDrift(projectsDir, name string, req projectDriftRequest, detector
 		return nil, http.StatusInternalServerError, err.Error()
 	}
 	return &projectDriftRun{
-		Report:    report,
-		Resources: resources,
-		WorkDir:   workDir,
-		Tool:      tool,
-		Env:       req.Env,
+		Report:      report,
+		Resources:   resources,
+		ProjectPath: projectPath,
+		WorkDir:     workDir,
+		Tool:        tool,
+		Env:         req.Env,
 	}, http.StatusOK, ""
 }
 
@@ -479,6 +481,17 @@ func driftResourceLocations(workDir string, resources []parser.Resource) map[str
 	return locations
 }
 
+func buildProjectDriftRemediationProposal(name, mode string, run *projectDriftRun) (drift.RemediationProposal, error) {
+	return drift.BuildRemediationProposal(drift.RemediationInput{
+		ProjectName: name,
+		Tool:        run.Tool,
+		Env:         run.Env,
+		Mode:        mode,
+		Findings:    run.Report.Findings,
+		Locations:   driftResourceLocations(run.WorkDir, run.Resources),
+	})
+}
+
 func relativeSourcePath(root, path string) string {
 	if strings.TrimSpace(path) == "" {
 		return ""
@@ -488,6 +501,38 @@ func relativeSourcePath(root, path string) string {
 		return filepath.ToSlash(filepath.Base(path))
 	}
 	return filepath.ToSlash(rel)
+}
+
+func writeRenderedRemediationArtifacts(projectPath string, rendered []drift.RenderedRemediationArtifact) error {
+	for _, artifact := range rendered {
+		target, err := safeProjectFilePath(projectPath, artifact.Path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("creating remediation artifact directory: %w", err)
+		}
+		if err := os.WriteFile(target, []byte(artifact.Content), 0o644); err != nil {
+			return fmt.Errorf("writing remediation artifact %s: %w", artifact.Path, err)
+		}
+	}
+	return nil
+}
+
+func safeProjectFilePath(projectPath, relPath string) (string, error) {
+	if strings.TrimSpace(relPath) == "" {
+		return "", errors.New("artifact path is required")
+	}
+	clean := filepath.Clean(filepath.FromSlash(relPath))
+	if filepath.IsAbs(clean) || clean == "." || clean == ".." || strings.HasPrefix(clean, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("invalid artifact path %q", relPath)
+	}
+	target := filepath.Join(projectPath, clean)
+	rel, err := filepath.Rel(projectPath, target)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return "", fmt.Errorf("artifact path escapes project: %q", relPath)
+	}
+	return target, nil
 }
 
 func parseProjectResources(projectPath, tool, env string) ([]parser.Resource, error) {
@@ -2102,19 +2147,56 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, message, status)
 			return
 		}
-		proposal, err := drift.BuildRemediationProposal(drift.RemediationInput{
-			ProjectName: name,
-			Tool:        run.Tool,
-			Env:         run.Env,
-			Mode:        req.Mode,
-			Findings:    run.Report.Findings,
-			Locations:   driftResourceLocations(run.WorkDir, run.Resources),
-		})
+		proposal, err := buildProjectDriftRemediationProposal(name, req.Mode, run)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(proposal)
+	})
+
+	mux.HandleFunc("POST /api/projects/{name}/drift/remediation/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		limitBody(w, r)
+		var req struct {
+			Tool string `json:"tool,omitempty"`
+			Env  string `json:"env,omitempty"`
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body: "+err.Error(), 400)
+			return
+		}
+		if req.Tool == "" {
+			req.Tool = r.URL.Query().Get("tool")
+		}
+		if req.Env == "" {
+			req.Env = r.URL.Query().Get("env")
+		}
+
+		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
+			Tool: req.Tool,
+			Env:  req.Env,
+		}, driftDetector)
+		if run == nil {
+			http.Error(w, message, status)
+			return
+		}
+		proposal, err := buildProjectDriftRemediationProposal(name, req.Mode, run)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		artifactSet, rendered, err := drift.RenderRemediationArtifacts(proposal, time.Now().UTC())
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if err := writeRenderedRemediationArtifacts(run.ProjectPath, rendered); err != nil {
+			http.Error(w, err.Error(), 500)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(artifactSet)
 	})
 
 	// ─── Multi-Format Export ───

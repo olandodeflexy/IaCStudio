@@ -1,9 +1,10 @@
 import { useMemo, useState } from 'react';
-import { AlertCircle, GitCompareArrows, GitPullRequest, Play, RotateCcw } from 'lucide-react';
+import { AlertCircle, FileText, GitCompareArrows, GitPullRequest, Play, RotateCcw } from 'lucide-react';
 
 import {
   api,
   type DriftFinding,
+  type DriftRemediationArtifactSet,
   type DriftRemediationMode,
   type DriftRemediationProposal,
   type DriftReport,
@@ -14,7 +15,7 @@ export interface DriftPanelProps {
   projectName: string;
   tool?: string;
   env?: string;
-  client?: Pick<typeof api, 'runDrift'> & Partial<Pick<typeof api, 'createDriftRemediation'>>;
+  client?: Pick<typeof api, 'runDrift'> & Partial<Pick<typeof api, 'createDriftRemediation' | 'createDriftRemediationArtifacts'>>;
 }
 
 const SUPPORTED_TOOLS = new Set(['terraform', 'opentofu']);
@@ -73,10 +74,13 @@ export function DriftPanel({
 }: DriftPanelProps) {
   const [running, setRunning] = useState(false);
   const [draftingMode, setDraftingMode] = useState<DriftRemediationMode | null>(null);
+  const [writingArtifacts, setWritingArtifacts] = useState(false);
   const [report, setReport] = useState<DriftReport | null>(null);
   const [proposal, setProposal] = useState<DriftRemediationProposal | null>(null);
+  const [artifacts, setArtifacts] = useState<DriftRemediationArtifactSet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [proposalError, setProposalError] = useState<string | null>(null);
+  const [artifactError, setArtifactError] = useState<string | null>(null);
   const supported = SUPPORTED_TOOLS.has(tool);
   const findings = useMemo(() => normalizeFindings(report), [report]);
   const suppressedFindings = useMemo(() => normalizeSuppressedFindings(report), [report]);
@@ -88,8 +92,10 @@ export function DriftPanel({
     setRunning(true);
     setError(null);
     setProposalError(null);
+    setArtifactError(null);
     setReport(null);
     setProposal(null);
+    setArtifacts(null);
     try {
       const req: { tool: string; env?: string } = { tool };
       if (env) req.env = env;
@@ -106,7 +112,9 @@ export function DriftPanel({
     if (!canDraftRemediation || !client.createDriftRemediation) return;
     setDraftingMode(mode);
     setProposalError(null);
+    setArtifactError(null);
     setProposal(null);
+    setArtifacts(null);
     try {
       const req: { tool: string; env?: string; mode: DriftRemediationMode } = { tool, mode };
       if (env) req.env = env;
@@ -116,6 +124,23 @@ export function DriftPanel({
       setProposalError(String(err));
     } finally {
       setDraftingMode(null);
+    }
+  };
+
+  const writeArtifacts = async () => {
+    if (!proposal || !client.createDriftRemediationArtifacts) return;
+    setWritingArtifacts(true);
+    setArtifactError(null);
+    setArtifacts(null);
+    try {
+      const req: { tool: string; env?: string; mode: DriftRemediationMode } = { tool, mode: proposal.mode };
+      if (env) req.env = env;
+      const response = await client.createDriftRemediationArtifacts(projectName, req);
+      setArtifacts(response);
+    } catch (err) {
+      setArtifactError(String(err));
+    } finally {
+      setWritingArtifacts(false);
     }
   };
 
@@ -232,6 +257,16 @@ export function DriftPanel({
                 commit {proposal.commit_message}
               </div>
             </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={writeArtifacts}
+              disabled={writingArtifacts || !client.createDriftRemediationArtifacts}
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {writingArtifacts ? 'Writing...' : 'Write artifacts'}
+            </Button>
           </div>
 
           {proposal.file_changes.length > 0 && (
@@ -270,6 +305,38 @@ export function DriftPanel({
               ))}
             </div>
           )}
+        </section>
+      )}
+
+      {artifactError && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span>{artifactError}</span>
+        </div>
+      )}
+
+      {artifacts && (
+        <section className="rounded-md border border-border bg-card px-3 py-3">
+          <div className="flex items-start gap-2">
+            <FileText className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary" />
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-foreground">Review artifacts written</div>
+              <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                {artifacts.root}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 space-y-1">
+            {artifacts.files.map((file) => (
+              <div
+                key={file.path}
+                className="flex items-center justify-between gap-2 rounded border border-border bg-background/70 px-2 py-1.5"
+              >
+                <span className="truncate font-mono text-[10px] text-foreground">{file.path}</span>
+                <span className="flex-shrink-0 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{file.kind}</span>
+              </div>
+            ))}
+          </div>
         </section>
       )}
 
