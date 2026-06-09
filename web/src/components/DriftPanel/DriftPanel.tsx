@@ -133,7 +133,7 @@ export function DriftPanel({
     setArtifactError(null);
     setArtifacts(null);
     try {
-      const req: { tool: string; env?: string; mode: DriftRemediationMode } = { tool, mode: proposal.mode };
+      const req: { tool: string; env?: string; mode: DriftRemediationMode; proposal: DriftRemediationProposal } = { tool, mode: proposal.mode, proposal };
       if (env) req.env = env;
       const response = await client.createDriftRemediationArtifacts(projectName, req);
       setArtifacts(response);

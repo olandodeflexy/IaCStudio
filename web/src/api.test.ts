@@ -322,12 +322,13 @@ describe('api.createDriftRemediationArtifacts', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(api.createDriftRemediationArtifacts('demo', { tool: 'terraform', env: 'dev', mode: 'revert' })).resolves.toEqual(response);
+    const proposal = response.proposal;
+    await expect(api.createDriftRemediationArtifacts('demo', { tool: 'terraform', env: 'dev', mode: 'revert', proposal })).resolves.toEqual(response);
 
     expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/drift/remediation/artifacts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool: 'terraform', env: 'dev', mode: 'revert' }),
+      body: JSON.stringify({ tool: 'terraform', env: 'dev', mode: 'revert', proposal }),
     });
   });
 });

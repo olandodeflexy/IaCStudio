@@ -2159,9 +2159,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		name := r.PathValue("name")
 		limitBody(w, r)
 		var req struct {
-			Tool string `json:"tool,omitempty"`
-			Env  string `json:"env,omitempty"`
-			Mode string `json:"mode"`
+			Tool     string                     `json:"tool,omitempty"`
+			Env      string                     `json:"env,omitempty"`
+			Mode     string                     `json:"mode"`
+			Proposal *drift.RemediationProposal `json:"proposal,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), 400)
@@ -2174,26 +2175,41 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			req.Env = r.URL.Query().Get("env")
 		}
 
-		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
-			Tool: req.Tool,
-			Env:  req.Env,
-		}, driftDetector)
-		if run == nil {
-			http.Error(w, message, status)
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		proposal, err := buildProjectDriftRemediationProposal(name, req.Mode, run)
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
+		var proposal drift.RemediationProposal
+		if req.Proposal != nil {
+			proposal = *req.Proposal
+			if req.Mode != "" && req.Mode != proposal.Mode {
+				http.Error(w, "request mode must match proposal mode", http.StatusBadRequest)
+				return
+			}
+		} else {
+			run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
+				Tool: req.Tool,
+				Env:  req.Env,
+			}, driftDetector)
+			if run == nil {
+				http.Error(w, message, status)
+				return
+			}
+			var buildErr error
+			proposal, buildErr = buildProjectDriftRemediationProposal(name, req.Mode, run)
+			if buildErr != nil {
+				http.Error(w, buildErr.Error(), http.StatusBadRequest)
+				return
+			}
 		}
 		artifactSet, rendered, err := drift.RenderRemediationArtifacts(proposal, time.Now().UTC())
 		if err != nil {
-			http.Error(w, err.Error(), 400)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		if err := writeRenderedRemediationArtifacts(run.ProjectPath, rendered); err != nil {
-			http.Error(w, err.Error(), 500)
+		if err := writeRenderedRemediationArtifacts(projectPath, rendered); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(artifactSet)

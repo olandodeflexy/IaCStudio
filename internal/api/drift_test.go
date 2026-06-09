@@ -344,3 +344,102 @@ resource "aws_security_group" "web" {
 		t.Fatalf("runbook missing review guidance:\n%s", string(runbook))
 	}
 }
+
+func TestProjectDriftRemediationArtifactsEndpointUsesProvidedProposal(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	body := `{
+		"mode": "codify",
+		"proposal": {
+			"mode": "codify",
+			"title": "Codify reviewed drift for demo",
+			"branch": "iac-studio-drift-codify-demo",
+			"commit_message": "Codify drift for demo",
+			"body": "## Summary\n- Reviewed finding: aws_s3_bucket.logs\n",
+			"findings": [{
+				"address": "aws_s3_bucket.logs",
+				"type": "aws_s3_bucket",
+				"name": "logs",
+				"status": "drifted",
+				"path": "tags",
+				"classification": "legitimate_config_change",
+				"recommended_action": "codify_or_accept",
+				"reason": "Only metadata fields drifted."
+			}],
+			"file_changes": [{
+				"path": "main.tf",
+				"action": "codify",
+				"address": "aws_s3_bucket.logs",
+				"field": "tags",
+				"summary": "Update aws_s3_bucket.logs tags to the current state value."
+			}]
+		}
+	}`
+	resp, err := http.Post(srv.URL+"/api/projects/demo/drift/remediation/artifacts", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST drift remediation artifacts with proposal: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("drift remediation artifacts status = %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		ID       string `json:"id"`
+		Root     string `json:"root"`
+		Proposal struct {
+			Title string `json:"title"`
+		} `json:"proposal"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode drift remediation artifacts response: %v", err)
+	}
+	if payload.ID != "iac-studio-drift-codify-demo" ||
+		payload.Proposal.Title != "Codify reviewed drift for demo" {
+		t.Fatalf("unexpected artifact payload: %#v", payload)
+	}
+	prBody, err := os.ReadFile(filepath.Join(projectDir, ".iac-studio", "remediations", "iac-studio-drift-codify-demo", "pr-body.md"))
+	if err != nil {
+		t.Fatalf("read pr-body artifact: %v", err)
+	}
+	if !strings.Contains(string(prBody), "Reviewed finding: aws_s3_bucket.logs") {
+		t.Fatalf("artifact body should come from provided proposal, got:\n%s", string(prBody))
+	}
+}
+
+func TestProjectDriftRemediationArtifactsEndpointRejectsProposalModeMismatch(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, "demo"), 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/projects/demo/drift/remediation/artifacts", "application/json", strings.NewReader(`{
+		"mode": "revert",
+		"proposal": {
+			"mode": "codify",
+			"title": "Codify drift for demo",
+			"branch": "iac-studio-drift-codify-demo",
+			"commit_message": "Codify drift for demo",
+			"body": "## Summary",
+			"findings": [],
+			"file_changes": []
+		}
+	}`))
+	if err != nil {
+		t.Fatalf("POST drift remediation artifacts mismatch: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("drift remediation artifacts status = %d, want 400", resp.StatusCode)
+	}
+	assertResponseBodyContains(t, resp, "mode must match proposal mode")
+}

@@ -114,6 +114,24 @@ describe('DriftPanel', () => {
   });
 
   it('writes remediation review artifacts for a drafted proposal', async () => {
+    const proposal = {
+      mode: 'revert',
+      title: 'Revert unauthorized drift for demo',
+      branch: 'iac-studio-drift-revert-demo-dev',
+      commit_message: 'Document drift revert for demo',
+      body: '## Summary',
+      findings: [],
+      file_changes: [
+        {
+          path: 'main.tf',
+          line: 2,
+          action: 'revert',
+          address: 'aws_security_group.web',
+          field: 'ingress',
+          summary: 'Restore live aws_security_group.web ingress to the value declared in code.',
+        },
+      ],
+    };
     const client = {
       runDrift: vi.fn().mockResolvedValue({
         has_state: true,
@@ -140,24 +158,7 @@ describe('DriftPanel', () => {
         classifications: { unauthorized_change: 1 },
         summary: '1 resources: 0 in sync, 1 drifted, 0 missing from state, 0 unmanaged',
       }),
-      createDriftRemediation: vi.fn().mockResolvedValue({
-        mode: 'revert',
-        title: 'Revert unauthorized drift for demo',
-        branch: 'iac-studio-drift-revert-demo-dev',
-        commit_message: 'Document drift revert for demo',
-        body: '## Summary',
-        findings: [],
-        file_changes: [
-          {
-            path: 'main.tf',
-            line: 2,
-            action: 'revert',
-            address: 'aws_security_group.web',
-            field: 'ingress',
-            summary: 'Restore live aws_security_group.web ingress to the value declared in code.',
-          },
-        ],
-      }),
+      createDriftRemediation: vi.fn().mockResolvedValue(proposal),
       createDriftRemediationArtifacts: vi.fn().mockResolvedValue({
         id: 'iac-studio-drift-revert-demo-dev',
         root: '.iac-studio/remediations/iac-studio-drift-revert-demo-dev',
@@ -198,7 +199,7 @@ describe('DriftPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Write artifacts' }));
 
     await waitFor(() => {
-      expect(client.createDriftRemediationArtifacts).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', mode: 'revert' });
+      expect(client.createDriftRemediationArtifacts).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', mode: 'revert', proposal });
     });
     expect(await screen.findByText('Review artifacts written')).toBeInTheDocument();
     expect(screen.getByText('.iac-studio/remediations/iac-studio-drift-revert-demo-dev')).toBeInTheDocument();

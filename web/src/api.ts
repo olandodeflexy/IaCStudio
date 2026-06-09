@@ -537,7 +537,7 @@ export const api = {
     return (await check(res)).json();
   },
 
-  async createDriftRemediationArtifacts(projectName: string, req: { tool?: string; env?: string; mode: DriftRemediationMode }): Promise<DriftRemediationArtifactSet> {
+  async createDriftRemediationArtifacts(projectName: string, req: { tool?: string; env?: string; mode: DriftRemediationMode; proposal?: DriftRemediationProposal }): Promise<DriftRemediationArtifactSet> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/drift/remediation/artifacts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
