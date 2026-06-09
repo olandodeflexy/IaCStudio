@@ -184,3 +184,84 @@ func TestProjectDriftEndpointRejectsUnsupportedTool(t *testing.T) {
 	}
 	assertResponseBodyContains(t, resp, "Terraform and OpenTofu")
 }
+
+func TestProjectDriftRemediationEndpointReturnsDraftProposal(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "main.tf"), []byte(`
+resource "aws_security_group" "web" {
+  name    = "web"
+  ingress = []
+}
+`), 0o644); err != nil {
+		t.Fatalf("write main.tf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "terraform.tfstate"), []byte(`{
+		"version": 4,
+		"resources": [{
+			"mode": "managed",
+			"type": "aws_security_group",
+			"name": "web",
+			"instances": [{"attributes": {"name": "web", "ingress": [{"cidr_blocks": ["0.0.0.0/0"]}]}}]
+		}]
+	}`), 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/projects/demo/drift/remediation", "application/json", strings.NewReader(`{"tool":"terraform","mode":"revert"}`))
+	if err != nil {
+		t.Fatalf("POST drift remediation: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("drift remediation status = %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Mode          string `json:"mode"`
+		Title         string `json:"title"`
+		Branch        string `json:"branch"`
+		CommitMessage string `json:"commit_message"`
+		Body          string `json:"body"`
+		FileChanges   []struct {
+			Path    string `json:"path"`
+			Line    int    `json:"line"`
+			Action  string `json:"action"`
+			Address string `json:"address"`
+			Field   string `json:"field"`
+		} `json:"file_changes"`
+		Warnings []string `json:"warnings"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode drift remediation response: %v", err)
+	}
+	if payload.Mode != "revert" ||
+		payload.Title != "Revert unauthorized drift for demo" ||
+		payload.Branch != "iac-studio-drift-revert-demo" ||
+		payload.CommitMessage != "Document drift revert for demo" {
+		t.Fatalf("unexpected proposal metadata: %#v", payload)
+	}
+	if len(payload.FileChanges) != 1 {
+		t.Fatalf("file changes = %d, want 1", len(payload.FileChanges))
+	}
+	change := payload.FileChanges[0]
+	if change.Path != "main.tf" ||
+		change.Line != 2 ||
+		change.Action != "revert" ||
+		change.Address != "aws_security_group.web" ||
+		change.Field != "ingress" {
+		t.Fatalf("unexpected remediation change: %#v", change)
+	}
+	if !strings.Contains(payload.Body, "Run drift again") {
+		t.Fatalf("proposal body should include validation guidance: %s", payload.Body)
+	}
+	if !strings.Contains(strings.Join(payload.Warnings, "\n"), "provider-side change") {
+		t.Fatalf("proposal should warn about provider-side revert: %#v", payload.Warnings)
+	}
+}

@@ -225,6 +225,30 @@ export interface DriftReport {
   summary: string;
 }
 
+export type DriftRemediationMode = 'codify' | 'revert';
+
+export interface DriftRemediationFileChange {
+  path?: string;
+  line?: number;
+  action: string;
+  address: string;
+  field?: string;
+  summary: string;
+  before?: string;
+  after?: string;
+}
+
+export interface DriftRemediationProposal {
+  mode: DriftRemediationMode;
+  title: string;
+  branch: string;
+  commit_message: string;
+  body: string;
+  findings: DriftFinding[];
+  file_changes: DriftRemediationFileChange[];
+  warnings?: string[];
+}
+
 // Checks res.ok and throws with the backend's error message instead of
 // letting callers hit an opaque JSON parse failure on text/plain errors.
 async function check(res: Response): Promise<Response> {
@@ -482,6 +506,15 @@ export const api = {
 
   async runDrift(projectName: string, req: { tool?: string; env?: string } = {}): Promise<DriftReport> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/drift`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
+  async createDriftRemediation(projectName: string, req: { tool?: string; env?: string; mode: DriftRemediationMode }): Promise<DriftRemediationProposal> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/drift/remediation`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
