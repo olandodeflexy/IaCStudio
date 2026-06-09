@@ -2,6 +2,7 @@ import type { Edge } from '../legacy';
 import type { LayeredModule, LayeredProject } from '../types';
 
 export const extractLayoutMeta = (state: any) => {
+  if (!state) return null;
   const meta: Record<string, any> = {};
   for (const key of ['layout', 'blueprint', 'project_name', 'cloud', 'environments', 'environment_tools', 'modules', 'tags', 'drift']) {
     if (state[key] !== undefined) meta[key] = state[key];

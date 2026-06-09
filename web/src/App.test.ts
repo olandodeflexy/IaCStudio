@@ -3,6 +3,11 @@ import { describe, expect, it } from 'vitest';
 import { extractLayoutMeta, normalizeLayeredProject, resourcesForEnv } from './app/layered';
 
 describe('extractLayoutMeta', () => {
+  it('returns null for null or undefined input', () => {
+    expect(extractLayoutMeta(null)).toBeNull();
+    expect(extractLayoutMeta(undefined)).toBeNull();
+  });
+
   it('preserves drift suppression metadata for flat projects', () => {
     expect(extractLayoutMeta({
       drift: {
