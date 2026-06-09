@@ -48,6 +48,10 @@ function normalizeFindings(report: DriftReport | null): DriftFinding[] {
   return Array.isArray(report?.findings) ? report.findings : [];
 }
 
+function normalizeSuppressedFindings(report: DriftReport | null): DriftFinding[] {
+  return Array.isArray(report?.suppressed_findings) ? report.suppressed_findings : [];
+}
+
 function normalizeClassifications(report: DriftReport | null): [string, number][] {
   if (!report?.classifications) return [];
   return Object.entries(report.classifications)
@@ -66,6 +70,7 @@ export function DriftPanel({
   const [error, setError] = useState<string | null>(null);
   const supported = SUPPORTED_TOOLS.has(tool);
   const findings = useMemo(() => normalizeFindings(report), [report]);
+  const suppressedFindings = useMemo(() => normalizeSuppressedFindings(report), [report]);
   const classifications = useMemo(() => normalizeClassifications(report), [report]);
 
   const run = async () => {
@@ -128,9 +133,16 @@ export function DriftPanel({
                 </div>
               )}
             </div>
-            <span className={`rounded border px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-widest ${findings.length > 0 ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'}`}>
-              {findings.length} finding{findings.length === 1 ? '' : 's'}
-            </span>
+            <div className="flex flex-shrink-0 flex-col items-end gap-1">
+              <span className={`rounded border px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-widest ${findings.length > 0 ? 'border-amber-500/30 bg-amber-500/10 text-amber-300' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'}`}>
+                {findings.length} finding{findings.length === 1 ? '' : 's'}
+              </span>
+              {suppressedFindings.length > 0 && (
+                <span className="rounded border border-border bg-background/70 px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-widest text-muted-foreground">
+                  {suppressedFindings.length} suppressed
+                </span>
+              )}
+            </div>
           </div>
           {classifications.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
@@ -156,7 +168,7 @@ export function DriftPanel({
 
         {report && findings.length === 0 && (
           <div className="rounded-md border border-border bg-card px-3 py-8 text-center text-xs text-muted-foreground">
-            {report.has_state ? 'No drift findings.' : 'No state file was found for this project.'}
+            {report.has_state ? 'No active drift findings.' : 'No state file was found for this project.'}
           </div>
         )}
 
@@ -214,6 +226,46 @@ export function DriftPanel({
               </article>
             ))}
           </div>
+        )}
+
+        {suppressedFindings.length > 0 && (
+          <section className="mt-4">
+            <div className="mb-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+              Suppressed
+            </div>
+            <div className="space-y-3">
+              {suppressedFindings.map((finding, index) => (
+                <article
+                  key={`suppressed-${finding.address}-${finding.path ?? finding.status}-${index}`}
+                  className="rounded-md border border-border bg-card/50 p-3 opacity-75"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate text-xs font-semibold text-foreground">
+                        {finding.address}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-2 text-[10px] font-mono uppercase tracking-widest text-muted-foreground">
+                        <span>{finding.status}</span>
+                        {finding.path && <span>{finding.path}</span>}
+                      </div>
+                    </div>
+                    <span className={`flex-shrink-0 rounded border px-2 py-0.5 font-mono text-[10px] font-bold uppercase tracking-widest ${classificationStyle(finding.classification)}`}>
+                      {formatLabel(finding.classification)}
+                    </span>
+                  </div>
+
+                  <div className="mt-3 rounded border border-border bg-background/50 px-2 py-2">
+                    <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                      Suppression reason
+                    </div>
+                    <div className="mt-1 text-xs text-foreground">
+                      {finding.suppression_reason || 'suppressed by drift rule'}
+                    </div>
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
         )}
       </div>
     </div>

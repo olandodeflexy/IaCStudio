@@ -1,6 +1,33 @@
 import { describe, expect, it } from 'vitest';
 
-import { normalizeLayeredProject, resourcesForEnv } from './app/layered';
+import { extractLayoutMeta, normalizeLayeredProject, resourcesForEnv } from './app/layered';
+
+describe('extractLayoutMeta', () => {
+  it('preserves drift suppression metadata for flat projects', () => {
+    expect(extractLayoutMeta({
+      drift: {
+        suppressions: [
+          {
+            address: 'aws_s3_bucket.logs',
+            path: 'tags',
+            reason: 'provider-managed owner tag',
+          },
+        ],
+      },
+      resources: [],
+    })).toEqual({
+      drift: {
+        suppressions: [
+          {
+            address: 'aws_s3_bucket.logs',
+            path: 'tags',
+            reason: 'provider-managed owner tag',
+          },
+        ],
+      },
+    });
+  });
+});
 
 describe('normalizeLayeredProject', () => {
   it('drops empty or invalid environment tool maps', () => {

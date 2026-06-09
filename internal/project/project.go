@@ -22,6 +22,7 @@ type State struct {
 	Environments []string          `json:"environments,omitempty"`
 	EnvTools     map[string]string `json:"environment_tools,omitempty"`
 	Modules      json.RawMessage   `json:"modules,omitempty"`
+	Drift        json.RawMessage   `json:"drift,omitempty"`
 	Tags         map[string]string `json:"tags,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
 	UpdatedAt    time.Time         `json:"updated_at"`

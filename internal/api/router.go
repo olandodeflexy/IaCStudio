@@ -337,6 +337,9 @@ type projectToolDescriptor struct {
 	Tool             string            `json:"tool"`
 	Environments     []string          `json:"environments"`
 	EnvironmentTools map[string]string `json:"environment_tools"`
+	Drift            struct {
+		Suppressions []drift.SuppressionRule `json:"suppressions"`
+	} `json:"drift"`
 }
 
 func readProjectToolDescriptor(projectPath string) (projectToolDescriptor, error) {
@@ -2006,7 +2009,14 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		for _, res := range resources {
 			codeResources[res.Type+"."+res.Name] = res.Properties
 		}
-		report, err := driftDetector.Detect(workDir, codeResources)
+		var suppressions []drift.SuppressionRule
+		if descriptor, descriptorErr := readProjectToolDescriptor(projectPath); descriptorErr == nil {
+			suppressions = descriptor.Drift.Suppressions
+		}
+		report, err := driftDetector.DetectWithOptions(workDir, codeResources, drift.DetectOptions{
+			Env:          req.Env,
+			Suppressions: suppressions,
+		})
 		if err != nil {
 			http.Error(w, err.Error(), 500)
 			return

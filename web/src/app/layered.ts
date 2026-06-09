@@ -2,12 +2,11 @@ import type { Edge } from '../legacy';
 import type { LayeredModule, LayeredProject } from '../types';
 
 export const extractLayoutMeta = (state: any) => {
-  if (!state?.layout) return null;
   const meta: Record<string, any> = {};
-  for (const key of ['layout', 'blueprint', 'project_name', 'cloud', 'environments', 'environment_tools', 'modules', 'tags']) {
+  for (const key of ['layout', 'blueprint', 'project_name', 'cloud', 'environments', 'environment_tools', 'modules', 'tags', 'drift']) {
     if (state[key] !== undefined) meta[key] = state[key];
   }
-  return meta;
+  return Object.keys(meta).length > 0 ? meta : null;
 };
 
 export const normalizeLayeredProject = (state: any): LayeredProject | null => {
