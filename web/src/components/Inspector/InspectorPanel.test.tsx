@@ -36,6 +36,12 @@ vi.mock('../ScanPanel', () => ({
   ),
 }));
 
+vi.mock('../DriftPanel', () => ({
+  DriftPanel: ({ projectName, tool, env }: any) => (
+    <div>Drift panel {projectName} {tool} {env}</div>
+  ),
+}));
+
 vi.mock('../ModuleRegistry', () => ({
   ModuleRegistryPanel: ({ initialQuery }: any) => (
     <div>Module registry {initialQuery}</div>
@@ -200,8 +206,15 @@ describe('InspectorPanel', () => {
     renderInspector({ activeTab: 'modules' });
 
     expect(screen.getByRole('button', { name: 'Cloud' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Drift' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Modules' })).toBeInTheDocument();
     expect(screen.getByText('Module registry vpc')).toBeInTheDocument();
+  });
+
+  it('renders the drift tab with tool and environment context', () => {
+    renderInspector({ activeTab: 'drift', activeEnv: 'dev' });
+
+    expect(screen.getByText('Drift panel demo terraform dev')).toBeInTheDocument();
   });
 
   it('renders the cloud connections tab', () => {
