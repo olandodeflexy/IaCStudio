@@ -255,12 +255,19 @@ export function DriftPanel({
                   )}
                 </div>
               ))}
+              {proposal.file_changes.length > 3 && (
+                <div className="text-[10px] text-muted-foreground">
+                  +{proposal.file_changes.length - 3} more change{proposal.file_changes.length - 3 !== 1 ? 's' : ''} — see PR description
+                </div>
+              )}
             </div>
           )}
 
           {proposal.warnings && proposal.warnings.length > 0 && (
-            <div className="mt-3 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-2 text-xs leading-5 text-amber-200">
-              {proposal.warnings[0]}
+            <div className="mt-3 space-y-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-2 text-xs leading-5 text-amber-200">
+              {proposal.warnings.map((warning, i) => (
+                <div key={i}>{warning}</div>
+              ))}
             </div>
           )}
         </section>

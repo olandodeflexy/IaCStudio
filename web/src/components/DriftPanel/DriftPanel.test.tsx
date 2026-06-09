@@ -110,6 +110,74 @@ describe('DriftPanel', () => {
     expect(await screen.findByText('Revert unauthorized drift for demo')).toBeInTheDocument();
     expect(screen.getByText('branch iac-studio-drift-revert-demo-dev')).toBeInTheDocument();
     expect(screen.getByText('Restore live aws_security_group.web ingress to the value declared in code.')).toBeInTheDocument();
+    expect(screen.getByText('Revert drafts do not edit IaC files.')).toBeInTheDocument();
+  });
+
+  it('shows all warnings and a +N overflow note when there are more than 3 file changes', async () => {
+    const changes = Array.from({ length: 5 }, (_, i) => ({
+      path: `main.tf`,
+      line: i + 1,
+      action: 'revert',
+      address: `aws_instance.host${i}`,
+      field: 'ami',
+      summary: `Restore host${i} ami.`,
+    }));
+    const client = {
+      runDrift: vi.fn().mockResolvedValue({
+        has_state: true,
+        state_path: '/tmp/demo/terraform.tfstate',
+        drifted: [],
+        findings: changes.map((c) => ({
+          address: c.address,
+          type: 'aws_instance',
+          name: c.address.split('.')[1],
+          status: 'drifted',
+          path: 'ami',
+          expected_value: 'ami-old',
+          current_value: 'ami-new',
+          classification: 'unauthorized_change',
+          recommended_action: 'revert_or_codify_after_review',
+          reason: 'AMI drift.',
+        })),
+        missing: [],
+        unmanaged: [],
+        in_sync: 0,
+        total: 5,
+        classifications: { unauthorized_change: 5 },
+        summary: '5 resources: 0 in sync, 5 drifted, 0 missing from state, 0 unmanaged',
+      }),
+      createDriftRemediation: vi.fn().mockResolvedValue({
+        mode: 'revert',
+        title: 'Revert unauthorized drift for demo',
+        branch: 'iac-studio-drift-revert-demo',
+        commit_message: 'Document drift revert for demo',
+        body: '## Summary',
+        findings: [],
+        file_changes: changes,
+        warnings: ['Revert drafts do not edit IaC files.', 'Review network changes carefully.'],
+      }),
+    };
+
+    render(<DriftPanel projectName="demo" tool="terraform" client={client} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run drift' }));
+    expect(await screen.findByText('aws_instance.host0')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Draft revert PR' }));
+
+    await waitFor(() => {
+      expect(client.createDriftRemediation).toHaveBeenCalled();
+    });
+
+    // Only first 3 changes shown, with an overflow indicator
+    expect((await screen.findAllByText('aws_instance.host0')).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('aws_instance.host1').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('aws_instance.host2').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('+2 more changes — see PR description')).toBeInTheDocument();
+
+    // Both warnings are visible
+    expect(screen.getByText('Revert drafts do not edit IaC files.')).toBeInTheDocument();
+    expect(screen.getByText('Review network changes carefully.')).toBeInTheDocument();
   });
 
   it('shows a no-state result without fabricating findings', async () => {
