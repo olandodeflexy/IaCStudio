@@ -260,6 +260,39 @@ describe('api.runDrift', () => {
   });
 });
 
+describe('api.createDriftRemediation', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts remediation mode with tool and environment', async () => {
+    const response = {
+      mode: 'revert',
+      title: 'Revert unauthorized drift for demo',
+      branch: 'iac-studio-drift-revert-demo-dev',
+      commit_message: 'Document drift revert for demo',
+      body: '## Summary',
+      findings: [],
+      file_changes: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.createDriftRemediation('demo', { tool: 'terraform', env: 'dev', mode: 'revert' })).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/drift/remediation', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool: 'terraform', env: 'dev', mode: 'revert' }),
+    });
+  });
+});
+
 describe('api.suggest', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

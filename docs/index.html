@@ -408,8 +408,10 @@ iac-studio</code></pre>
               whether to investigate, codify, import, or revert. Known provider noise can be
               muted with explicit <code>drift.suppressions</code> rules in
               <code>.iac-studio.json</code>; suppressed findings remain visible in the Drift tab
-              but no longer count as active findings. Export converts the current topology into
-              alternate formats such as Pulumi TypeScript, CDK Python, and CloudFormation where supported.
+              but no longer count as active findings. From active findings, the Drift tab can draft
+              codify or revert PR metadata with branch names, commit messages, review notes, source
+              locations, and validation steps. Export converts the current topology into alternate
+              formats such as Pulumi TypeScript, CDK Python, and CloudFormation where supported.
             </p>
             <pre><code>{
   "drift": {
@@ -756,8 +758,8 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
                 </tr>
                 <tr>
                   <td>Modules, drift, export</td>
-                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET/POST /api/projects/{name}/drift</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
-                  <td>Discover modules, promote resources, detect classified Terraform/OpenTofu state drift, and export alternate IaC formats.</td>
+                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET/POST /api/projects/{name}/drift</code><br><code>POST /api/projects/{name}/drift/remediation</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
+                  <td>Discover modules, promote resources, detect classified Terraform/OpenTofu state drift, draft codify/revert remediation PR payloads, and export alternate IaC formats.</td>
                 </tr>
                 <tr>
                   <td>Realtime</td>

@@ -401,6 +401,95 @@ func hybridToolResolutionMessage(missingEnvMessage, env string) string {
 	return fmt.Sprintf("unresolved hybrid tool for env %q; check .iac-studio.json environment_tools", env)
 }
 
+type projectDriftRequest struct {
+	Tool string
+	Env  string
+}
+
+type projectDriftRun struct {
+	Report    *drift.DriftReport
+	Resources []parser.Resource
+	WorkDir   string
+	Tool      string
+	Env       string
+}
+
+func runProjectDrift(projectsDir, name string, req projectDriftRequest, detector *drift.Detector) (*projectDriftRun, int, string) {
+	projectPath, err := safeProjectPath(projectsDir, name)
+	if err != nil {
+		return nil, http.StatusBadRequest, err.Error()
+	}
+
+	tool := effectiveProjectTool(projectPath, req.Tool, req.Env)
+	if tool == "multi" {
+		return nil, http.StatusBadRequest, hybridToolResolutionMessage("env is required when detecting drift for hybrid projects", req.Env)
+	}
+	if tool != "terraform" && tool != "opentofu" {
+		return nil, http.StatusBadRequest, "drift detection currently supports Terraform and OpenTofu state"
+	}
+
+	workDir := projectPath
+	if req.Env != "" {
+		subPath, subErr := safeSubdir(projectPath, "environments", req.Env)
+		if subErr != nil {
+			return nil, http.StatusBadRequest, "invalid env: " + subErr.Error()
+		}
+		workDir = subPath
+	}
+
+	p := parser.ForTool(tool)
+	resources, err := p.ParseDir(workDir)
+	if err != nil {
+		return nil, http.StatusInternalServerError, err.Error()
+	}
+	codeResources := make(map[string]map[string]interface{})
+	for _, res := range resources {
+		codeResources[res.Type+"."+res.Name] = res.Properties
+	}
+
+	var suppressions []drift.SuppressionRule
+	if descriptor, descriptorErr := readProjectToolDescriptor(projectPath); descriptorErr == nil {
+		suppressions = descriptor.Drift.Suppressions
+	}
+	report, err := detector.DetectWithOptions(workDir, codeResources, drift.DetectOptions{
+		Env:          req.Env,
+		Suppressions: suppressions,
+	})
+	if err != nil {
+		return nil, http.StatusInternalServerError, err.Error()
+	}
+	return &projectDriftRun{
+		Report:    report,
+		Resources: resources,
+		WorkDir:   workDir,
+		Tool:      tool,
+		Env:       req.Env,
+	}, http.StatusOK, ""
+}
+
+func driftResourceLocations(workDir string, resources []parser.Resource) map[string]drift.ResourceLocation {
+	locations := make(map[string]drift.ResourceLocation, len(resources))
+	for _, res := range resources {
+		addr := res.Type + "." + res.Name
+		locations[addr] = drift.ResourceLocation{
+			File: relativeSourcePath(workDir, res.File),
+			Line: res.Line,
+		}
+	}
+	return locations
+}
+
+func relativeSourcePath(root, path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	rel, err := filepath.Rel(root, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) {
+		return filepath.ToSlash(filepath.Base(path))
+	}
+	return filepath.ToSlash(rel)
+}
+
 func parseProjectResources(projectPath, tool, env string) ([]parser.Resource, error) {
 	if tool == "multi" {
 		if env == "" {
@@ -1954,11 +2043,6 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 	handleDrift := func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
-		projectPath, err := safeProjectPath(projectsDir, name)
-		if err != nil {
-			http.Error(w, err.Error(), 400)
-			return
-		}
 
 		limitBody(w, r)
 		var req struct {
@@ -1978,53 +2062,60 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			req.Env = r.URL.Query().Get("env")
 		}
 
-		tool := effectiveProjectTool(projectPath, req.Tool, req.Env)
-		if tool == "multi" {
-			http.Error(w, hybridToolResolutionMessage("env is required when detecting drift for hybrid projects", req.Env), 400)
+		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
+			Tool: req.Tool,
+			Env:  req.Env,
+		}, driftDetector)
+		if run == nil {
+			http.Error(w, message, status)
 			return
 		}
-		if tool != "terraform" && tool != "opentofu" {
-			http.Error(w, "drift detection currently supports Terraform and OpenTofu state", 400)
-			return
-		}
-
-		workDir := projectPath
-		if req.Env != "" {
-			subPath, subErr := safeSubdir(projectPath, "environments", req.Env)
-			if subErr != nil {
-				http.Error(w, "invalid env: "+subErr.Error(), 400)
-				return
-			}
-			workDir = subPath
-		}
-
-		p := parser.ForTool(tool)
-		resources, err := p.ParseDir(workDir)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		// Build code resource index
-		codeResources := make(map[string]map[string]interface{})
-		for _, res := range resources {
-			codeResources[res.Type+"."+res.Name] = res.Properties
-		}
-		var suppressions []drift.SuppressionRule
-		if descriptor, descriptorErr := readProjectToolDescriptor(projectPath); descriptorErr == nil {
-			suppressions = descriptor.Drift.Suppressions
-		}
-		report, err := driftDetector.DetectWithOptions(workDir, codeResources, drift.DetectOptions{
-			Env:          req.Env,
-			Suppressions: suppressions,
-		})
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		_ = json.NewEncoder(w).Encode(report)
+		_ = json.NewEncoder(w).Encode(run.Report)
 	}
 	mux.HandleFunc("GET /api/projects/{name}/drift", handleDrift)
 	mux.HandleFunc("POST /api/projects/{name}/drift", handleDrift)
+
+	mux.HandleFunc("POST /api/projects/{name}/drift/remediation", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		limitBody(w, r)
+		var req struct {
+			Tool string `json:"tool,omitempty"`
+			Env  string `json:"env,omitempty"`
+			Mode string `json:"mode"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body: "+err.Error(), 400)
+			return
+		}
+		if req.Tool == "" {
+			req.Tool = r.URL.Query().Get("tool")
+		}
+		if req.Env == "" {
+			req.Env = r.URL.Query().Get("env")
+		}
+
+		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
+			Tool: req.Tool,
+			Env:  req.Env,
+		}, driftDetector)
+		if run == nil {
+			http.Error(w, message, status)
+			return
+		}
+		proposal, err := drift.BuildRemediationProposal(drift.RemediationInput{
+			ProjectName: name,
+			Tool:        run.Tool,
+			Env:         run.Env,
+			Mode:        req.Mode,
+			Findings:    run.Report.Findings,
+			Locations:   driftResourceLocations(run.WorkDir, run.Resources),
+		})
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(proposal)
+	})
 
 	// ─── Multi-Format Export ───
 

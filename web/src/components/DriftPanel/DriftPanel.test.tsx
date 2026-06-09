@@ -49,6 +49,69 @@ describe('DriftPanel', () => {
     expect(screen.getByText('["0.0.0.0/0"]')).toBeInTheDocument();
   });
 
+  it('drafts a remediation PR proposal for active findings', async () => {
+    const client = {
+      runDrift: vi.fn().mockResolvedValue({
+        has_state: true,
+        state_path: '/tmp/demo/terraform.tfstate',
+        drifted: [],
+        findings: [
+          {
+            address: 'aws_security_group.web',
+            type: 'aws_security_group',
+            name: 'web',
+            status: 'drifted',
+            path: 'ingress',
+            expected_value: [],
+            current_value: [{ cidr_blocks: ['0.0.0.0/0'] }],
+            classification: 'unauthorized_change',
+            recommended_action: 'revert_or_codify_after_review',
+            reason: 'Network drift can change reachability.',
+          },
+        ],
+        missing: [],
+        unmanaged: [],
+        in_sync: 0,
+        total: 1,
+        classifications: { unauthorized_change: 1 },
+        summary: '1 resources: 0 in sync, 1 drifted, 0 missing from state, 0 unmanaged',
+      }),
+      createDriftRemediation: vi.fn().mockResolvedValue({
+        mode: 'revert',
+        title: 'Revert unauthorized drift for demo',
+        branch: 'iac-studio-drift-revert-demo-dev',
+        commit_message: 'Document drift revert for demo',
+        body: '## Summary',
+        findings: [],
+        file_changes: [
+          {
+            path: 'main.tf',
+            line: 2,
+            action: 'revert',
+            address: 'aws_security_group.web',
+            field: 'ingress',
+            summary: 'Restore live aws_security_group.web ingress to the value declared in code.',
+          },
+        ],
+        warnings: ['Revert drafts do not edit IaC files.'],
+      }),
+    };
+
+    render(<DriftPanel projectName="demo" tool="terraform" env="dev" client={client} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run drift' }));
+    expect(await screen.findByText('aws_security_group.web')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Draft revert PR' }));
+
+    await waitFor(() => {
+      expect(client.createDriftRemediation).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', mode: 'revert' });
+    });
+    expect(await screen.findByText('Revert unauthorized drift for demo')).toBeInTheDocument();
+    expect(screen.getByText('branch iac-studio-drift-revert-demo-dev')).toBeInTheDocument();
+    expect(screen.getByText('Restore live aws_security_group.web ingress to the value declared in code.')).toBeInTheDocument();
+  });
+
   it('shows a no-state result without fabricating findings', async () => {
     const client = {
       runDrift: vi.fn().mockResolvedValue({
