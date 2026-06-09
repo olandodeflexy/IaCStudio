@@ -233,6 +233,8 @@ describe('api.runDrift', () => {
       state_path: '/tmp/demo/terraform.tfstate',
       drifted: [],
       findings: [],
+      suppressed_findings: [],
+      suppressed: 0,
       missing: [],
       unmanaged: [],
       in_sync: 1,

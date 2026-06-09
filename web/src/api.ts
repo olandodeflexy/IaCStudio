@@ -206,6 +206,8 @@ export interface DriftFinding {
   classification: string;
   recommended_action: string;
   reason: string;
+  suppressed?: boolean;
+  suppression_reason?: string;
 }
 
 export interface DriftReport {
@@ -213,6 +215,8 @@ export interface DriftReport {
   state_path: string;
   drifted: DriftResource[];
   findings: DriftFinding[];
+  suppressed_findings?: DriftFinding[];
+  suppressed?: number;
   missing: string[];
   unmanaged: string[];
   in_sync: number;

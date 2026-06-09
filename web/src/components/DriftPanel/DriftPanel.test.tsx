@@ -73,6 +73,48 @@ describe('DriftPanel', () => {
     expect(screen.getByText('0 findings')).toBeInTheDocument();
   });
 
+  it('renders suppressed findings as muted known-noise items', async () => {
+    const client = {
+      runDrift: vi.fn().mockResolvedValue({
+        has_state: true,
+        state_path: '/tmp/demo/terraform.tfstate',
+        drifted: [],
+        findings: [],
+        suppressed_findings: [
+          {
+            address: 'aws_s3_bucket.logs',
+            type: 'aws_s3_bucket',
+            name: 'logs',
+            status: 'drifted',
+            path: 'tags',
+            classification: 'legitimate_config_change',
+            recommended_action: 'codify_or_accept',
+            reason: 'Only metadata fields drifted.',
+            suppressed: true,
+            suppression_reason: 'provider-managed owner tag',
+          },
+        ],
+        suppressed: 1,
+        missing: [],
+        unmanaged: [],
+        in_sync: 1,
+        total: 1,
+        classifications: {},
+        summary: '1 resources: 1 in sync, 0 drifted, 0 missing from state, 0 unmanaged, 1 suppressed',
+      }),
+    };
+
+    render(<DriftPanel projectName="demo" client={client} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Run drift' }));
+
+    expect(await screen.findByText('No active drift findings.')).toBeInTheDocument();
+    expect(screen.getByText('1 suppressed')).toBeInTheDocument();
+    expect(screen.getByText('Suppressed')).toBeInTheDocument();
+    expect(screen.getByText('aws_s3_bucket.logs')).toBeInTheDocument();
+    expect(screen.getByText('provider-managed owner tag')).toBeInTheDocument();
+  });
+
   it('shows the error banner when the API call fails', async () => {
     const client = {
       runDrift: vi.fn().mockRejectedValue(new Error('connection refused')),

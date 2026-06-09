@@ -30,16 +30,18 @@ const (
 
 // DriftReport describes differences between code and deployed state.
 type DriftReport struct {
-	HasState        bool              `json:"has_state"`
-	StatePath       string            `json:"state_path"`
-	Drifted         []DriftedResource `json:"drifted"`
-	Findings        []DriftFinding    `json:"findings"`
-	Missing         []string          `json:"missing"`   // in code but not in state
-	Unmanaged       []string          `json:"unmanaged"` // in state but not in code
-	InSync          int               `json:"in_sync"`   // resources matching
-	Total           int               `json:"total"`
-	Classifications map[string]int    `json:"classifications,omitempty"`
-	Summary         string            `json:"summary"`
+	HasState           bool              `json:"has_state"`
+	StatePath          string            `json:"state_path"`
+	Drifted            []DriftedResource `json:"drifted"`
+	Findings           []DriftFinding    `json:"findings"`
+	SuppressedFindings []DriftFinding    `json:"suppressed_findings"`
+	Suppressed         int               `json:"suppressed"`
+	Missing            []string          `json:"missing"`   // in code but not in state
+	Unmanaged          []string          `json:"unmanaged"` // in state but not in code
+	InSync             int               `json:"in_sync"`   // resources matching
+	Total              int               `json:"total"`
+	Classifications    map[string]int    `json:"classifications,omitempty"`
+	Summary            string            `json:"summary"`
 }
 
 // DriftedResource is a resource where state differs from code.
@@ -75,6 +77,28 @@ type DriftFinding struct {
 	Classification    string      `json:"classification"`
 	RecommendedAction string      `json:"recommended_action"`
 	Reason            string      `json:"reason"`
+	Suppressed        bool        `json:"suppressed,omitempty"`
+	SuppressionReason string      `json:"suppression_reason,omitempty"`
+}
+
+// SuppressionRule mutes known-noise drift findings. Every non-empty selector
+// must match a finding. Keep rules explicit: an entirely empty rule never
+// matches, so a malformed config cannot accidentally hide all drift.
+type SuppressionRule struct {
+	Address        string `json:"address,omitempty"`
+	Type           string `json:"type,omitempty"`
+	Name           string `json:"name,omitempty"`
+	Status         string `json:"status,omitempty"`
+	Path           string `json:"path,omitempty"`
+	Classification string `json:"classification,omitempty"`
+	Env            string `json:"env,omitempty"`
+	Reason         string `json:"reason,omitempty"`
+}
+
+// DetectOptions controls optional drift post-processing.
+type DetectOptions struct {
+	Env          string
+	Suppressions []SuppressionRule
 }
 
 // tfState represents the minimal Terraform state file structure we need.
@@ -96,7 +120,17 @@ type tfStateInstance struct {
 
 // Detect compares terraform.tfstate with the parsed code resources.
 func (d *Detector) Detect(projectDir string, codeResources map[string]map[string]interface{}) (*DriftReport, error) {
-	report := &DriftReport{Findings: []DriftFinding{}, Classifications: map[string]int{}}
+	return d.DetectWithOptions(projectDir, codeResources, DetectOptions{})
+}
+
+// DetectWithOptions compares terraform.tfstate with parsed code resources and
+// applies caller-supplied suppression rules to known-noise findings.
+func (d *Detector) DetectWithOptions(projectDir string, codeResources map[string]map[string]interface{}, opts DetectOptions) (*DriftReport, error) {
+	report := &DriftReport{
+		Findings:           []DriftFinding{},
+		SuppressedFindings: []DriftFinding{},
+		Classifications:    map[string]int{},
+	}
 
 	// Find state file
 	statePaths := []string{
@@ -160,7 +194,7 @@ func (d *Detector) Detect(projectDir string, codeResources map[string]map[string
 				Address: resource.Address, Type: resource.Type, Name: resource.Name,
 				Status: resource.Status, Classification: resource.Classification,
 				RecommendedAction: resource.RecommendedAction, Reason: resource.Reason,
-			})
+			}, opts)
 			continue
 		}
 
@@ -191,7 +225,7 @@ func (d *Detector) Detect(projectDir string, codeResources map[string]map[string
 					Address: addr, Type: resType, Name: resName, Status: "drifted",
 					Path: change.Path, ExpectedValue: change.CodeValue, CurrentValue: change.LiveValue,
 					Classification: classification, RecommendedAction: action, Reason: reason,
-				})
+				}, opts)
 			}
 		} else {
 			report.InSync++
@@ -218,7 +252,7 @@ func (d *Detector) Detect(projectDir string, codeResources map[string]map[string
 				Address: resource.Address, Type: resource.Type, Name: resource.Name,
 				Status: resource.Status, Classification: resource.Classification,
 				RecommendedAction: resource.RecommendedAction, Reason: resource.Reason,
-			})
+			}, opts)
 		}
 	}
 
@@ -226,13 +260,71 @@ func (d *Detector) Detect(projectDir string, codeResources map[string]map[string
 	driftCount := len(report.Drifted)
 	report.Summary = fmt.Sprintf("%d resources: %d in sync, %d drifted, %d missing from state, %d unmanaged",
 		report.Total, report.InSync, driftCount-len(report.Missing)-len(report.Unmanaged), len(report.Missing), len(report.Unmanaged))
+	if report.Suppressed > 0 {
+		report.Summary += fmt.Sprintf(", %d suppressed", report.Suppressed)
+	}
 
 	return report, nil
 }
 
-func (r *DriftReport) addFinding(f DriftFinding) {
+func (r *DriftReport) addFinding(f DriftFinding, opts DetectOptions) {
+	if reason, ok := suppressionReason(f, opts); ok {
+		f.Suppressed = true
+		f.SuppressionReason = reason
+		r.SuppressedFindings = append(r.SuppressedFindings, f)
+		r.Suppressed++
+		return
+	}
 	r.Findings = append(r.Findings, f)
 	r.Classifications[f.Classification]++
+}
+
+func suppressionReason(f DriftFinding, opts DetectOptions) (string, bool) {
+	for _, rule := range opts.Suppressions {
+		if !rule.matches(f, opts.Env) {
+			continue
+		}
+		if strings.TrimSpace(rule.Reason) != "" {
+			return strings.TrimSpace(rule.Reason), true
+		}
+		return "suppressed by drift rule", true
+	}
+	return "", false
+}
+
+func (r SuppressionRule) matches(f DriftFinding, env string) bool {
+	hasSelector := false
+	for _, value := range []string{r.Address, r.Type, r.Name, r.Status, r.Path, r.Classification, r.Env} {
+		if strings.TrimSpace(value) != "" {
+			hasSelector = true
+			break
+		}
+	}
+	if !hasSelector {
+		return false
+	}
+	if r.Env != "" && r.Env != env {
+		return false
+	}
+	if r.Address != "" && r.Address != f.Address {
+		return false
+	}
+	if r.Type != "" && r.Type != f.Type {
+		return false
+	}
+	if r.Name != "" && r.Name != f.Name {
+		return false
+	}
+	if r.Status != "" && r.Status != f.Status {
+		return false
+	}
+	if r.Path != "" && r.Path != f.Path {
+		return false
+	}
+	if r.Classification != "" && r.Classification != f.Classification {
+		return false
+	}
+	return true
 }
 
 func classifyResourceDrift(resourceType string, changes []DriftField) (classification, action, reason string) {

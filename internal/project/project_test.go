@@ -20,6 +20,7 @@ func TestLoadAndSavePreservesLayeredMetadata(t *testing.T) {
   "environments": ["dev", "prod"],
   "environment_tools": {"dev": "pulumi", "prod": "terraform"},
   "modules": ["networking", "compute"],
+  "drift": {"suppressions": [{"address": "aws_s3_bucket.logs", "path": "tags"}]},
   "tags": {"ManagedBy": "iac-studio"}
 }`)
 	if err := os.WriteFile(filepath.Join(projectDir, ".iac-studio.json"), initial, 0o644); err != nil {
@@ -46,6 +47,9 @@ func TestLoadAndSavePreservesLayeredMetadata(t *testing.T) {
 	if !bytes.Contains(state.Modules, []byte(`"networking"`)) {
 		t.Fatalf("expected raw module metadata to be preserved, got %s", string(state.Modules))
 	}
+	if !bytes.Contains(state.Drift, []byte(`"aws_s3_bucket.logs"`)) {
+		t.Fatalf("expected raw drift metadata to be preserved, got %s", string(state.Drift))
+	}
 
 	state.Resources = []Node{{ID: "aws_vpc.main", Type: "aws_vpc", Name: "main"}}
 	if err := manager.Save("demo", state); err != nil {
@@ -60,6 +64,8 @@ func TestLoadAndSavePreservesLayeredMetadata(t *testing.T) {
 		[]byte(`"environments": [`),
 		[]byte(`"environment_tools": {`),
 		[]byte(`"networking"`),
+		[]byte(`"drift": {`),
+		[]byte(`"aws_s3_bucket.logs"`),
 		[]byte(`"tags": {`),
 	} {
 		if !bytes.Contains(saved, needle) {

@@ -405,10 +405,24 @@ iac-studio</code></pre>
             <p>
               Open the Drift tab in the right panel to compare Terraform/OpenTofu state against
               code when state is present. IaC Studio classifies each finding and recommends
-              whether to investigate, codify, import, or revert. Export converts the current
-              topology into alternate formats such as Pulumi TypeScript, CDK Python, and
-              CloudFormation where supported.
+              whether to investigate, codify, import, or revert. Known provider noise can be
+              muted with explicit <code>drift.suppressions</code> rules in
+              <code>.iac-studio.json</code>; suppressed findings remain visible in the Drift tab
+              but no longer count as active findings. Export converts the current topology into
+              alternate formats such as Pulumi TypeScript, CDK Python, and CloudFormation where supported.
             </p>
+            <pre><code>{
+  "drift": {
+    "suppressions": [
+      {
+        "address": "aws_s3_bucket.logs",
+        "path": "tags",
+        "classification": "legitimate_config_change",
+        "reason": "provider-managed owner tag"
+      }
+    ]
+  }
+}</code></pre>
           </div>
         </section>
 

@@ -3,6 +3,7 @@ package drift
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -79,6 +80,82 @@ func TestDetectReportsMissingAndUnmanagedResources(t *testing.T) {
 	requireFinding(t, report, "aws_instance.manual", "", ClassificationUnauthorizedChange, ActionReviewImportOrRemove)
 	if len(report.Missing) != 1 || len(report.Unmanaged) != 1 {
 		t.Fatalf("missing/unmanaged = %#v/%#v", report.Missing, report.Unmanaged)
+	}
+}
+
+func TestDetectSuppressesKnownNoiseByAddressPathAndClassification(t *testing.T) {
+	dir := t.TempDir()
+	writeState(t, dir, `{
+		"version": 4,
+		"resources": [{
+			"mode": "managed",
+			"type": "aws_s3_bucket",
+			"name": "logs",
+			"instances": [{"attributes": {"tags": {"Owner": "old"}}}]
+		}]
+	}`)
+
+	report, err := New().DetectWithOptions(dir, map[string]map[string]interface{}{
+		"aws_s3_bucket.logs": {"tags": map[string]interface{}{"Owner": "platform"}},
+	}, DetectOptions{
+		Suppressions: []SuppressionRule{{
+			Address:        "aws_s3_bucket.logs",
+			Path:           "tags",
+			Classification: ClassificationLegitimateConfigChange,
+			Reason:         "provider-managed owner tag",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("detect drift: %v", err)
+	}
+
+	if len(report.Findings) != 0 {
+		t.Fatalf("active findings = %#v, want none", report.Findings)
+	}
+	if report.Suppressed != 1 || len(report.SuppressedFindings) != 1 {
+		t.Fatalf("suppressed = %d/%d, want 1/1", report.Suppressed, len(report.SuppressedFindings))
+	}
+	suppressed := report.SuppressedFindings[0]
+	if !suppressed.Suppressed || suppressed.SuppressionReason != "provider-managed owner tag" {
+		t.Fatalf("suppressed finding metadata = %#v", suppressed)
+	}
+	if report.Classifications[ClassificationLegitimateConfigChange] != 0 {
+		t.Fatalf("classification counts should exclude suppressed findings: %#v", report.Classifications)
+	}
+	if !strings.Contains(report.Summary, "1 suppressed") {
+		t.Fatalf("summary should include suppressed count: %s", report.Summary)
+	}
+}
+
+func TestDetectKeepsFindingsWhenSuppressionDoesNotMatch(t *testing.T) {
+	dir := t.TempDir()
+	writeState(t, dir, `{
+		"version": 4,
+		"resources": [{
+			"mode": "managed",
+			"type": "aws_security_group",
+			"name": "web",
+			"instances": [{"attributes": {"ingress": [{"cidr_blocks": ["0.0.0.0/0"]}]}}]
+		}]
+	}`)
+
+	report, err := New().DetectWithOptions(dir, map[string]map[string]interface{}{
+		"aws_security_group.web": {"ingress": []interface{}{}},
+	}, DetectOptions{
+		Suppressions: []SuppressionRule{{
+			Address:        "aws_security_group.web",
+			Path:           "tags",
+			Classification: ClassificationUnauthorizedChange,
+			Reason:         "wrong path should not match",
+		}},
+	})
+	if err != nil {
+		t.Fatalf("detect drift: %v", err)
+	}
+
+	requireFinding(t, report, "aws_security_group.web", "ingress", ClassificationUnauthorizedChange, ActionRevertOrCodifyAfterReview)
+	if report.Suppressed != 0 || len(report.SuppressedFindings) != 0 {
+		t.Fatalf("suppressed = %d/%d, want 0/0", report.Suppressed, len(report.SuppressedFindings))
 	}
 }
 
