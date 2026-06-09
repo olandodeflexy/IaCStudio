@@ -92,7 +92,7 @@ func RenderRemediationArtifacts(proposal RemediationProposal, createdAt time.Tim
 		Files:     make([]RemediationArtifactFile, 0, len(rendered)),
 	}
 	for i := range rendered {
-		rendered[i].Size = len([]byte(rendered[i].Content))
+		rendered[i].Size = len(rendered[i].Content)
 		set.Files = append(set.Files, rendered[i].RemediationArtifactFile)
 	}
 	return set, rendered, nil
@@ -155,7 +155,7 @@ func renderRemediationMetadata(id, root string, createdAt time.Time, proposal Re
 			Path:    file.Path,
 			Kind:    file.Kind,
 			Summary: file.Summary,
-			Size:    len([]byte(file.Content)),
+			Size:    len(file.Content),
 		})
 	}
 	files = append(files, RemediationArtifactFile{
