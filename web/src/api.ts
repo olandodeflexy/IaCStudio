@@ -249,6 +249,21 @@ export interface DriftRemediationProposal {
   warnings?: string[];
 }
 
+export interface DriftRemediationArtifactFile {
+  path: string;
+  kind: string;
+  summary: string;
+  size: number;
+}
+
+export interface DriftRemediationArtifactSet {
+  id: string;
+  root: string;
+  created_at: string;
+  proposal: DriftRemediationProposal;
+  files: DriftRemediationArtifactFile[];
+}
+
 // Checks res.ok and throws with the backend's error message instead of
 // letting callers hit an opaque JSON parse failure on text/plain errors.
 async function check(res: Response): Promise<Response> {
@@ -515,6 +530,15 @@ export const api = {
 
   async createDriftRemediation(projectName: string, req: { tool?: string; env?: string; mode: DriftRemediationMode }): Promise<DriftRemediationProposal> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/drift/remediation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
+  async createDriftRemediationArtifacts(projectName: string, req: { tool?: string; env?: string; mode: DriftRemediationMode; proposal?: DriftRemediationProposal }): Promise<DriftRemediationArtifactSet> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/drift/remediation/artifacts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),

@@ -262,3 +262,54 @@ func TestSyncDoesNotInjectProviderIntoNestedMainFile(t *testing.T) {
 		t.Fatalf("nested module main.tf should not receive provider block:\n%s", string(data))
 	}
 }
+
+func TestSafeProjectFilePathRejectsTraversal(t *testing.T) {
+projectPath := t.TempDir()
+
+cases := []struct {
+relPath string
+desc    string
+}{
+{"../escape", "parent traversal"},
+{"../../etc/passwd", "deep parent traversal"},
+{"/absolute/path", "absolute path"},
+{".", "dot only"},
+{"..", "double-dot only"},
+{"subdir/../../escape", "traversal through subdirectory"},
+{"", "empty path"},
+}
+
+for _, tc := range cases {
+t.Run(tc.desc, func(t *testing.T) {
+_, err := safeProjectFilePath(projectPath, tc.relPath)
+if err == nil {
+t.Fatalf("safeProjectFilePath(%q) should have returned an error", tc.relPath)
+}
+})
+}
+}
+
+func TestSafeProjectFilePathAcceptsValidPaths(t *testing.T) {
+projectPath := t.TempDir()
+
+cases := []struct {
+relPath  string
+wantSuff string
+}{
+{".iac-studio/remediations/my-drift/README.md", filepath.Join(".iac-studio", "remediations", "my-drift", "README.md")},
+{"main.tf", "main.tf"},
+{"modules/vpc/main.tf", filepath.Join("modules", "vpc", "main.tf")},
+}
+
+for _, tc := range cases {
+t.Run(tc.relPath, func(t *testing.T) {
+got, err := safeProjectFilePath(projectPath, tc.relPath)
+if err != nil {
+t.Fatalf("safeProjectFilePath(%q) unexpected error: %v", tc.relPath, err)
+}
+if !strings.HasSuffix(got, tc.wantSuff) {
+t.Fatalf("safeProjectFilePath(%q) = %q, want suffix %q", tc.relPath, got, tc.wantSuff)
+}
+})
+}
+}
