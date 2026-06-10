@@ -141,6 +141,36 @@ describe('DriftPanel', () => {
           },
         ],
       }),
+      createRollbackPullRequest: vi.fn().mockResolvedValue({
+        artifacts: {
+          id: 'rollback-demo-terraform-dev-checkpoint',
+          root: '.iac-studio/rollbacks/rollback-demo-terraform-dev-checkpoint',
+          created_at: '2026-06-10T13:00:00Z',
+          proposal,
+          files: [],
+        },
+        pull_request: {
+          title: proposal.title,
+          branch: proposal.branch,
+          base_branch: 'main',
+          commit: 'abc1234567890',
+          commit_message: proposal.commit_message,
+          body_path: '.iac-studio/rollbacks/rollback-demo-terraform-dev-checkpoint/proposal.md',
+          files: [],
+          commands: [
+            {
+              label: 'Push branch',
+              args: ['git', 'push', '-u', 'origin', proposal.branch],
+              display: `git push -u origin ${proposal.branch}`,
+            },
+            {
+              label: 'Open pull request',
+              args: ['gh', 'pr', 'create'],
+              display: 'gh pr create --base main --head iac-studio-rollback-demo-checkpoint',
+            },
+          ],
+        },
+      }),
     };
 
     render(<DriftPanel projectName="demo" tool="terraform" env="dev" client={client} />);
@@ -163,6 +193,15 @@ describe('DriftPanel', () => {
     });
     expect(await screen.findByText('Rollback artifacts written')).toBeInTheDocument();
     expect(screen.getByText('.iac-studio/rollbacks/rollback-demo-terraform-dev-checkpoint/README.md')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create PR branch' }));
+
+    await waitFor(() => {
+      expect(client.createRollbackPullRequest).toHaveBeenCalledWith('demo', snapshot.id, { env: 'dev', proposal });
+    });
+    expect(await screen.findByText('Rollback PR branch ready')).toBeInTheDocument();
+    expect(screen.getByText(/iac-studio-rollback-demo-checkpoint from main · abc1234/)).toBeInTheDocument();
+    expect(screen.getByText(`git push -u origin ${proposal.branch}`)).toBeInTheDocument();
   });
 
   it('drafts a remediation PR proposal for active findings', async () => {
@@ -303,6 +342,36 @@ describe('DriftPanel', () => {
           },
         ],
       }),
+      createDriftRemediationPullRequest: vi.fn().mockResolvedValue({
+        artifacts: {
+          id: 'iac-studio-drift-revert-demo-dev',
+          root: '.iac-studio/remediations/iac-studio-drift-revert-demo-dev',
+          created_at: '2026-06-09T19:00:00Z',
+          proposal,
+          files: [],
+        },
+        pull_request: {
+          title: proposal.title,
+          branch: proposal.branch,
+          base_branch: 'main',
+          commit: 'def4567890',
+          commit_message: proposal.commit_message,
+          body_path: '.iac-studio/remediations/iac-studio-drift-revert-demo-dev/pr-body.md',
+          files: [],
+          commands: [
+            {
+              label: 'Push branch',
+              args: ['git', 'push', '-u', 'origin', proposal.branch],
+              display: `git push -u origin ${proposal.branch}`,
+            },
+            {
+              label: 'Open pull request',
+              args: ['gh', 'pr', 'create'],
+              display: 'gh pr create --base main --head iac-studio-drift-revert-demo-dev',
+            },
+          ],
+        },
+      }),
     };
 
     render(<DriftPanel projectName="demo" tool="terraform" env="dev" client={client} />);
@@ -320,6 +389,15 @@ describe('DriftPanel', () => {
     expect(await screen.findByText('Review artifacts written')).toBeInTheDocument();
     expect(screen.getByText('.iac-studio/remediations/iac-studio-drift-revert-demo-dev')).toBeInTheDocument();
     expect(screen.getByText('.iac-studio/remediations/iac-studio-drift-revert-demo-dev/README.md')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create PR branch' }));
+
+    await waitFor(() => {
+      expect(client.createDriftRemediationPullRequest).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', mode: 'revert', proposal });
+    });
+    expect(await screen.findByText('Remediation PR branch ready')).toBeInTheDocument();
+    expect(screen.getByText(/iac-studio-drift-revert-demo-dev from main · def4567/)).toBeInTheDocument();
+    expect(screen.getByText(`git push -u origin ${proposal.branch}`)).toBeInTheDocument();
   });
 
   it('shows all warnings and a +N overflow note when there are more than 3 file changes', async () => {

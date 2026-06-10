@@ -411,7 +411,10 @@ iac-studio</code></pre>
               but no longer count as active findings. From active findings, the Drift tab can draft
               codify or revert PR metadata with branch names, commit messages, review notes, source
               locations, and validation steps, then write review artifacts under
-              <code>.iac-studio/remediations/</code>. Export converts the current topology into
+              <code>.iac-studio/remediations/</code>. The PR branch action creates a local git
+              branch, commits only those generated remediation artifacts, and returns explicit
+              <code>git push</code> and <code>gh pr create</code> commands. It does not collect
+              GitHub tokens, push branches, or apply cloud changes for you. Export converts the current topology into
               alternate formats such as Pulumi TypeScript, CDK Python, and CloudFormation where supported.
             </p>
             <pre><code>{
@@ -632,6 +635,13 @@ gcloud config set project my-platform-dev</code></pre>
             restore state, or bypass the normal plan, policy, and security gates.
           </div>
 
+          <p>
+            The rollback PR branch action writes the rollback artifacts, creates a local review
+            branch, and commits only files under <code>.iac-studio/rollbacks/</code>. IaC Studio
+            refuses to mix unrelated dirty source files into the branch and shows the commands
+            needed to push and open the pull request with your existing GitHub tooling.
+          </p>
+
           <pre><code>.iac-studio/
   rollbacks/
     rollback-demo-terraform-dev-20260610t120000z-.../
@@ -811,8 +821,8 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
                 </tr>
                 <tr>
                   <td>Modules, drift, export</td>
-                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET /api/projects/{name}/snapshots</code><br><code>POST /api/projects/{name}/snapshots/{snapshotID}/rollback</code><br><code>POST /api/projects/{name}/snapshots/{snapshotID}/rollback/artifacts</code><br><code>GET/POST /api/projects/{name}/drift</code><br><code>POST /api/projects/{name}/drift/remediation</code><br><code>POST /api/projects/{name}/drift/remediation/artifacts</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
-                  <td>Discover modules, promote resources, list recovery checkpoints, draft rollback proposals, detect classified Terraform/OpenTofu state drift, draft codify/revert remediation PR payloads, write remediation review artifacts, and export alternate IaC formats.</td>
+                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET /api/projects/{name}/snapshots</code><br><code>POST /api/projects/{name}/snapshots/{snapshotID}/rollback</code><br><code>POST /api/projects/{name}/snapshots/{snapshotID}/rollback/artifacts</code><br><code>POST /api/projects/{name}/snapshots/{snapshotID}/rollback/pr</code><br><code>GET/POST /api/projects/{name}/drift</code><br><code>POST /api/projects/{name}/drift/remediation</code><br><code>POST /api/projects/{name}/drift/remediation/artifacts</code><br><code>POST /api/projects/{name}/drift/remediation/pr</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
+                  <td>Discover modules, promote resources, list recovery checkpoints, draft rollback proposals, detect classified Terraform/OpenTofu state drift, draft codify/revert remediation PR payloads, write remediation/rollback review artifacts, create local PR-ready review branches, and export alternate IaC formats.</td>
                 </tr>
                 <tr>
                   <td>Realtime</td>

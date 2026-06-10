@@ -209,6 +209,91 @@ func TestCreateRollbackArtifactsWritesReviewFiles(t *testing.T) {
 	}
 }
 
+func TestCreateRollbackPREndpointCreatesReviewBranch(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	devDir := filepath.Join(projectDir, "environments", "dev")
+	if err := os.MkdirAll(devDir, 0o755); err != nil {
+		t.Fatalf("mkdir dev env: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(devDir, "main.tf"), []byte("resource \"aws_s3_bucket\" \"logs\" {}\n"), 0o644); err != nil {
+		t.Fatalf("write main.tf: %v", err)
+	}
+	initProjectGitRepo(t, projectDir)
+	target, err := recovery.RecordSnapshot(projectDir, devDir, recovery.SnapshotInput{
+		Project: "demo",
+		Tool:    "terraform",
+		Env:     "dev",
+		Command: "apply",
+	}, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("record target snapshot: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/snapshots/"+target.ID+"/rollback/pr",
+		"application/json",
+		strings.NewReader(`{"env":"dev"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST rollback pr: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rollback pr status = %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Artifacts struct {
+			ID string `json:"id"`
+		} `json:"artifacts"`
+		PullRequest struct {
+			Title      string `json:"title"`
+			Branch     string `json:"branch"`
+			BaseBranch string `json:"base_branch"`
+			Commit     string `json:"commit"`
+			BodyPath   string `json:"body_path"`
+			Commands   []struct {
+				Args []string `json:"args"`
+			} `json:"commands"`
+		} `json:"pull_request"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode rollback pr response: %v", err)
+	}
+	if payload.Artifacts.ID == "" ||
+		!strings.HasPrefix(payload.PullRequest.Branch, "iac-studio-rollback-demo-") ||
+		payload.PullRequest.BaseBranch != "main" ||
+		payload.PullRequest.Commit == "" ||
+		!strings.HasSuffix(payload.PullRequest.BodyPath, "/proposal.md") {
+		t.Fatalf("unexpected rollback PR payload: %#v", payload)
+	}
+	if len(payload.PullRequest.Commands) != 2 ||
+		payload.PullRequest.Commands[0].Args[0] != "git" ||
+		payload.PullRequest.Commands[1].Args[0] != "gh" {
+		t.Fatalf("unexpected rollback PR commands: %#v", payload.PullRequest.Commands)
+	}
+	if branch := gitOutputForTest(t, projectDir, "rev-parse", "--abbrev-ref", "HEAD"); branch != payload.PullRequest.Branch {
+		t.Fatalf("current branch = %q, want %q", branch, payload.PullRequest.Branch)
+	}
+	if status := gitOutputForTest(t, projectDir, "status", "--short"); status != "" {
+		for _, line := range strings.Split(status, "\n") {
+			if line != "" && !strings.Contains(line, ".iac-studio/snapshots/") {
+				t.Fatalf("worktree should only contain uncommitted snapshot metadata, got:\n%s", status)
+			}
+		}
+	}
+	committed := gitOutputForTest(t, projectDir, "show", "--name-only", "--format=", "HEAD")
+	if !strings.Contains(committed, ".iac-studio/rollbacks/") ||
+		!strings.Contains(committed, "proposal.md") ||
+		strings.Contains(committed, "environments/dev/main.tf") {
+		t.Fatalf("rollback review commit should contain only generated artifacts, got:\n%s", committed)
+	}
+}
+
 func TestCreateRollbackArtifactsRebuildsServerProposal(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo")
