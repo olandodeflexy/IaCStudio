@@ -588,6 +588,38 @@ gcloud config set project my-platform-dev</code></pre>
           </ol>
         </section>
 
+        <section id="recovery-checkpoints" class="doc-section" data-title="recovery checkpoints snapshots state metadata rollback apply audit">
+          <h2>Recovery Checkpoints</h2>
+          <p>
+            Every successful apply-style run records a lightweight checkpoint under
+            <code>.iac-studio/snapshots/</code>. Checkpoints store metadata and hashes for the
+            run; they do not copy raw state files or secrets into the browser.
+          </p>
+
+          <div class="feature-grid compact">
+            <article>
+              <h3>What is recorded</h3>
+              <p>Project, tool, environment, command, run directory, timestamp, and detected local state or saved plan hashes.</p>
+            </article>
+            <article>
+              <h3>When it records</h3>
+              <p>Terraform/OpenTofu <code>apply</code>, Pulumi <code>up</code>, and Ansible <code>playbook</code> after the command succeeds.</p>
+            </article>
+            <article>
+              <h3>Why it matters</h3>
+              <p>Drift, incident review, and rollback work need an auditable timeline of what was applied and which reviewed plan/state artifacts existed.</p>
+            </article>
+            <article>
+              <h3>How to view it</h3>
+              <p>Open the Drift panel and load recovery checkpoints for the current project or environment.</p>
+            </article>
+          </div>
+
+          <pre><code>.iac-studio/
+  snapshots/
+    20260610T120000Z-terraform-apply-dev-abc12345.json</code></pre>
+        </section>
+
         <section id="ai" class="doc-section" data-title="ai setup ollama openai anthropic models settings environment variables">
           <h2>AI Setup</h2>
           <p>
@@ -759,8 +791,8 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
                 </tr>
                 <tr>
                   <td>Modules, drift, export</td>
-                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET/POST /api/projects/{name}/drift</code><br><code>POST /api/projects/{name}/drift/remediation</code><br><code>POST /api/projects/{name}/drift/remediation/artifacts</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
-                  <td>Discover modules, promote resources, detect classified Terraform/OpenTofu state drift, draft codify/revert remediation PR payloads, write remediation review artifacts, and export alternate IaC formats.</td>
+                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET /api/projects/{name}/snapshots</code><br><code>GET/POST /api/projects/{name}/drift</code><br><code>POST /api/projects/{name}/drift/remediation</code><br><code>POST /api/projects/{name}/drift/remediation/artifacts</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
+                  <td>Discover modules, promote resources, list recovery checkpoints, detect classified Terraform/OpenTofu state drift, draft codify/revert remediation PR payloads, write remediation review artifacts, and export alternate IaC formats.</td>
                 </tr>
                 <tr>
                   <td>Realtime</td>
@@ -791,6 +823,7 @@ Go server
 Local project directory
   main.tf, index.ts, playbooks, modules
   .iac-studio.json
+  .iac-studio/snapshots/*.json
   terraform.tfstate when present</code></pre>
 
           <h3>Repository layout</h3>

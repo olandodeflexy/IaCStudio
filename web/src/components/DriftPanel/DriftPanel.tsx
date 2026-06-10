@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import { AlertCircle, FileText, GitCompareArrows, GitPullRequest, Play, RotateCcw } from 'lucide-react';
+import { AlertCircle, FileText, GitCompareArrows, GitPullRequest, History, Play, RotateCcw } from 'lucide-react';
 
 import {
   api,
@@ -8,6 +8,7 @@ import {
   type DriftRemediationMode,
   type DriftRemediationProposal,
   type DriftReport,
+  type StateSnapshot,
 } from '../../api';
 import { Button } from '../ui/button';
 
@@ -15,7 +16,7 @@ export interface DriftPanelProps {
   projectName: string;
   tool?: string;
   env?: string;
-  client?: Pick<typeof api, 'runDrift'> & Partial<Pick<typeof api, 'createDriftRemediation' | 'createDriftRemediationArtifacts'>>;
+  client?: Pick<typeof api, 'runDrift'> & Partial<Pick<typeof api, 'createDriftRemediation' | 'createDriftRemediationArtifacts' | 'listStateSnapshots'>>;
 }
 
 const SUPPORTED_TOOLS = new Set(['terraform', 'opentofu']);
@@ -66,6 +67,22 @@ function normalizeClassifications(report: DriftReport | null): [string, number][
     .sort(([left], [right]) => left.localeCompare(right));
 }
 
+function shortHash(value?: string): string {
+  if (!value) return '';
+  return value.slice(0, 12);
+}
+
+function formatSnapshotTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
 export function DriftPanel({
   projectName,
   tool = 'terraform',
@@ -78,14 +95,19 @@ export function DriftPanel({
   const [report, setReport] = useState<DriftReport | null>(null);
   const [proposal, setProposal] = useState<DriftRemediationProposal | null>(null);
   const [artifacts, setArtifacts] = useState<DriftRemediationArtifactSet | null>(null);
+  const [snapshots, setSnapshots] = useState<StateSnapshot[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [artifactError, setArtifactError] = useState<string | null>(null);
+  const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [loadingSnapshots, setLoadingSnapshots] = useState(false);
+  const [snapshotsLoaded, setSnapshotsLoaded] = useState(false);
   const supported = SUPPORTED_TOOLS.has(tool);
   const findings = useMemo(() => normalizeFindings(report), [report]);
   const suppressedFindings = useMemo(() => normalizeSuppressedFindings(report), [report]);
   const classifications = useMemo(() => normalizeClassifications(report), [report]);
   const canDraftRemediation = supported && findings.length > 0 && Boolean(client.createDriftRemediation);
+  const canListSnapshots = Boolean(client.listStateSnapshots);
 
   const run = async () => {
     if (!supported) return;
@@ -144,6 +166,21 @@ export function DriftPanel({
     }
   };
 
+  const loadSnapshots = async () => {
+    if (!client.listStateSnapshots) return;
+    setLoadingSnapshots(true);
+    setSnapshotError(null);
+    try {
+      const response = await client.listStateSnapshots(projectName, env);
+      setSnapshots(response);
+      setSnapshotsLoaded(true);
+    } catch (err) {
+      setSnapshotError(String(err));
+    } finally {
+      setLoadingSnapshots(false);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col gap-3 bg-background p-4">
       <header className="flex items-center gap-3">
@@ -174,6 +211,85 @@ export function DriftPanel({
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
           <span>{error}</span>
         </div>
+      )}
+
+      {canListSnapshots && (
+        <section className="rounded-md border border-border bg-card px-3 py-3">
+          <div className="flex items-center gap-2">
+            <History className="h-3.5 w-3.5 text-primary" />
+            <div className="min-w-0 flex-1">
+              <div className="text-xs font-semibold uppercase tracking-widest text-foreground">
+                Recovery checkpoints
+              </div>
+              <div className="mt-1 truncate text-[10px] text-muted-foreground">
+                Successful apply metadata for this {env ? `environment (${env})` : 'project'}
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={loadSnapshots}
+              disabled={loadingSnapshots}
+            >
+              <History className="h-3.5 w-3.5" />
+              {loadingSnapshots ? 'Loading...' : 'Load'}
+            </Button>
+          </div>
+          {snapshotError && (
+            <div className="mt-3 flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+              <span>{snapshotError}</span>
+            </div>
+          )}
+          {snapshots.length > 0 && (
+            <div className="mt-3 space-y-2">
+              {snapshots.slice(0, 3).map((snapshot) => (
+                <article
+                  key={snapshot.id}
+                  className="rounded border border-border bg-background/70 px-2 py-2"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="truncate font-mono text-[10px] font-semibold uppercase tracking-widest text-foreground">
+                      {snapshot.tool} {snapshot.command}
+                    </span>
+                    <span className="flex-shrink-0 text-[10px] text-muted-foreground">
+                      {formatSnapshotTime(snapshot.created_at)}
+                    </span>
+                  </div>
+                  <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                    {snapshot.work_dir || 'project root'} · {snapshot.id}
+                  </div>
+                  {snapshot.state_path && (
+                    <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                      state {snapshot.state_path} {shortHash(snapshot.state_sha256)}
+                    </div>
+                  )}
+                  {snapshot.plan_path && (
+                    <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                      plan {snapshot.plan_path} {shortHash(snapshot.plan_sha256)}
+                    </div>
+                  )}
+                  {snapshot.notes && snapshot.notes.length > 0 && (
+                    <div className="mt-2 text-[10px] leading-4 text-muted-foreground">
+                      {snapshot.notes[0]}
+                    </div>
+                  )}
+                </article>
+              ))}
+              {snapshots.length > 3 && (
+                <div className="text-[10px] text-muted-foreground">
+                  +{snapshots.length - 3} more checkpoint{snapshots.length - 3 === 1 ? '' : 's'}
+                </div>
+              )}
+            </div>
+          )}
+          {!loadingSnapshots && snapshots.length === 0 && !snapshotError && (
+            <div className="mt-3 rounded border border-dashed border-border px-2 py-3 text-center text-[10px] text-muted-foreground">
+              {snapshotsLoaded ? 'No checkpoints recorded yet.' : 'No checkpoints loaded yet.'}
+            </div>
+          )}
+        </section>
       )}
 
       {report && (

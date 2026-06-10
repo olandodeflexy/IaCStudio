@@ -29,6 +29,7 @@ import (
 	iacplan "github.com/iac-studio/iac-studio/internal/plan"
 	"github.com/iac-studio/iac-studio/internal/project"
 	pulumigen "github.com/iac-studio/iac-studio/internal/pulumi"
+	"github.com/iac-studio/iac-studio/internal/recovery"
 	"github.com/iac-studio/iac-studio/internal/registry"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/scaffold"
@@ -93,18 +94,25 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 // Used by the /api/projects/{name}/run endpoint to rebase execution
 // into environments/<env>/ for layered-v1 layouts so the runner finds
 // Pulumi.yaml / main.tf in the right workdir.
+func safePathSegment(seg string) error {
+	if seg == "" || seg == "." || seg == ".." ||
+		strings.ContainsAny(seg, `/\`) ||
+		strings.Contains(seg, "..") {
+		return fmt.Errorf("invalid path segment: %q", seg)
+	}
+	for _, r := range seg {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '-' || r == '_') {
+			return fmt.Errorf("invalid path segment: %q (only alphanumeric, hyphens, underscores)", seg)
+		}
+	}
+	return nil
+}
+
 func safeSubdir(projectPath string, segments ...string) (string, error) {
 	for _, seg := range segments {
-		if seg == "" || seg == "." || seg == ".." ||
-			strings.ContainsAny(seg, `/\`) ||
-			strings.Contains(seg, "..") {
-			return "", fmt.Errorf("invalid path segment: %q", seg)
-		}
-		for _, r := range seg {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-				(r >= '0' && r <= '9') || r == '-' || r == '_') {
-				return "", fmt.Errorf("invalid path segment: %q (only alphanumeric, hyphens, underscores)", seg)
-			}
+		if err := safePathSegment(seg); err != nil {
+			return "", err
 		}
 	}
 	joined := filepath.Join(append([]string{projectPath}, segments...)...)
@@ -1379,6 +1387,8 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		go func() {
 			result, err := run.ExecuteWithEnv(context.Background(), runPath, effectiveTool, req.Command, req.Env, commandEnv)
 			var classification *iacplan.ClassificationResult
+			var snapshot *recovery.StateSnapshot
+			var snapshotErr error
 			// Only record a successful plan — failed/cancelled plans don't count.
 			// 'preview' is Pulumi's equivalent of terraform plan; without it
 			// here, a pulumi up following a successful preview would be
@@ -1406,12 +1416,32 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				}
 				recordPlan(runPath)
 			}
+			if err == nil && commandRecordsSnapshot(req.Command) {
+				recorded, recordErr := recovery.RecordSnapshot(projectRoot, runPath, recovery.SnapshotInput{
+					Project: name,
+					Tool:    effectiveTool,
+					Env:     req.Env,
+					Command: req.Command,
+				}, time.Now().UTC())
+				if recordErr != nil {
+					snapshotErr = recordErr
+					log.Printf("state snapshot: failed to record metadata for %s (command=%s tool=%s): %v", name, req.Command, effectiveTool, recordErr)
+				} else {
+					snapshot = &recorded
+				}
+			}
 			msg := map[string]interface{}{
 				"type":    "terminal",
 				"project": name,
 			}
 			if classification != nil {
 				msg["plan_classification"] = classification
+			}
+			if snapshot != nil {
+				msg["state_snapshot"] = snapshot
+			}
+			if snapshotErr != nil {
+				msg["state_snapshot_error"] = snapshotErr.Error()
 			}
 			if connectionSummary.ID != "" {
 				msg["connection"] = map[string]string{
@@ -2080,6 +2110,39 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		}
 		report := secScanner.Scan(resources)
 		_ = json.NewEncoder(w).Encode(report)
+	})
+
+	// ─── Recovery Snapshots ───
+
+	mux.HandleFunc("GET /api/projects/{name}/snapshots", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		env := r.URL.Query().Get("env")
+		if env != "" {
+			if err := safePathSegment(env); err != nil {
+				http.Error(w, "invalid env: "+err.Error(), http.StatusBadRequest)
+				return
+			}
+		}
+		snapshots, err := recovery.ListSnapshots(projectPath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if env != "" {
+			filtered := snapshots[:0]
+			for _, snapshot := range snapshots {
+				if snapshot.Env == env {
+					filtered = append(filtered, snapshot)
+				}
+			}
+			snapshots = filtered
+		}
+		_ = json.NewEncoder(w).Encode(snapshots)
 	})
 
 	// ─── Drift Detection ───
