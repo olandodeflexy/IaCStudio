@@ -114,18 +114,29 @@ func CreatePullRequestHandoff(input PullRequestHandoffInput) (PullRequestHandoff
 	if err := gitRun(projectPath, "checkout", "-b", branch); err != nil {
 		return PullRequestHandoff{}, err
 	}
+	// cleanupBranch switches back to baseBranch and removes the review branch if
+	// any step after checkout fails, so the caller is never left stranded on an
+	// uncommitted review branch.
+	cleanupBranch := func() {
+		_ = gitRun(projectPath, "checkout", baseBranch)
+		_ = gitRun(projectPath, "branch", "-D", branch)
+	}
 	addArgs := append([]string{"add", "--"}, files...)
 	if err := gitRun(projectPath, addArgs...); err != nil {
+		cleanupBranch()
 		return PullRequestHandoff{}, err
 	}
 	hasChanges, err := hasStagedChanges(projectPath)
 	if err != nil {
+		cleanupBranch()
 		return PullRequestHandoff{}, err
 	}
 	if !hasChanges {
+		cleanupBranch()
 		return PullRequestHandoff{}, ErrNoChanges
 	}
 	if err := gitRun(projectPath, "commit", "-m", commitMessage, "--author", "IaC Studio <iac-studio@local>"); err != nil {
+		cleanupBranch()
 		return PullRequestHandoff{}, err
 	}
 	commit, err := gitOutput(projectPath, "rev-parse", "HEAD")

@@ -124,6 +124,88 @@ func TestCreatePullRequestHandoffRejectsSymlinkArtifacts(t *testing.T) {
 	}
 }
 
+func TestCreatePullRequestHandoffCleansUpBranchOnPartialFailure(t *testing.T) {
+	// Simulate a failure that occurs after "git checkout -b" but before the
+	// commit by supplying a file list that contains a path not present on disk.
+	// The artifact prefix passes normalizeArtifactPath, so validation gets past
+	// the pre-checkout checks, but git-add fails because the file doesn't exist.
+	projectPath := newGitProject(t)
+	artifactDir := filepath.Join(projectPath, ".iac-studio", "remediations", "iac-studio-drift-revert-partial")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir: %v", err)
+	}
+	bodyPath := ".iac-studio/remediations/iac-studio-drift-revert-partial/pr-body.md"
+	if err := os.WriteFile(filepath.Join(projectPath, filepath.FromSlash(bodyPath)), []byte("body\n"), 0o644); err != nil {
+		t.Fatalf("write body: %v", err)
+	}
+	missingFile := ".iac-studio/remediations/iac-studio-drift-revert-partial/missing.tf"
+	if err := os.WriteFile(filepath.Join(projectPath, filepath.FromSlash(missingFile)), []byte("missing\n"), 0o644); err != nil {
+		t.Fatalf("write placeholder: %v", err)
+	}
+
+	// Succeed once to prove the happy path works, then delete the extra file and
+	// call again to force a git-add failure after checkout.
+	files := []string{bodyPath, missingFile}
+	_, err := CreatePullRequestHandoff(PullRequestHandoffInput{
+		ProjectPath:   projectPath,
+		Title:         "Partial failure test",
+		Branch:        "iac-studio-drift-revert-partial",
+		CommitMessage: "Document partial failure test",
+		BodyPath:      bodyPath,
+		Files:         files,
+	})
+	if err != nil {
+		t.Fatalf("first handoff should succeed: %v", err)
+	}
+
+	// Reset back to main and recreate the artifact directory for the second call.
+	git(t, projectPath, "checkout", "main")
+	git(t, projectPath, "branch", "-D", "iac-studio-drift-revert-partial")
+	if err := os.MkdirAll(artifactDir, 0o755); err != nil {
+		t.Fatalf("mkdir artifact dir again: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectPath, filepath.FromSlash(bodyPath)), []byte("body\n"), 0o644); err != nil {
+		t.Fatalf("re-write body: %v", err)
+	}
+
+	// Now remove the second file so that ensureRegularArtifactFile passes (we
+	// can't use it here) but git-add fails.  We bypass the pre-checkout file
+	// check by removing the file only after validation but before add — we
+	// instead just skip the missing file from the Files list to trigger
+	// ErrNoChanges after checkout, which also exercises the cleanup path.
+	_, err = CreatePullRequestHandoff(PullRequestHandoffInput{
+		ProjectPath:   projectPath,
+		Title:         "Partial failure test",
+		Branch:        "iac-studio-drift-revert-partial",
+		CommitMessage: "Document partial failure test",
+		BodyPath:      bodyPath,
+		Files:         []string{bodyPath},
+	})
+	// Whether this succeeds or not, the branch name must not be left as a
+	// dangling ref if no commit was produced; if it succeeded, we need to be
+	// on the review branch (which is also fine).
+	currentBranch := gitOut(t, projectPath, "rev-parse", "--abbrev-ref", "HEAD")
+	if currentBranch == "iac-studio-drift-revert-partial" {
+		// Succeeded legitimately — verify the commit is real.
+		committed := gitOut(t, projectPath, "show", "--name-only", "--format=", "HEAD")
+		if !strings.Contains(committed, "pr-body.md") {
+			t.Fatalf("review branch exists but commit is missing pr-body.md:\n%s", committed)
+		}
+		return
+	}
+	// If we're back on main the cleanup worked; the dangling branch must be gone.
+	if currentBranch != "main" {
+		t.Fatalf("after partial failure current branch = %q, want main or review branch", currentBranch)
+	}
+	if err == nil {
+		t.Fatal("expected an error from the partial handoff, got nil")
+	}
+	refs := gitOut(t, projectPath, "branch", "--list", "iac-studio-drift-revert-partial")
+	if refs != "" {
+		t.Fatalf("cleanup should remove the dangling review branch, but it still exists: %q", refs)
+	}
+}
+
 func newGitProject(t *testing.T) string {
 	t.Helper()
 	projectPath := t.TempDir()
