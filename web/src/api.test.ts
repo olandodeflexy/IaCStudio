@@ -366,6 +366,126 @@ describe('api.listStateSnapshots', () => {
   });
 });
 
+describe('api.createRollbackProposal', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts rollback proposal requests for a selected checkpoint', async () => {
+    const response = {
+      id: 'rollback-demo-terraform-dev-checkpoint',
+      title: 'Rollback demo to checkpoint checkpoint',
+      branch: 'iac-studio-rollback-demo-checkpoint',
+      commit_message: 'Document rollback proposal for demo',
+      body: '## Summary',
+      tool: 'terraform',
+      env: 'dev',
+      work_dir: 'environments/dev',
+      target_snapshot: {
+        id: 'checkpoint',
+        project: 'demo',
+        tool: 'terraform',
+        env: 'dev',
+        command: 'apply',
+        work_dir: 'environments/dev',
+        created_at: '2026-06-10T12:00:00Z',
+        status: 'recorded',
+      },
+      classification: {
+        summary: {
+          safe: 0,
+          risky: 0,
+          destructive: 0,
+          unknown: 1,
+          total: 1,
+          requires_acknowledgment: true,
+          text: 'Semantic plan: 1 unknown change',
+        },
+        changes: [],
+      },
+      warnings: ['Generate and review a fresh plan before applying any rollback.'],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.createRollbackProposal('demo', 'checkpoint', { env: 'dev' })).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/snapshots/checkpoint/rollback', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ env: 'dev' }),
+    });
+  });
+});
+
+describe('api.createRollbackArtifacts', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('posts rollback artifact generation requests with the reviewed proposal', async () => {
+    const proposal = {
+      id: 'rollback-demo-terraform-dev-checkpoint',
+      title: 'Rollback demo to checkpoint checkpoint',
+      branch: 'iac-studio-rollback-demo-checkpoint',
+      commit_message: 'Document rollback proposal for demo',
+      body: '## Summary',
+      tool: 'terraform',
+      env: 'dev',
+      work_dir: 'environments/dev',
+      target_snapshot: {
+        id: 'checkpoint',
+        project: 'demo',
+        tool: 'terraform',
+        env: 'dev',
+        command: 'apply',
+        work_dir: 'environments/dev',
+        created_at: '2026-06-10T12:00:00Z',
+        status: 'recorded',
+      },
+      classification: {
+        summary: {
+          safe: 0,
+          risky: 0,
+          destructive: 0,
+          unknown: 1,
+          total: 1,
+          requires_acknowledgment: true,
+          text: 'Semantic plan: 1 unknown change',
+        },
+        changes: [],
+      },
+    };
+    const response = {
+      id: 'rollback-demo-terraform-dev-checkpoint',
+      root: '.iac-studio/rollbacks/rollback-demo-terraform-dev-checkpoint',
+      created_at: '2026-06-10T13:00:00Z',
+      proposal,
+      files: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.createRollbackArtifacts('demo', 'checkpoint', { env: 'dev', proposal })).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/snapshots/checkpoint/rollback/artifacts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ env: 'dev', proposal }),
+    });
+  });
+});
+
 describe('api.suggest', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

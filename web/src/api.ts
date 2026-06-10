@@ -282,6 +282,36 @@ export interface StateSnapshot {
   notes?: string[];
 }
 
+export interface RollbackProposal {
+  id: string;
+  title: string;
+  branch: string;
+  commit_message: string;
+  body: string;
+  tool: string;
+  env?: string;
+  work_dir: string;
+  target_snapshot: StateSnapshot;
+  current_snapshot?: StateSnapshot;
+  classification: PlanClassification;
+  warnings?: string[];
+}
+
+export interface RollbackArtifactFile {
+  path: string;
+  kind: string;
+  summary: string;
+  size: number;
+}
+
+export interface RollbackArtifactSet {
+  id: string;
+  root: string;
+  created_at: string;
+  proposal: RollbackProposal;
+  files: RollbackArtifactFile[];
+}
+
 // Checks res.ok and throws with the backend's error message instead of
 // letting callers hit an opaque JSON parse failure on text/plain errors.
 async function check(res: Response): Promise<Response> {
@@ -569,6 +599,24 @@ export const api = {
     if (env) params.set('env', env);
     const query = params.toString();
     const res = await fetch(`${BASE}/api/projects/${projectName}/snapshots${query ? `?${query}` : ''}`);
+    return (await check(res)).json();
+  },
+
+  async createRollbackProposal(projectName: string, snapshotId: string, req: { env?: string } = {}): Promise<RollbackProposal> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/snapshots/${snapshotId}/rollback`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
+  async createRollbackArtifacts(projectName: string, snapshotId: string, req: { env?: string; proposal?: RollbackProposal } = {}): Promise<RollbackArtifactSet> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/snapshots/${snapshotId}/rollback/artifacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
     return (await check(res)).json();
   },
 

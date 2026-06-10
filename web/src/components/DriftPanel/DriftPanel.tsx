@@ -8,6 +8,8 @@ import {
   type DriftRemediationMode,
   type DriftRemediationProposal,
   type DriftReport,
+  type RollbackArtifactSet,
+  type RollbackProposal,
   type StateSnapshot,
 } from '../../api';
 import { Button } from '../ui/button';
@@ -16,7 +18,13 @@ export interface DriftPanelProps {
   projectName: string;
   tool?: string;
   env?: string;
-  client?: Pick<typeof api, 'runDrift'> & Partial<Pick<typeof api, 'createDriftRemediation' | 'createDriftRemediationArtifacts' | 'listStateSnapshots'>>;
+  client?: Pick<typeof api, 'runDrift'> & Partial<Pick<typeof api,
+    'createDriftRemediation' |
+    'createDriftRemediationArtifacts' |
+    'listStateSnapshots' |
+    'createRollbackProposal' |
+    'createRollbackArtifacts'
+  >>;
 }
 
 const SUPPORTED_TOOLS = new Set(['terraform', 'opentofu']);
@@ -96,18 +104,25 @@ export function DriftPanel({
   const [proposal, setProposal] = useState<DriftRemediationProposal | null>(null);
   const [artifacts, setArtifacts] = useState<DriftRemediationArtifactSet | null>(null);
   const [snapshots, setSnapshots] = useState<StateSnapshot[]>([]);
+  const [rollbackProposal, setRollbackProposal] = useState<RollbackProposal | null>(null);
+  const [rollbackArtifacts, setRollbackArtifacts] = useState<RollbackArtifactSet | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [artifactError, setArtifactError] = useState<string | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
+  const [rollbackError, setRollbackError] = useState<string | null>(null);
+  const [rollbackArtifactError, setRollbackArtifactError] = useState<string | null>(null);
   const [loadingSnapshots, setLoadingSnapshots] = useState(false);
   const [snapshotsLoaded, setSnapshotsLoaded] = useState(false);
+  const [draftingRollbackID, setDraftingRollbackID] = useState<string | null>(null);
+  const [writingRollbackArtifacts, setWritingRollbackArtifacts] = useState(false);
   const supported = SUPPORTED_TOOLS.has(tool);
   const findings = useMemo(() => normalizeFindings(report), [report]);
   const suppressedFindings = useMemo(() => normalizeSuppressedFindings(report), [report]);
   const classifications = useMemo(() => normalizeClassifications(report), [report]);
   const canDraftRemediation = supported && findings.length > 0 && Boolean(client.createDriftRemediation);
   const canListSnapshots = Boolean(client.listStateSnapshots);
+  const canDraftRollback = Boolean(client.createRollbackProposal);
 
   const run = async () => {
     if (!supported) return;
@@ -174,10 +189,43 @@ export function DriftPanel({
       const response = await client.listStateSnapshots(projectName, env);
       setSnapshots(response);
       setSnapshotsLoaded(true);
+      setRollbackError(null);
     } catch (err) {
       setSnapshotError(String(err));
     } finally {
       setLoadingSnapshots(false);
+    }
+  };
+
+  const draftRollback = async (snapshot: StateSnapshot) => {
+    if (!client.createRollbackProposal) return;
+    setDraftingRollbackID(snapshot.id);
+    setRollbackError(null);
+    setRollbackArtifactError(null);
+    setRollbackProposal(null);
+    setRollbackArtifacts(null);
+    try {
+      const response = await client.createRollbackProposal(projectName, snapshot.id, { env });
+      setRollbackProposal(response);
+    } catch (err) {
+      setRollbackError(String(err));
+    } finally {
+      setDraftingRollbackID(null);
+    }
+  };
+
+  const writeRollbackArtifacts = async () => {
+    if (!rollbackProposal || !client.createRollbackArtifacts) return;
+    setWritingRollbackArtifacts(true);
+    setRollbackArtifactError(null);
+    setRollbackArtifacts(null);
+    try {
+      const response = await client.createRollbackArtifacts(projectName, rollbackProposal.target_snapshot.id, { env, proposal: rollbackProposal });
+      setRollbackArtifacts(response);
+    } catch (err) {
+      setRollbackArtifactError(String(err));
+    } finally {
+      setWritingRollbackArtifacts(false);
     }
   };
 
@@ -253,9 +301,23 @@ export function DriftPanel({
                     <span className="truncate font-mono text-[10px] font-semibold uppercase tracking-widest text-foreground">
                       {snapshot.tool} {snapshot.command}
                     </span>
-                    <span className="flex-shrink-0 text-[10px] text-muted-foreground">
-                      {formatSnapshotTime(snapshot.created_at)}
-                    </span>
+                    <div className="flex flex-shrink-0 items-center gap-2">
+                      <span className="text-[10px] text-muted-foreground">
+                        {formatSnapshotTime(snapshot.created_at)}
+                      </span>
+                      {canDraftRollback && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          onClick={() => draftRollback(snapshot)}
+                          disabled={draftingRollbackID !== null}
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
+                          {draftingRollbackID === snapshot.id ? 'Drafting...' : 'Rollback proposal'}
+                        </Button>
+                      )}
+                    </div>
                   </div>
                   <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
                     {snapshot.work_dir || 'project root'} · {snapshot.id}
@@ -289,6 +351,83 @@ export function DriftPanel({
               {snapshotsLoaded ? 'No checkpoints recorded yet.' : 'No checkpoints loaded yet.'}
             </div>
           )}
+        </section>
+      )}
+
+      {rollbackError && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span>{rollbackError}</span>
+        </div>
+      )}
+
+      {rollbackProposal && (
+        <section className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-3">
+          <div className="flex items-start gap-2">
+            <RotateCcw className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-amber-300" />
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-semibold text-foreground">{rollbackProposal.title}</div>
+              <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                branch {rollbackProposal.branch}
+              </div>
+              <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                target {rollbackProposal.target_snapshot.id}
+              </div>
+              <div className="mt-2 rounded border border-amber-500/30 bg-background/70 px-2 py-2 text-xs leading-5 text-amber-100">
+                Not an automatic undo. {rollbackProposal.classification.summary.text}; plan review is required before apply.
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={writeRollbackArtifacts}
+              disabled={writingRollbackArtifacts || !client.createRollbackArtifacts}
+            >
+              <FileText className="h-3.5 w-3.5" />
+              {writingRollbackArtifacts ? 'Writing...' : 'Write artifacts'}
+            </Button>
+          </div>
+
+          {rollbackProposal.warnings && rollbackProposal.warnings.length > 0 && (
+            <div className="mt-3 space-y-1 rounded border border-amber-500/30 bg-background/60 px-2 py-2 text-xs leading-5 text-amber-100">
+              {rollbackProposal.warnings.map((warning, i) => (
+                <div key={i}>{warning}</div>
+              ))}
+            </div>
+          )}
+        </section>
+      )}
+
+      {rollbackArtifactError && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span>{rollbackArtifactError}</span>
+        </div>
+      )}
+
+      {rollbackArtifacts && (
+        <section className="rounded-md border border-border bg-card px-3 py-3">
+          <div className="flex items-start gap-2">
+            <FileText className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary" />
+            <div className="min-w-0">
+              <div className="text-xs font-semibold text-foreground">Rollback artifacts written</div>
+              <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+                {rollbackArtifacts.root}
+              </div>
+            </div>
+          </div>
+          <div className="mt-3 space-y-1">
+            {rollbackArtifacts.files.map((file) => (
+              <div
+                key={file.path}
+                className="flex items-center justify-between gap-2 rounded border border-border bg-background/70 px-2 py-1.5"
+              >
+                <span className="truncate font-mono text-[10px] text-foreground">{file.path}</span>
+                <span className="flex-shrink-0 font-mono text-[10px] uppercase tracking-widest text-muted-foreground">{file.kind}</span>
+              </div>
+            ))}
+          </div>
         </section>
       )}
 

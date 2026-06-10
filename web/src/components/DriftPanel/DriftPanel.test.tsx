@@ -85,6 +85,86 @@ describe('DriftPanel', () => {
     expect(screen.getByText(/plan environments\/dev\/tfplan\.json def4567890ab/)).toBeInTheDocument();
   });
 
+  it('drafts rollback proposals and writes review artifacts from checkpoints', async () => {
+    const snapshot = {
+      id: '20260610T120000Z-terraform-apply-dev-abc12345',
+      project: 'demo',
+      tool: 'terraform',
+      env: 'dev',
+      command: 'apply',
+      work_dir: 'environments/dev',
+      state_path: 'environments/dev/terraform.tfstate',
+      state_sha256: 'abc1234567890abcdef',
+      state_size: 42,
+      created_at: '2026-06-10T12:00:00Z',
+      status: 'recorded',
+    };
+    const proposal = {
+      id: 'rollback-demo-terraform-dev-checkpoint',
+      title: 'Rollback demo to checkpoint 20260610T120000Z-terraform-apply-dev-abc12345',
+      branch: 'iac-studio-rollback-demo-checkpoint',
+      commit_message: 'Document rollback proposal for demo',
+      body: '## Summary',
+      tool: 'terraform',
+      env: 'dev',
+      work_dir: 'environments/dev',
+      target_snapshot: snapshot,
+      classification: {
+        summary: {
+          safe: 0,
+          risky: 0,
+          destructive: 0,
+          unknown: 1,
+          total: 1,
+          requires_acknowledgment: true,
+          text: 'Semantic plan: 1 unknown change',
+        },
+        changes: [],
+      },
+      warnings: ['Generate and review a fresh plan before applying any rollback.'],
+    };
+    const client = {
+      runDrift: vi.fn(),
+      listStateSnapshots: vi.fn().mockResolvedValue([snapshot]),
+      createRollbackProposal: vi.fn().mockResolvedValue(proposal),
+      createRollbackArtifacts: vi.fn().mockResolvedValue({
+        id: 'rollback-demo-terraform-dev-checkpoint',
+        root: '.iac-studio/rollbacks/rollback-demo-terraform-dev-checkpoint',
+        created_at: '2026-06-10T13:00:00Z',
+        proposal,
+        files: [
+          {
+            path: '.iac-studio/rollbacks/rollback-demo-terraform-dev-checkpoint/README.md',
+            kind: 'runbook',
+            summary: 'Human-readable rollback review runbook.',
+            size: 100,
+          },
+        ],
+      }),
+    };
+
+    render(<DriftPanel projectName="demo" tool="terraform" env="dev" client={client} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load' }));
+    expect(await screen.findByText('terraform apply')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Rollback proposal' }));
+
+    await waitFor(() => {
+      expect(client.createRollbackProposal).toHaveBeenCalledWith('demo', snapshot.id, { env: 'dev' });
+    });
+    expect(await screen.findByText(proposal.title)).toBeInTheDocument();
+    expect(screen.getByText(/Not an automatic undo/)).toBeInTheDocument();
+    expect(screen.getByText('Generate and review a fresh plan before applying any rollback.')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Write artifacts' }));
+
+    await waitFor(() => {
+      expect(client.createRollbackArtifacts).toHaveBeenCalledWith('demo', snapshot.id, { env: 'dev', proposal });
+    });
+    expect(await screen.findByText('Rollback artifacts written')).toBeInTheDocument();
+    expect(screen.getByText('.iac-studio/rollbacks/rollback-demo-terraform-dev-checkpoint/README.md')).toBeInTheDocument();
+  });
+
   it('drafts a remediation PR proposal for active findings', async () => {
     const client = {
       runDrift: vi.fn().mockResolvedValue({
