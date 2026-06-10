@@ -527,6 +527,69 @@ func writeRenderedRemediationArtifacts(projectPath string, rendered []drift.Rend
 	return nil
 }
 
+func writeRenderedRollbackArtifacts(projectPath string, rendered []recovery.RenderedRollbackArtifact) error {
+	for _, artifact := range rendered {
+		target, err := safeProjectFilePath(projectPath, artifact.Path)
+		if err != nil {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+			return fmt.Errorf("creating rollback artifact directory: %w", err)
+		}
+		if err := os.WriteFile(target, []byte(artifact.Content), 0o644); err != nil {
+			return fmt.Errorf("writing rollback artifact %s: %w", artifact.Path, err)
+		}
+	}
+	return nil
+}
+
+func buildProjectRollbackProposal(projectPath, projectName, snapshotID, env string) (recovery.RollbackProposal, int, string) {
+	if err := safePathSegment(snapshotID); err != nil {
+		return recovery.RollbackProposal{}, http.StatusBadRequest, "invalid snapshot id: " + err.Error()
+	}
+	if env != "" {
+		if err := safePathSegment(env); err != nil {
+			return recovery.RollbackProposal{}, http.StatusBadRequest, "invalid env: " + err.Error()
+		}
+	}
+	snapshots, err := recovery.ListSnapshots(projectPath)
+	if err != nil {
+		return recovery.RollbackProposal{}, http.StatusInternalServerError, err.Error()
+	}
+	var target *recovery.StateSnapshot
+	for i := range snapshots {
+		if snapshots[i].ID == snapshotID {
+			target = &snapshots[i]
+			break
+		}
+	}
+	if target == nil {
+		return recovery.RollbackProposal{}, http.StatusNotFound, "snapshot not found"
+	}
+	if env != "" && target.Env != env {
+		return recovery.RollbackProposal{}, http.StatusBadRequest, "snapshot does not belong to requested env"
+	}
+	var current *recovery.StateSnapshot
+	for i := range snapshots {
+		if snapshots[i].ID == target.ID {
+			continue
+		}
+		if snapshots[i].Tool == target.Tool && snapshots[i].Env == target.Env {
+			current = &snapshots[i]
+			break
+		}
+	}
+	proposal, err := recovery.BuildRollbackProposal(recovery.RollbackInput{
+		ProjectName:     projectName,
+		TargetSnapshot:  *target,
+		CurrentSnapshot: current,
+	})
+	if err != nil {
+		return recovery.RollbackProposal{}, http.StatusBadRequest, err.Error()
+	}
+	return proposal, http.StatusOK, ""
+}
+
 func safeProjectFilePath(projectPath, relPath string) (string, error) {
 	if strings.TrimSpace(relPath) == "" {
 		return "", errors.New("artifact path is required")
@@ -2143,6 +2206,78 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			snapshots = filtered
 		}
 		_ = json.NewEncoder(w).Encode(snapshots)
+	})
+
+	mux.HandleFunc("POST /api/projects/{name}/snapshots/{snapshotID}/rollback", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		snapshotID := r.PathValue("snapshotID")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		limitBody(w, r)
+		var req struct {
+			Env string `json:"env,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Env == "" {
+			req.Env = r.URL.Query().Get("env")
+		}
+		proposal, status, message := buildProjectRollbackProposal(projectPath, name, snapshotID, req.Env)
+		if status != http.StatusOK {
+			http.Error(w, message, status)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(proposal)
+	})
+
+	mux.HandleFunc("POST /api/projects/{name}/snapshots/{snapshotID}/rollback/artifacts", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		snapshotID := r.PathValue("snapshotID")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		limitBody(w, r)
+		var req struct {
+			Env      string                     `json:"env,omitempty"`
+			Proposal *recovery.RollbackProposal `json:"proposal,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Env == "" {
+			req.Env = r.URL.Query().Get("env")
+		}
+
+		proposal, status, message := buildProjectRollbackProposal(projectPath, name, snapshotID, req.Env)
+		if status != http.StatusOK {
+			http.Error(w, message, status)
+			return
+		}
+		if req.Proposal != nil {
+			if req.Proposal.TargetSnapshot.ID != snapshotID {
+				http.Error(w, "request proposal must match snapshot id", http.StatusBadRequest)
+				return
+			}
+			proposal = *req.Proposal
+		}
+		artifactSet, rendered, err := recovery.RenderRollbackArtifacts(proposal, time.Now().UTC())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if err := writeRenderedRollbackArtifacts(projectPath, rendered); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(artifactSet)
 	})
 
 	// ─── Drift Detection ───

@@ -618,6 +618,26 @@ gcloud config set project my-platform-dev</code></pre>
           <pre><code>.iac-studio/
   snapshots/
     20260610T120000Z-terraform-apply-dev-abc12345.json</code></pre>
+
+          <h3>Rollback proposals</h3>
+          <p>
+            Selecting a checkpoint can draft a rollback proposal. The proposal is intentionally
+            fail-closed: until a fresh rollback plan is generated and reviewed, the semantic plan
+            classifier marks the proposal as unknown and requires acknowledgement before any apply
+            path should proceed.
+          </p>
+
+          <div class="callout">
+            Rollback proposals are review artifacts. They do not mutate cloud infrastructure,
+            restore state, or bypass the normal plan, policy, and security gates.
+          </div>
+
+          <pre><code>.iac-studio/
+  rollbacks/
+    rollback-demo-terraform-dev-20260610t120000z-.../
+      README.md
+      proposal.md
+      proposal.json</code></pre>
         </section>
 
         <section id="ai" class="doc-section" data-title="ai setup ollama openai anthropic models settings environment variables">
@@ -791,8 +811,8 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
                 </tr>
                 <tr>
                   <td>Modules, drift, export</td>
-                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET /api/projects/{name}/snapshots</code><br><code>GET/POST /api/projects/{name}/drift</code><br><code>POST /api/projects/{name}/drift/remediation</code><br><code>POST /api/projects/{name}/drift/remediation/artifacts</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
-                  <td>Discover modules, promote resources, list recovery checkpoints, detect classified Terraform/OpenTofu state drift, draft codify/revert remediation PR payloads, write remediation review artifacts, and export alternate IaC formats.</td>
+                  <td><code>GET /api/projects/{name}/modules</code><br><code>GET /api/registry/modules/search</code><br><code>POST /api/projects/{name}/promote-to-module</code><br><code>GET /api/projects/{name}/snapshots</code><br><code>POST /api/projects/{name}/snapshots/{snapshotID}/rollback</code><br><code>POST /api/projects/{name}/snapshots/{snapshotID}/rollback/artifacts</code><br><code>GET/POST /api/projects/{name}/drift</code><br><code>POST /api/projects/{name}/drift/remediation</code><br><code>POST /api/projects/{name}/drift/remediation/artifacts</code><br><code>GET /api/export/formats</code><br><code>POST /api/export</code></td>
+                  <td>Discover modules, promote resources, list recovery checkpoints, draft rollback proposals, detect classified Terraform/OpenTofu state drift, draft codify/revert remediation PR payloads, write remediation review artifacts, and export alternate IaC formats.</td>
                 </tr>
                 <tr>
                   <td>Realtime</td>
@@ -824,6 +844,7 @@ Local project directory
   main.tf, index.ts, playbooks, modules
   .iac-studio.json
   .iac-studio/snapshots/*.json
+  .iac-studio/rollbacks/*/
   terraform.tfstate when present</code></pre>
 
           <h3>Repository layout</h3>
