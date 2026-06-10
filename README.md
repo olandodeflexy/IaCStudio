@@ -65,6 +65,7 @@ start the local server for you.
 | **AI Plan Fix** | When terraform plan fails, AI diagnoses and auto-fixes the issue |
 | **Security Scanner** | Graph-based checks: CIS, SOC2, HIPAA, OWASP compliance |
 | **Drift Monitor** | Run Terraform/OpenTofu state drift checks with classified findings, suppression rules, draft codify/revert PR payloads, and review artifacts |
+| **Recovery Checkpoints** | Successful apply runs record state/plan metadata and hashes for audit, drift, and future rollback workflows |
 | **Multi-Format Export** | Export to Pulumi TypeScript, CDK Python, CloudFormation |
 | **Smart Suggestions** | AI predicts your next resource based on IaC best practices |
 | **Import Projects** | Browse filesystem, scan existing .tf/.yml files, auto-detect topology |
@@ -93,7 +94,7 @@ Browser (React/TS)                   Go Backend (single binary)
 │ AI Chat + Fix        │              │ AI Bridge (Ollama/OpenAI)   │
 │ Code Preview         │              │ Security Scanner            │
 │ Terminal             │              │ Drift Detector              │
-│ Smart Suggestions    │              │ Multi-Format Exporter       │
+│ Smart Suggestions    │              │ Recovery Checkpoints        │
 │ Import Wizard        │              │ Project State Manager       │
 └─────────────────────┘              │ WebSocket Hub               │
                                      └────────────┬───────────────┘
@@ -103,7 +104,8 @@ Browser (React/TS)                   Go Backend (single binary)
                              ~/iac-projects/   Ollama       terraform/
                              ├── main.tf       (local AI)   tofu/
                              ├── variables.tf               ansible
-                             └── .iac-studio.json (state)
+                             ├── .iac-studio.json (state)
+                             └── .iac-studio/snapshots/
 ```
 
 ## AI Integration
@@ -141,6 +143,7 @@ IaC Studio runs locally and is designed to be secure by default:
 - **Execution safety** — command timeouts, process group kill, approval gates
 - **Plan-before-apply** — server-side gate requires successful plan before apply
 - **Semantic plan review** — Terraform/OpenTofu plans are classified before apply; risky, destructive, or unknown changes require explicit acknowledgement
+- **Recovery checkpoints** — successful apply-style runs write metadata and state/plan hashes under `.iac-studio/snapshots`
 - **Cloud target checks** — selected Cloud Connections are tested before command execution
 - **Secret redaction** — static credentials are not echoed in API responses, terminal messages, or generated IaC
 - **No telemetry** — zero data collection, no phone-home
@@ -202,6 +205,7 @@ All flags have sensible defaults. Just run `iac-studio` and go.
 - [x] Execution safety (timeouts, approval gates, kill switch)
 - [x] Policy engine (15+ built-in guardrails)
 - [x] Cloud Connections for AWS, Azure, and GCP run targets
+- [x] Recovery checkpoint metadata for successful apply runs
 - [x] Cost estimation (30+ resource types)
 - [x] CI/CD pipeline generator (GitHub Actions, GitLab CI)
 - [x] Environment promotion (dev/staging/prod workspaces)

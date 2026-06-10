@@ -333,6 +333,39 @@ describe('api.createDriftRemediationArtifacts', () => {
   });
 });
 
+describe('api.listStateSnapshots', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetches environment-scoped recovery snapshots', async () => {
+    const response = [{
+      id: '20260610T120000Z-terraform-apply-dev-abc12345',
+      project: 'demo',
+      tool: 'terraform',
+      env: 'dev',
+      command: 'apply',
+      work_dir: 'environments/dev',
+      state_path: 'environments/dev/terraform.tfstate',
+      state_sha256: 'abc123',
+      state_size: 42,
+      created_at: '2026-06-10T12:00:00Z',
+      status: 'recorded',
+    }];
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.listStateSnapshots('demo', 'dev')).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/snapshots?env=dev');
+  });
+});
+
 describe('api.suggest', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

@@ -49,6 +49,42 @@ describe('DriftPanel', () => {
     expect(screen.getByText('["0.0.0.0/0"]')).toBeInTheDocument();
   });
 
+  it('loads recovery checkpoints for the active environment', async () => {
+    const client = {
+      runDrift: vi.fn(),
+      listStateSnapshots: vi.fn().mockResolvedValue([
+        {
+          id: '20260610T120000Z-terraform-apply-dev-abc12345',
+          project: 'demo',
+          tool: 'terraform',
+          env: 'dev',
+          command: 'apply',
+          work_dir: 'environments/dev',
+          state_path: 'environments/dev/terraform.tfstate',
+          state_sha256: 'abc1234567890abcdef',
+          state_size: 42,
+          plan_path: 'environments/dev/tfplan.json',
+          plan_sha256: 'def4567890abcdef',
+          plan_size: 21,
+          created_at: '2026-06-10T12:00:00Z',
+          status: 'recorded',
+        },
+      ]),
+    };
+
+    render(<DriftPanel projectName="demo" tool="terraform" env="dev" client={client} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Load' }));
+
+    await waitFor(() => {
+      expect(client.listStateSnapshots).toHaveBeenCalledWith('demo', 'dev');
+    });
+    expect(await screen.findByText('terraform apply')).toBeInTheDocument();
+    expect(screen.getByText(/environments\/dev · 20260610T120000Z-terraform-apply-dev-abc12345/)).toBeInTheDocument();
+    expect(screen.getByText(/state environments\/dev\/terraform\.tfstate abc123456789/)).toBeInTheDocument();
+    expect(screen.getByText(/plan environments\/dev\/tfplan\.json def4567890ab/)).toBeInTheDocument();
+  });
+
   it('drafts a remediation PR proposal for active findings', async () => {
     const client = {
       runDrift: vi.fn().mockResolvedValue({

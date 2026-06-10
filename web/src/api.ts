@@ -264,6 +264,24 @@ export interface DriftRemediationArtifactSet {
   files: DriftRemediationArtifactFile[];
 }
 
+export interface StateSnapshot {
+  id: string;
+  project: string;
+  tool: string;
+  env?: string;
+  command: string;
+  work_dir: string;
+  state_path?: string;
+  state_sha256?: string;
+  state_size?: number;
+  plan_path?: string;
+  plan_sha256?: string;
+  plan_size?: number;
+  created_at: string;
+  status: string;
+  notes?: string[];
+}
+
 // Checks res.ok and throws with the backend's error message instead of
 // letting callers hit an opaque JSON parse failure on text/plain errors.
 async function check(res: Response): Promise<Response> {
@@ -543,6 +561,14 @@ export const api = {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),
     });
+    return (await check(res)).json();
+  },
+
+  async listStateSnapshots(projectName: string, env?: string): Promise<StateSnapshot[]> {
+    const params = new URLSearchParams();
+    if (env) params.set('env', env);
+    const query = params.toString();
+    const res = await fetch(`${BASE}/api/projects/${projectName}/snapshots${query ? `?${query}` : ''}`);
     return (await check(res)).json();
   },
 

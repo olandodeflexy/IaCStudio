@@ -102,6 +102,10 @@ func commandProducesPlan(command string) bool {
 	return command == "plan" || command == "preview" || command == "check"
 }
 
+func commandRecordsSnapshot(command string) bool {
+	return command == "apply" || command == "up" || command == "playbook"
+}
+
 func appendPlanClassificationOutput(output string, classification *iacplan.ClassificationResult) string {
 	if classification == nil {
 		return output
