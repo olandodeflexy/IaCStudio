@@ -6,9 +6,12 @@ import {
   type DriftFinding,
   type DriftRemediationArtifactSet,
   type DriftRemediationMode,
+  type DriftRemediationPullRequestResponse,
   type DriftRemediationProposal,
   type DriftReport,
+  type PullRequestHandoff,
   type RollbackArtifactSet,
+  type RollbackPullRequestResponse,
   type RollbackProposal,
   type StateSnapshot,
 } from '../../api';
@@ -21,9 +24,11 @@ export interface DriftPanelProps {
   client?: Pick<typeof api, 'runDrift'> & Partial<Pick<typeof api,
     'createDriftRemediation' |
     'createDriftRemediationArtifacts' |
+    'createDriftRemediationPullRequest' |
     'listStateSnapshots' |
     'createRollbackProposal' |
-    'createRollbackArtifacts'
+    'createRollbackArtifacts' |
+    'createRollbackPullRequest'
   >>;
 }
 
@@ -80,6 +85,11 @@ function shortHash(value?: string): string {
   return value.slice(0, 12);
 }
 
+function shortCommit(value?: string): string {
+  if (!value) return '';
+  return value.slice(0, 7);
+}
+
 function formatSnapshotTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return value;
@@ -91,6 +101,55 @@ function formatSnapshotTime(value: string): string {
   });
 }
 
+function PullRequestHandoffSummary({
+  handoff,
+  title,
+}: {
+  handoff: PullRequestHandoff;
+  title: string;
+}) {
+  return (
+    <section className="rounded-md border border-emerald-500/30 bg-emerald-500/10 px-3 py-3">
+      <div className="flex items-start gap-2">
+        <GitPullRequest className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-emerald-300" />
+        <div className="min-w-0 flex-1">
+          <div className="text-xs font-semibold text-foreground">{title}</div>
+          <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+            {handoff.branch} from {handoff.base_branch} · {shortCommit(handoff.commit)}
+          </div>
+          <div className="mt-1 truncate font-mono text-[10px] text-muted-foreground">
+            body {handoff.body_path}
+          </div>
+        </div>
+      </div>
+      {handoff.commands.length > 0 && (
+        <div className="mt-3 space-y-1">
+          {handoff.commands.map((command) => (
+            <div
+              key={`${command.label}-${command.display}`}
+              className="rounded border border-border bg-background/70 px-2 py-1.5"
+            >
+              <div className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+                {command.label}
+              </div>
+              <div className="mt-1 break-all font-mono text-[10px] text-foreground">
+                {command.display}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      {handoff.warnings && handoff.warnings.length > 0 && (
+        <div className="mt-3 space-y-1 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-2 text-xs leading-5 text-amber-200">
+          {handoff.warnings.map((warning, i) => (
+            <div key={i}>{warning}</div>
+          ))}
+        </div>
+      )}
+    </section>
+  );
+}
+
 export function DriftPanel({
   projectName,
   tool = 'terraform',
@@ -100,22 +159,28 @@ export function DriftPanel({
   const [running, setRunning] = useState(false);
   const [draftingMode, setDraftingMode] = useState<DriftRemediationMode | null>(null);
   const [writingArtifacts, setWritingArtifacts] = useState(false);
+  const [creatingPR, setCreatingPR] = useState(false);
   const [report, setReport] = useState<DriftReport | null>(null);
   const [proposal, setProposal] = useState<DriftRemediationProposal | null>(null);
   const [artifacts, setArtifacts] = useState<DriftRemediationArtifactSet | null>(null);
+  const [pullRequest, setPullRequest] = useState<PullRequestHandoff | null>(null);
   const [snapshots, setSnapshots] = useState<StateSnapshot[]>([]);
   const [rollbackProposal, setRollbackProposal] = useState<RollbackProposal | null>(null);
   const [rollbackArtifacts, setRollbackArtifacts] = useState<RollbackArtifactSet | null>(null);
+  const [rollbackPullRequest, setRollbackPullRequest] = useState<PullRequestHandoff | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [proposalError, setProposalError] = useState<string | null>(null);
   const [artifactError, setArtifactError] = useState<string | null>(null);
+  const [pullRequestError, setPullRequestError] = useState<string | null>(null);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
   const [rollbackError, setRollbackError] = useState<string | null>(null);
   const [rollbackArtifactError, setRollbackArtifactError] = useState<string | null>(null);
+  const [rollbackPullRequestError, setRollbackPullRequestError] = useState<string | null>(null);
   const [loadingSnapshots, setLoadingSnapshots] = useState(false);
   const [snapshotsLoaded, setSnapshotsLoaded] = useState(false);
   const [draftingRollbackID, setDraftingRollbackID] = useState<string | null>(null);
   const [writingRollbackArtifacts, setWritingRollbackArtifacts] = useState(false);
+  const [creatingRollbackPR, setCreatingRollbackPR] = useState(false);
   const supported = SUPPORTED_TOOLS.has(tool);
   const findings = useMemo(() => normalizeFindings(report), [report]);
   const suppressedFindings = useMemo(() => normalizeSuppressedFindings(report), [report]);
@@ -130,9 +195,11 @@ export function DriftPanel({
     setError(null);
     setProposalError(null);
     setArtifactError(null);
+    setPullRequestError(null);
     setReport(null);
     setProposal(null);
     setArtifacts(null);
+    setPullRequest(null);
     try {
       const req: { tool: string; env?: string } = { tool };
       if (env) req.env = env;
@@ -150,8 +217,10 @@ export function DriftPanel({
     setDraftingMode(mode);
     setProposalError(null);
     setArtifactError(null);
+    setPullRequestError(null);
     setProposal(null);
     setArtifacts(null);
+    setPullRequest(null);
     try {
       const req: { tool: string; env?: string; mode: DriftRemediationMode } = { tool, mode };
       if (env) req.env = env;
@@ -181,6 +250,24 @@ export function DriftPanel({
     }
   };
 
+  const createRemediationPR = async () => {
+    if (!proposal || !client.createDriftRemediationPullRequest) return;
+    setCreatingPR(true);
+    setPullRequestError(null);
+    setPullRequest(null);
+    try {
+      const req: { tool: string; env?: string; mode: DriftRemediationMode; proposal: DriftRemediationProposal } = { tool, mode: proposal.mode, proposal };
+      if (env) req.env = env;
+      const response: DriftRemediationPullRequestResponse = await client.createDriftRemediationPullRequest(projectName, req);
+      setArtifacts(response.artifacts);
+      setPullRequest(response.pull_request);
+    } catch (err) {
+      setPullRequestError(String(err));
+    } finally {
+      setCreatingPR(false);
+    }
+  };
+
   const loadSnapshots = async () => {
     if (!client.listStateSnapshots) return;
     setLoadingSnapshots(true);
@@ -202,8 +289,10 @@ export function DriftPanel({
     setDraftingRollbackID(snapshot.id);
     setRollbackError(null);
     setRollbackArtifactError(null);
+    setRollbackPullRequestError(null);
     setRollbackProposal(null);
     setRollbackArtifacts(null);
+    setRollbackPullRequest(null);
     try {
       const response = await client.createRollbackProposal(projectName, snapshot.id, { env });
       setRollbackProposal(response);
@@ -226,6 +315,22 @@ export function DriftPanel({
       setRollbackArtifactError(String(err));
     } finally {
       setWritingRollbackArtifacts(false);
+    }
+  };
+
+  const createRollbackPR = async () => {
+    if (!rollbackProposal || !client.createRollbackPullRequest) return;
+    setCreatingRollbackPR(true);
+    setRollbackPullRequestError(null);
+    setRollbackPullRequest(null);
+    try {
+      const response: RollbackPullRequestResponse = await client.createRollbackPullRequest(projectName, rollbackProposal.target_snapshot.id, { env, proposal: rollbackProposal });
+      setRollbackArtifacts(response.artifacts);
+      setRollbackPullRequest(response.pull_request);
+    } catch (err) {
+      setRollbackPullRequestError(String(err));
+    } finally {
+      setCreatingRollbackPR(false);
     }
   };
 
@@ -387,6 +492,16 @@ export function DriftPanel({
               <FileText className="h-3.5 w-3.5" />
               {writingRollbackArtifacts ? 'Writing...' : 'Write artifacts'}
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={createRollbackPR}
+              disabled={creatingRollbackPR || !client.createRollbackPullRequest}
+            >
+              <GitPullRequest className="h-3.5 w-3.5" />
+              {creatingRollbackPR ? 'Creating...' : 'Create PR branch'}
+            </Button>
           </div>
 
           {rollbackProposal.warnings && rollbackProposal.warnings.length > 0 && (
@@ -404,6 +519,20 @@ export function DriftPanel({
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
           <span>{rollbackArtifactError}</span>
         </div>
+      )}
+
+      {rollbackPullRequestError && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span>{rollbackPullRequestError}</span>
+        </div>
+      )}
+
+      {rollbackPullRequest && (
+        <PullRequestHandoffSummary
+          handoff={rollbackPullRequest}
+          title="Rollback PR branch ready"
+        />
       )}
 
       {rollbackArtifacts && (
@@ -522,6 +651,16 @@ export function DriftPanel({
               <FileText className="h-3.5 w-3.5" />
               {writingArtifacts ? 'Writing...' : 'Write artifacts'}
             </Button>
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={createRemediationPR}
+              disabled={creatingPR || !client.createDriftRemediationPullRequest}
+            >
+              <GitPullRequest className="h-3.5 w-3.5" />
+              {creatingPR ? 'Creating...' : 'Create PR branch'}
+            </Button>
           </div>
 
           {proposal.file_changes.length > 0 && (
@@ -568,6 +707,20 @@ export function DriftPanel({
           <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
           <span>{artifactError}</span>
         </div>
+      )}
+
+      {pullRequestError && (
+        <div className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          <AlertCircle className="mt-0.5 h-3.5 w-3.5 flex-shrink-0" />
+          <span>{pullRequestError}</span>
+        </div>
+      )}
+
+      {pullRequest && (
+        <PullRequestHandoffSummary
+          handoff={pullRequest}
+          title="Remediation PR branch ready"
+        />
       )}
 
       {artifacts && (

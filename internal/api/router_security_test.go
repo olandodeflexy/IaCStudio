@@ -7,10 +7,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/iac-studio/iac-studio/internal/ai"
+	"github.com/iac-studio/iac-studio/internal/drift"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/watcher"
 )
@@ -264,52 +266,131 @@ func TestSyncDoesNotInjectProviderIntoNestedMainFile(t *testing.T) {
 }
 
 func TestSafeProjectFilePathRejectsTraversal(t *testing.T) {
-projectPath := t.TempDir()
+	projectPath := t.TempDir()
 
-cases := []struct {
-relPath string
-desc    string
-}{
-{"../escape", "parent traversal"},
-{"../../etc/passwd", "deep parent traversal"},
-{"/absolute/path", "absolute path"},
-{".", "dot only"},
-{"..", "double-dot only"},
-{"subdir/../../escape", "traversal through subdirectory"},
-{"", "empty path"},
-}
+	cases := []struct {
+		relPath string
+		desc    string
+	}{
+		{"../escape", "parent traversal"},
+		{"../../etc/passwd", "deep parent traversal"},
+		{"/absolute/path", "absolute path"},
+		{".", "dot only"},
+		{"..", "double-dot only"},
+		{"subdir/../../escape", "traversal through subdirectory"},
+		{"", "empty path"},
+	}
 
-for _, tc := range cases {
-t.Run(tc.desc, func(t *testing.T) {
-_, err := safeProjectFilePath(projectPath, tc.relPath)
-if err == nil {
-t.Fatalf("safeProjectFilePath(%q) should have returned an error", tc.relPath)
-}
-})
-}
+	for _, tc := range cases {
+		t.Run(tc.desc, func(t *testing.T) {
+			_, err := safeProjectFilePath(projectPath, tc.relPath)
+			if err == nil {
+				t.Fatalf("safeProjectFilePath(%q) should have returned an error", tc.relPath)
+			}
+		})
+	}
 }
 
 func TestSafeProjectFilePathAcceptsValidPaths(t *testing.T) {
-projectPath := t.TempDir()
+	projectPath := t.TempDir()
 
-cases := []struct {
-relPath  string
-wantSuff string
-}{
-{".iac-studio/remediations/my-drift/README.md", filepath.Join(".iac-studio", "remediations", "my-drift", "README.md")},
-{"main.tf", "main.tf"},
-{"modules/vpc/main.tf", filepath.Join("modules", "vpc", "main.tf")},
+	cases := []struct {
+		relPath  string
+		wantSuff string
+	}{
+		{".iac-studio/remediations/my-drift/README.md", filepath.Join(".iac-studio", "remediations", "my-drift", "README.md")},
+		{"main.tf", "main.tf"},
+		{"modules/vpc/main.tf", filepath.Join("modules", "vpc", "main.tf")},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.relPath, func(t *testing.T) {
+			got, err := safeProjectFilePath(projectPath, tc.relPath)
+			if err != nil {
+				t.Fatalf("safeProjectFilePath(%q) unexpected error: %v", tc.relPath, err)
+			}
+			if !strings.HasSuffix(got, tc.wantSuff) {
+				t.Fatalf("safeProjectFilePath(%q) = %q, want suffix %q", tc.relPath, got, tc.wantSuff)
+			}
+		})
+	}
 }
 
-for _, tc := range cases {
-t.Run(tc.relPath, func(t *testing.T) {
-got, err := safeProjectFilePath(projectPath, tc.relPath)
-if err != nil {
-t.Fatalf("safeProjectFilePath(%q) unexpected error: %v", tc.relPath, err)
+func TestSafeReviewArtifactPathEnforcesPrefix(t *testing.T) {
+	reject := []string{
+		"main.tf",
+		"../escape",
+		".iac-studio/snapshots/foo.json",
+		".iac-studio/remediations",        // directory itself, no trailing slash
+		".iac-studio/rollbacks",            // directory itself, no trailing slash
+		".iac-studio/remediations_evil/x",  // adjacent directory, not the allowed one
+		".iac-studio/remediations/foo/../../outside",
+		".iac-studio/rollbacks/foo/../../../etc/passwd",
+		"/absolute/path",
+	}
+	for _, p := range reject {
+		t.Run("reject:"+p, func(t *testing.T) {
+			if _, err := safeReviewArtifactPath(p); err == nil {
+				t.Fatalf("safeReviewArtifactPath(%q) should have returned an error", p)
+			}
+		})
+	}
+
+	accept := []string{
+		".iac-studio/remediations/my-drift/README.md",
+		".iac-studio/remediations/my-drift/pr-body.md",
+		".iac-studio/rollbacks/snap-1/proposal.md",
+	}
+	for _, p := range accept {
+		t.Run("accept:"+p, func(t *testing.T) {
+			got, err := safeReviewArtifactPath(p)
+			if err != nil {
+				t.Fatalf("safeReviewArtifactPath(%q) unexpected error: %v", p, err)
+			}
+			if got == "" {
+				t.Fatalf("safeReviewArtifactPath(%q) returned empty string", p)
+			}
+		})
+	}
 }
-if !strings.HasSuffix(got, tc.wantSuff) {
-t.Fatalf("safeProjectFilePath(%q) = %q, want suffix %q", tc.relPath, got, tc.wantSuff)
+
+func TestWriteRenderedRemediationArtifactsRejectsSymlinkDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on Windows")
+	}
+	projectPath := t.TempDir()
+	outside := t.TempDir()
+	linkParent := filepath.Join(projectPath, ".iac-studio", "remediations")
+	if err := os.MkdirAll(linkParent, 0o755); err != nil {
+		t.Fatalf("mkdir link parent: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(linkParent, "evil")); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	err := writeRenderedRemediationArtifacts(projectPath, []drift.RenderedRemediationArtifact{{
+		RemediationArtifactFile: drift.RemediationArtifactFile{
+			Path: ".iac-studio/remediations/evil/README.md",
+			Kind: "runbook",
+		},
+		Content: "should not escape\n",
+	}})
+	if err == nil || !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink rejection, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(outside, "README.md")); !os.IsNotExist(err) {
+		t.Fatalf("artifact write escaped through symlink, stat err = %v", err)
+	}
 }
-})
-}
+
+func TestWriteGeneratedArtifactFileRejectsNonReviewArtifactPath(t *testing.T) {
+	projectPath := t.TempDir()
+
+	err := writeGeneratedArtifactFile(projectPath, "main.tf", "resource drift\n")
+	if err == nil || !strings.Contains(err.Error(), ".iac-studio review artifacts") {
+		t.Fatalf("expected review artifact path rejection, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(projectPath, "main.tf")); !os.IsNotExist(err) {
+		t.Fatalf("non-review artifact write should not create main.tf, stat err = %v", err)
+	}
 }

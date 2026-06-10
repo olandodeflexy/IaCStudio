@@ -31,6 +31,7 @@ import (
 	pulumigen "github.com/iac-studio/iac-studio/internal/pulumi"
 	"github.com/iac-studio/iac-studio/internal/recovery"
 	"github.com/iac-studio/iac-studio/internal/registry"
+	"github.com/iac-studio/iac-studio/internal/review"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/scaffold"
 	"github.com/iac-studio/iac-studio/internal/security"
@@ -513,14 +514,7 @@ func relativeSourcePath(root, path string) string {
 
 func writeRenderedRemediationArtifacts(projectPath string, rendered []drift.RenderedRemediationArtifact) error {
 	for _, artifact := range rendered {
-		target, err := safeProjectFilePath(projectPath, artifact.Path)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fmt.Errorf("creating remediation artifact directory: %w", err)
-		}
-		if err := os.WriteFile(target, []byte(artifact.Content), 0o644); err != nil {
+		if err := writeGeneratedArtifactFile(projectPath, artifact.Path, artifact.Content); err != nil {
 			return fmt.Errorf("writing remediation artifact %s: %w", artifact.Path, err)
 		}
 	}
@@ -529,15 +523,121 @@ func writeRenderedRemediationArtifacts(projectPath string, rendered []drift.Rend
 
 func writeRenderedRollbackArtifacts(projectPath string, rendered []recovery.RenderedRollbackArtifact) error {
 	for _, artifact := range rendered {
-		target, err := safeProjectFilePath(projectPath, artifact.Path)
+		if err := writeGeneratedArtifactFile(projectPath, artifact.Path, artifact.Content); err != nil {
+			return fmt.Errorf("writing rollback artifact %s: %w", artifact.Path, err)
+		}
+	}
+	return nil
+}
+
+func remediationArtifactPaths(rendered []drift.RenderedRemediationArtifact) []string {
+	paths := make([]string, 0, len(rendered))
+	for _, artifact := range rendered {
+		paths = append(paths, artifact.Path)
+	}
+	return paths
+}
+
+func rollbackArtifactPaths(rendered []recovery.RenderedRollbackArtifact) []string {
+	paths := make([]string, 0, len(rendered))
+	for _, artifact := range rendered {
+		paths = append(paths, artifact.Path)
+	}
+	return paths
+}
+
+func remediationArtifactBodyPath(rendered []drift.RenderedRemediationArtifact) string {
+	for _, artifact := range rendered {
+		if artifact.Kind == "pr_body" {
+			return artifact.Path
+		}
+	}
+	return ""
+}
+
+func rollbackArtifactBodyPath(rendered []recovery.RenderedRollbackArtifact) string {
+	for _, artifact := range rendered {
+		if artifact.Kind == "proposal" {
+			return artifact.Path
+		}
+	}
+	return ""
+}
+
+func reviewHandoffStatus(err error) int {
+	switch {
+	case errors.Is(err, review.ErrBranchExists),
+		errors.Is(err, review.ErrDirtyWorktree),
+		errors.Is(err, review.ErrNoChanges):
+		return http.StatusConflict
+	case errors.Is(err, review.ErrInvalidInput),
+		errors.Is(err, review.ErrNotGitRepository):
+		return http.StatusBadRequest
+	default:
+		return http.StatusInternalServerError
+	}
+}
+
+func writeGeneratedArtifactFile(projectPath, relPath, content string) error {
+	artifactPath, err := safeReviewArtifactPath(relPath)
+	if err != nil {
+		return err
+	}
+	target, err := safeProjectFilePath(projectPath, artifactPath)
+	if err != nil {
+		return err
+	}
+	if err := ensureNoSymlinkDir(projectPath, filepath.Dir(target)); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(target); err == nil {
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to overwrite symlink %q", relPath)
+		}
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("refusing to overwrite non-regular file %q", relPath)
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return os.WriteFile(target, []byte(content), 0o644)
+}
+
+func safeReviewArtifactPath(relPath string) (string, error) {
+	clean := filepath.ToSlash(filepath.Clean(filepath.FromSlash(relPath)))
+	if !strings.HasPrefix(clean, ".iac-studio/remediations/") &&
+		!strings.HasPrefix(clean, ".iac-studio/rollbacks/") {
+		return "", fmt.Errorf("generated artifact path must stay under .iac-studio review artifacts: %q", relPath)
+	}
+	return clean, nil
+}
+
+func ensureNoSymlinkDir(projectPath, dir string) error {
+	rel, err := filepath.Rel(projectPath, dir)
+	if err != nil || rel == "." {
+		return err
+	}
+	current := projectPath
+	for _, part := range strings.Split(filepath.ToSlash(rel), "/") {
+		if part == "" || part == "." {
+			continue
+		}
+		current = filepath.Join(current, part)
+		info, err := os.Lstat(current)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := os.Mkdir(current, 0o755); err != nil && !errors.Is(err, os.ErrExist) {
+				return err
+			}
+			continue
+		}
 		if err != nil {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
-			return fmt.Errorf("creating rollback artifact directory: %w", err)
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("refusing to write through symlink directory %q", part)
 		}
-		if err := os.WriteFile(target, []byte(artifact.Content), 0o644); err != nil {
-			return fmt.Errorf("writing rollback artifact %s: %w", artifact.Path, err)
+		if !info.IsDir() {
+			return fmt.Errorf("artifact parent %q is not a directory", part)
 		}
 	}
 	return nil
@@ -2284,6 +2384,72 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		_ = json.NewEncoder(w).Encode(artifactSet)
 	})
 
+	mux.HandleFunc("POST /api/projects/{name}/snapshots/{snapshotID}/rollback/pr", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		snapshotID := r.PathValue("snapshotID")
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		limitBody(w, r)
+		var req struct {
+			Env      string                     `json:"env,omitempty"`
+			Proposal *recovery.RollbackProposal `json:"proposal,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Env == "" {
+			req.Env = r.URL.Query().Get("env")
+		}
+
+		proposal, status, message := buildProjectRollbackProposal(projectPath, name, snapshotID, req.Env)
+		if status != http.StatusOK {
+			http.Error(w, message, status)
+			return
+		}
+		if req.Proposal != nil && req.Proposal.TargetSnapshot.ID != snapshotID {
+			http.Error(w, "request proposal must match snapshot id", http.StatusBadRequest)
+			return
+		}
+		artifactSet, rendered, err := recovery.RenderRollbackArtifacts(proposal, time.Now().UTC())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		rollbackFiles := rollbackArtifactPaths(rendered)
+		if err := review.EnsureNoUnrelatedChanges(projectPath, rollbackFiles); err != nil {
+			http.Error(w, err.Error(), reviewHandoffStatus(err))
+			return
+		}
+		if err := writeRenderedRollbackArtifacts(projectPath, rendered); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		handoff, err := review.CreatePullRequestHandoff(review.PullRequestHandoffInput{
+			ProjectPath:   projectPath,
+			Title:         proposal.Title,
+			Branch:        proposal.Branch,
+			CommitMessage: proposal.CommitMessage,
+			BodyPath:      rollbackArtifactBodyPath(rendered),
+			Files:         rollbackFiles,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), reviewHandoffStatus(err))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Artifacts   recovery.RollbackArtifactSet `json:"artifacts"`
+			PullRequest review.PullRequestHandoff    `json:"pull_request"`
+		}{
+			Artifacts:   artifactSet,
+			PullRequest: handoff,
+		})
+	})
+
 	// ─── Drift Detection ───
 
 	driftDetector := drift.New()
@@ -2354,6 +2520,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(proposal)
 	})
 
@@ -2382,28 +2549,26 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		var proposal drift.RemediationProposal
+		mode := req.Mode
 		if req.Proposal != nil {
-			proposal = *req.Proposal
-			if req.Mode != "" && req.Mode != proposal.Mode {
+			if mode != "" && mode != req.Proposal.Mode {
 				http.Error(w, "request mode must match proposal mode", http.StatusBadRequest)
 				return
 			}
-		} else {
-			run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
-				Tool: req.Tool,
-				Env:  req.Env,
-			}, driftDetector)
-			if run == nil {
-				http.Error(w, message, status)
-				return
-			}
-			var buildErr error
-			proposal, buildErr = buildProjectDriftRemediationProposal(name, req.Mode, run)
-			if buildErr != nil {
-				http.Error(w, buildErr.Error(), http.StatusBadRequest)
-				return
-			}
+			mode = req.Proposal.Mode
+		}
+		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
+			Tool: req.Tool,
+			Env:  req.Env,
+		}, driftDetector)
+		if run == nil {
+			http.Error(w, message, status)
+			return
+		}
+		proposal, err := buildProjectDriftRemediationProposal(name, mode, run)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
 		artifactSet, rendered, err := drift.RenderRemediationArtifacts(proposal, time.Now().UTC())
 		if err != nil {
@@ -2414,7 +2579,90 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(artifactSet)
+	})
+
+	mux.HandleFunc("POST /api/projects/{name}/drift/remediation/pr", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		limitBody(w, r)
+		var req struct {
+			Tool     string                     `json:"tool,omitempty"`
+			Env      string                     `json:"env,omitempty"`
+			Mode     string                     `json:"mode"`
+			Proposal *drift.RemediationProposal `json:"proposal,omitempty"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Tool == "" {
+			req.Tool = r.URL.Query().Get("tool")
+		}
+		if req.Env == "" {
+			req.Env = r.URL.Query().Get("env")
+		}
+
+		projectPath, err := safeProjectPath(projectsDir, name)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		mode := req.Mode
+		if req.Proposal != nil {
+			if mode != "" && mode != req.Proposal.Mode {
+				http.Error(w, "request mode must match proposal mode", http.StatusBadRequest)
+				return
+			}
+			mode = req.Proposal.Mode
+		}
+		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
+			Tool: req.Tool,
+			Env:  req.Env,
+		}, driftDetector)
+		if run == nil {
+			http.Error(w, message, status)
+			return
+		}
+		proposal, err := buildProjectDriftRemediationProposal(name, mode, run)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		artifactSet, rendered, err := drift.RenderRemediationArtifacts(proposal, time.Now().UTC())
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		remediationFiles := remediationArtifactPaths(rendered)
+		if err := review.EnsureNoUnrelatedChanges(projectPath, remediationFiles); err != nil {
+			http.Error(w, err.Error(), reviewHandoffStatus(err))
+			return
+		}
+		if err := writeRenderedRemediationArtifacts(projectPath, rendered); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		handoff, err := review.CreatePullRequestHandoff(review.PullRequestHandoffInput{
+			ProjectPath:   projectPath,
+			Title:         proposal.Title,
+			Branch:        proposal.Branch,
+			CommitMessage: proposal.CommitMessage,
+			BodyPath:      remediationArtifactBodyPath(rendered),
+			Files:         remediationFiles,
+		})
+		if err != nil {
+			http.Error(w, err.Error(), reviewHandoffStatus(err))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(struct {
+			Artifacts   drift.RemediationArtifactSet `json:"artifacts"`
+			PullRequest review.PullRequestHandoff    `json:"pull_request"`
+		}{
+			Artifacts:   artifactSet,
+			PullRequest: handoff,
+		})
 	})
 
 	// ─── Multi-Format Export ───
