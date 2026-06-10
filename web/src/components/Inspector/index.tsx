@@ -285,7 +285,12 @@ export function InspectorPanel({
               Environment "{activeEnv}" has no configured IaC tool in .iac-studio.json.
             </div>
           ) : (
-            <DriftPanel projectName={projectId} tool={tool} env={activeEnv || undefined} />
+            <DriftPanel
+              projectName={projectId}
+              tool={tool}
+              env={activeEnv || undefined}
+              connectionId={selectedCloudConnection?.id}
+            />
           )}
         </div>
       )}

@@ -9,6 +9,9 @@ describe('DriftPanel', () => {
       runDrift: vi.fn().mockResolvedValue({
         has_state: true,
         state_path: '/tmp/demo/environments/dev/terraform.tfstate',
+        connection_id: 'conn_1',
+        connection_name: 'prod-aws',
+        connection_provider: 'aws',
         drifted: [],
         findings: [
           {
@@ -33,14 +36,15 @@ describe('DriftPanel', () => {
       }),
     };
 
-    render(<DriftPanel projectName="demo" tool="terraform" env="dev" client={client} />);
+    render(<DriftPanel projectName="demo" tool="terraform" env="dev" connectionId="conn_1" client={client} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Run drift' }));
 
     await waitFor(() => {
-      expect(client.runDrift).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev' });
+      expect(client.runDrift).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', connectionId: 'conn_1' });
     });
 
+    expect(screen.getByText('cloud prod-aws (aws)')).toBeInTheDocument();
     expect(screen.getByText('aws_security_group.web')).toBeInTheDocument();
     expect(screen.getByText('unauthorized change')).toBeInTheDocument();
     expect(screen.getByText('revert or codify after review')).toBeInTheDocument();
@@ -252,7 +256,7 @@ describe('DriftPanel', () => {
       }),
     };
 
-    render(<DriftPanel projectName="demo" tool="terraform" env="dev" client={client} />);
+    render(<DriftPanel projectName="demo" tool="terraform" env="dev" connectionId="conn_1" client={client} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Run drift' }));
     expect(await screen.findByText('aws_security_group.web')).toBeInTheDocument();
@@ -260,7 +264,7 @@ describe('DriftPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Draft revert PR' }));
 
     await waitFor(() => {
-      expect(client.createDriftRemediation).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', mode: 'revert' });
+      expect(client.createDriftRemediation).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', connectionId: 'conn_1', mode: 'revert' });
     });
     expect(await screen.findByText('Revert unauthorized drift for demo')).toBeInTheDocument();
     expect(screen.getByText('branch iac-studio-drift-revert-demo-dev')).toBeInTheDocument();
@@ -374,7 +378,7 @@ describe('DriftPanel', () => {
       }),
     };
 
-    render(<DriftPanel projectName="demo" tool="terraform" env="dev" client={client} />);
+    render(<DriftPanel projectName="demo" tool="terraform" env="dev" connectionId="conn_1" client={client} />);
 
     fireEvent.click(screen.getByRole('button', { name: 'Run drift' }));
     expect(await screen.findByText('aws_security_group.web')).toBeInTheDocument();
@@ -384,7 +388,7 @@ describe('DriftPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Write artifacts' }));
 
     await waitFor(() => {
-      expect(client.createDriftRemediationArtifacts).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', mode: 'revert', proposal });
+      expect(client.createDriftRemediationArtifacts).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', connectionId: 'conn_1', mode: 'revert', proposal });
     });
     expect(await screen.findByText('Review artifacts written')).toBeInTheDocument();
     expect(screen.getByText('.iac-studio/remediations/iac-studio-drift-revert-demo-dev')).toBeInTheDocument();
@@ -393,7 +397,7 @@ describe('DriftPanel', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Create PR branch' }));
 
     await waitFor(() => {
-      expect(client.createDriftRemediationPullRequest).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', mode: 'revert', proposal });
+      expect(client.createDriftRemediationPullRequest).toHaveBeenCalledWith('demo', { tool: 'terraform', env: 'dev', connectionId: 'conn_1', mode: 'revert', proposal });
     });
     expect(await screen.findByText('Remediation PR branch ready')).toBeInTheDocument();
     expect(screen.getByText(/iac-studio-drift-revert-demo-dev from main · def4567/)).toBeInTheDocument();

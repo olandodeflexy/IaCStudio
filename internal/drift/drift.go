@@ -32,6 +32,9 @@ const (
 type DriftReport struct {
 	HasState           bool              `json:"has_state"`
 	StatePath          string            `json:"state_path"`
+	ConnectionID       string            `json:"connection_id,omitempty"`
+	ConnectionName     string            `json:"connection_name,omitempty"`
+	ConnectionProvider string            `json:"connection_provider,omitempty"`
 	Drifted            []DriftedResource `json:"drifted"`
 	Findings           []DriftFinding    `json:"findings"`
 	SuppressedFindings []DriftFinding    `json:"suppressed_findings"`

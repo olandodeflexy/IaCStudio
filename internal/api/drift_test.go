@@ -2,17 +2,21 @@ package api
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/iac-studio/iac-studio/internal/cloudconnections"
 )
 
-func TestProjectDriftEndpointReturnsClassifiedFindings(t *testing.T) {
-	root := t.TempDir()
-	projectDir := filepath.Join(root, "demo")
+func writeTerraformDriftFixture(t *testing.T, root, name string) {
+	t.Helper()
+
+	projectDir := filepath.Join(root, name)
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
 		t.Fatalf("mkdir project: %v", err)
 	}
@@ -35,6 +39,11 @@ resource "aws_security_group" "web" {
 	}`), 0o600); err != nil {
 		t.Fatalf("write state: %v", err)
 	}
+}
+
+func TestProjectDriftEndpointReturnsClassifiedFindings(t *testing.T) {
+	root := t.TempDir()
+	writeTerraformDriftFixture(t, root, "demo")
 
 	srv := httptest.NewServer(fullRouterForTest(t, root))
 	defer srv.Close()
@@ -47,7 +56,6 @@ resource "aws_security_group" "web" {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("drift status = %d", resp.StatusCode)
 	}
-
 	var payload struct {
 		Findings []struct {
 			Address           string `json:"address"`
@@ -73,6 +81,80 @@ resource "aws_security_group" "web" {
 	if payload.Classifications["unauthorized_change"] != 1 {
 		t.Fatalf("unexpected classification counts: %#v", payload.Classifications)
 	}
+}
+
+func TestProjectDriftEndpointIncludesRedactedConnectionContext(t *testing.T) {
+	root := t.TempDir()
+	writeTerraformDriftFixture(t, root, "demo")
+
+	manager := cloudconnections.NewManager(root)
+	connection, err := manager.Save(cloudconnections.Connection{
+		Name:       "prod-aws",
+		Provider:   cloudconnections.ProviderAWS,
+		AuthMethod: "aws_static",
+		Region:     "us-east-1",
+		Metadata: map[string]string{
+			"access_key_id": "AKIAIOSFODNN7EXAMPLE",
+		},
+		Secrets: map[string]string{
+			"secret_access_key": "SECRET_SHOULD_NOT_LEAK",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save cloud connection: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/projects/demo/drift", "application/json", strings.NewReader(`{"tool":"terraform","connection_id":"`+connection.ID+`"}`))
+	if err != nil {
+		t.Fatalf("POST drift: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("drift status = %d", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read drift response: %v", err)
+	}
+	if strings.Contains(string(body), "SECRET_SHOULD_NOT_LEAK") ||
+		strings.Contains(string(body), "AKIAIOSFODNN7EXAMPLE") {
+		t.Fatalf("drift response leaked connection credential material: %s", string(body))
+	}
+
+	var payload struct {
+		ConnectionID       string `json:"connection_id"`
+		ConnectionName     string `json:"connection_name"`
+		ConnectionProvider string `json:"connection_provider"`
+	}
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("decode drift response: %v", err)
+	}
+	if payload.ConnectionID != connection.ID ||
+		payload.ConnectionName != "prod-aws" ||
+		payload.ConnectionProvider != cloudconnections.ProviderAWS {
+		t.Fatalf("unexpected connection context: %#v", payload)
+	}
+}
+
+func TestProjectDriftEndpointRejectsUnknownConnection(t *testing.T) {
+	root := t.TempDir()
+	writeTerraformDriftFixture(t, root, "demo")
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/projects/demo/drift", "application/json", strings.NewReader(`{"tool":"terraform","connection_id":"missing"}`))
+	if err != nil {
+		t.Fatalf("POST drift: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("drift status = %d, want 404", resp.StatusCode)
+	}
+	assertResponseBodyContains(t, resp, "cloud connection not found")
 }
 
 func TestProjectDriftEndpointAppliesConfiguredSuppressions(t *testing.T) {

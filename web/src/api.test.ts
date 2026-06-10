@@ -227,7 +227,7 @@ describe('api.runDrift', () => {
     vi.unstubAllGlobals();
   });
 
-  it('posts tool and environment to the drift endpoint', async () => {
+  it('posts tool, environment, and connection context to the drift endpoint', async () => {
     const response = {
       has_state: true,
       state_path: '/tmp/demo/terraform.tfstate',
@@ -250,12 +250,12 @@ describe('api.runDrift', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(api.runDrift('demo', { tool: 'terraform', env: 'dev' })).resolves.toEqual(response);
+    await expect(api.runDrift('demo', { tool: 'terraform', env: 'dev', connectionId: 'conn_1' })).resolves.toEqual(response);
 
     expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/drift', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool: 'terraform', env: 'dev' }),
+      body: JSON.stringify({ tool: 'terraform', env: 'dev', connection_id: 'conn_1' }),
     });
   });
 });
@@ -265,7 +265,7 @@ describe('api.createDriftRemediation', () => {
     vi.unstubAllGlobals();
   });
 
-  it('posts remediation mode with tool and environment', async () => {
+  it('posts remediation mode with tool, environment, and connection context', async () => {
     const response = {
       mode: 'revert',
       title: 'Revert unauthorized drift for demo',
@@ -283,12 +283,12 @@ describe('api.createDriftRemediation', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(api.createDriftRemediation('demo', { tool: 'terraform', env: 'dev', mode: 'revert' })).resolves.toEqual(response);
+    await expect(api.createDriftRemediation('demo', { tool: 'terraform', env: 'dev', connectionId: 'conn_1', mode: 'revert' })).resolves.toEqual(response);
 
     expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/drift/remediation', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool: 'terraform', env: 'dev', mode: 'revert' }),
+      body: JSON.stringify({ tool: 'terraform', env: 'dev', connection_id: 'conn_1', mode: 'revert' }),
     });
   });
 });
@@ -323,12 +323,12 @@ describe('api.createDriftRemediationArtifacts', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const proposal = response.proposal;
-    await expect(api.createDriftRemediationArtifacts('demo', { tool: 'terraform', env: 'dev', mode: 'revert', proposal })).resolves.toEqual(response);
+    await expect(api.createDriftRemediationArtifacts('demo', { tool: 'terraform', env: 'dev', connectionId: 'conn_1', mode: 'revert', proposal })).resolves.toEqual(response);
 
     expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/drift/remediation/artifacts', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool: 'terraform', env: 'dev', mode: 'revert', proposal }),
+      body: JSON.stringify({ tool: 'terraform', env: 'dev', connection_id: 'conn_1', mode: 'revert', proposal }),
     });
   });
 });
@@ -375,12 +375,12 @@ describe('api.createDriftRemediationPullRequest', () => {
     );
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(api.createDriftRemediationPullRequest('demo', { tool: 'terraform', env: 'dev', mode: 'revert', proposal })).resolves.toEqual(response);
+    await expect(api.createDriftRemediationPullRequest('demo', { tool: 'terraform', env: 'dev', connectionId: 'conn_1', mode: 'revert', proposal })).resolves.toEqual(response);
 
     expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/drift/remediation/pr', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tool: 'terraform', env: 'dev', mode: 'revert', proposal }),
+      body: JSON.stringify({ tool: 'terraform', env: 'dev', connection_id: 'conn_1', mode: 'revert', proposal }),
     });
   });
 });
