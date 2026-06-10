@@ -64,8 +64,8 @@ start the local server for you.
 | **AI Topology Builder** | Describe an architecture in plain text, AI generates everything |
 | **AI Plan Fix** | When terraform plan fails, AI diagnoses and auto-fixes the issue |
 | **Security Scanner** | Graph-based checks: CIS, SOC2, HIPAA, OWASP compliance |
-| **Drift Monitor** | Run Terraform/OpenTofu state drift checks with classified findings, suppression rules, draft codify/revert PR payloads, and review artifacts |
-| **Recovery Checkpoints** | Successful apply runs record state/plan metadata and hashes for audit, drift, and reviewed rollback proposal workflows |
+| **Drift Monitor** | Run Terraform/OpenTofu state drift checks with classified findings, suppression rules, draft codify/revert PR payloads, review artifacts, and PR-ready local branches |
+| **Recovery Checkpoints** | Successful apply runs record state/plan metadata and hashes for audit, drift, rollback proposal artifacts, and PR-ready recovery branches |
 | **Multi-Format Export** | Export to Pulumi TypeScript, CDK Python, CloudFormation |
 | **Smart Suggestions** | AI predicts your next resource based on IaC best practices |
 | **Import Projects** | Browse filesystem, scan existing .tf/.yml files, auto-detect topology |
@@ -144,6 +144,7 @@ IaC Studio runs locally and is designed to be secure by default:
 - **Plan-before-apply** — server-side gate requires successful plan before apply
 - **Semantic plan review** — Terraform/OpenTofu plans are classified before apply; risky, destructive, or unknown changes require explicit acknowledgement
 - **Recovery checkpoints** — successful apply-style runs write metadata and state/plan hashes under `.iac-studio/snapshots`; rollback requests generate review artifacts, not automatic undo actions
+- **Review-branch handoff** — drift and rollback PR workflows create local branches that commit only generated `.iac-studio/remediations` or `.iac-studio/rollbacks` artifacts, reject unrelated dirty source files, and return explicit `git push` / `gh pr create` commands instead of collecting GitHub tokens
 - **Cloud target checks** — selected Cloud Connections are tested before command execution
 - **Secret redaction** — static credentials are not echoed in API responses, terminal messages, or generated IaC
 - **No telemetry** — zero data collection, no phone-home
@@ -207,6 +208,7 @@ All flags have sensible defaults. Just run `iac-studio` and go.
 - [x] Cloud Connections for AWS, Azure, and GCP run targets
 - [x] Recovery checkpoint metadata for successful apply runs
 - [x] Reviewed rollback proposal artifacts from recovery checkpoints
+- [x] PR-ready local review branches for drift and rollback artifacts
 - [x] Cost estimation (30+ resource types)
 - [x] CI/CD pipeline generator (GitHub Actions, GitLab CI)
 - [x] Environment promotion (dev/staging/prod workspaces)

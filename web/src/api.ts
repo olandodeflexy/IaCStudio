@@ -264,6 +264,29 @@ export interface DriftRemediationArtifactSet {
   files: DriftRemediationArtifactFile[];
 }
 
+export interface ReviewCommand {
+  label: string;
+  args: string[];
+  display: string;
+}
+
+export interface PullRequestHandoff {
+  title: string;
+  branch: string;
+  base_branch: string;
+  commit: string;
+  commit_message: string;
+  body_path: string;
+  files: string[];
+  commands: ReviewCommand[];
+  warnings?: string[];
+}
+
+export interface DriftRemediationPullRequestResponse {
+  artifacts: DriftRemediationArtifactSet;
+  pull_request: PullRequestHandoff;
+}
+
 export interface StateSnapshot {
   id: string;
   project: string;
@@ -310,6 +333,11 @@ export interface RollbackArtifactSet {
   created_at: string;
   proposal: RollbackProposal;
   files: RollbackArtifactFile[];
+}
+
+export interface RollbackPullRequestResponse {
+  artifacts: RollbackArtifactSet;
+  pull_request: PullRequestHandoff;
 }
 
 // Checks res.ok and throws with the backend's error message instead of
@@ -594,6 +622,15 @@ export const api = {
     return (await check(res)).json();
   },
 
+  async createDriftRemediationPullRequest(projectName: string, req: { tool?: string; env?: string; mode: DriftRemediationMode; proposal?: DriftRemediationProposal }): Promise<DriftRemediationPullRequestResponse> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/drift/remediation/pr`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
   async listStateSnapshots(projectName: string, env?: string): Promise<StateSnapshot[]> {
     const params = new URLSearchParams();
     if (env) params.set('env', env);
@@ -613,6 +650,15 @@ export const api = {
 
   async createRollbackArtifacts(projectName: string, snapshotId: string, req: { env?: string; proposal?: RollbackProposal } = {}): Promise<RollbackArtifactSet> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/snapshots/${snapshotId}/rollback/artifacts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    });
+    return (await check(res)).json();
+  },
+
+  async createRollbackPullRequest(projectName: string, snapshotId: string, req: { env?: string; proposal?: RollbackProposal } = {}): Promise<RollbackPullRequestResponse> {
+    const res = await fetch(`${BASE}/api/projects/${projectName}/snapshots/${snapshotId}/rollback/pr`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(req),

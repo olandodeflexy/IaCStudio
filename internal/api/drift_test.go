@@ -345,7 +345,150 @@ resource "aws_security_group" "web" {
 	}
 }
 
-func TestProjectDriftRemediationArtifactsEndpointUsesProvidedProposal(t *testing.T) {
+func TestProjectDriftRemediationPREndpointCreatesReviewBranch(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "main.tf"), []byte(`
+resource "aws_security_group" "web" {
+  name    = "web"
+  ingress = []
+}
+`), 0o644); err != nil {
+		t.Fatalf("write main.tf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "terraform.tfstate"), []byte(`{
+		"version": 4,
+		"resources": [{
+			"mode": "managed",
+			"type": "aws_security_group",
+			"name": "web",
+			"instances": [{"attributes": {"name": "web", "ingress": [{"cidr_blocks": ["0.0.0.0/0"]}]}}]
+		}]
+	}`), 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	initProjectGitRepo(t, projectDir)
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/projects/demo/drift/remediation/pr", "application/json", strings.NewReader(`{"tool":"terraform","mode":"revert"}`))
+	if err != nil {
+		t.Fatalf("POST drift remediation pr: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("drift remediation pr status = %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Artifacts struct {
+			ID string `json:"id"`
+		} `json:"artifacts"`
+		PullRequest struct {
+			Title      string `json:"title"`
+			Branch     string `json:"branch"`
+			BaseBranch string `json:"base_branch"`
+			Commit     string `json:"commit"`
+			BodyPath   string `json:"body_path"`
+			Files      []struct {
+				Path string `json:"path"`
+			} `json:"-"`
+			Commands []struct {
+				Label   string   `json:"label"`
+				Args    []string `json:"args"`
+				Display string   `json:"display"`
+			} `json:"commands"`
+		} `json:"pull_request"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode drift remediation pr response: %v", err)
+	}
+	if payload.Artifacts.ID != "iac-studio-drift-revert-demo" ||
+		payload.PullRequest.Branch != "iac-studio-drift-revert-demo" ||
+		payload.PullRequest.BaseBranch != "main" ||
+		payload.PullRequest.Commit == "" ||
+		payload.PullRequest.BodyPath != ".iac-studio/remediations/iac-studio-drift-revert-demo/pr-body.md" {
+		t.Fatalf("unexpected PR payload: %#v", payload)
+	}
+	if len(payload.PullRequest.Commands) != 2 ||
+		payload.PullRequest.Commands[0].Args[0] != "git" ||
+		payload.PullRequest.Commands[1].Args[0] != "gh" {
+		t.Fatalf("unexpected PR commands: %#v", payload.PullRequest.Commands)
+	}
+	if branch := gitOutputForTest(t, projectDir, "rev-parse", "--abbrev-ref", "HEAD"); branch != "iac-studio-drift-revert-demo" {
+		t.Fatalf("current branch = %q", branch)
+	}
+	if status := gitOutputForTest(t, projectDir, "status", "--short"); status != "" {
+		t.Fatalf("worktree should be clean after PR handoff, got:\n%s", status)
+	}
+	committed := gitOutputForTest(t, projectDir, "show", "--name-only", "--format=", "HEAD")
+	if !strings.Contains(committed, ".iac-studio/remediations/iac-studio-drift-revert-demo/README.md") ||
+		strings.Contains(committed, "main.tf") {
+		t.Fatalf("review commit should contain only generated artifacts, got:\n%s", committed)
+	}
+}
+
+func TestProjectDriftRemediationPREndpointRejectsDirtySourceFiles(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "main.tf"), []byte(`
+resource "aws_security_group" "web" {
+  name    = "web"
+  ingress = []
+}
+`), 0o644); err != nil {
+		t.Fatalf("write main.tf: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectDir, "terraform.tfstate"), []byte(`{
+		"version": 4,
+		"resources": [{
+			"mode": "managed",
+			"type": "aws_security_group",
+			"name": "web",
+			"instances": [{"attributes": {"name": "web", "ingress": [{"cidr_blocks": ["0.0.0.0/0"]}]}}]
+		}]
+	}`), 0o600); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+	initProjectGitRepo(t, projectDir)
+	if err := os.WriteFile(filepath.Join(projectDir, "main.tf"), []byte(`
+resource "aws_security_group" "web" {
+  name    = "web"
+  ingress = []
+}
+
+# dirty source edit
+`), 0o644); err != nil {
+		t.Fatalf("dirty source file: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/projects/demo/drift/remediation/pr", "application/json", strings.NewReader(`{"tool":"terraform","mode":"revert"}`))
+	if err != nil {
+		t.Fatalf("POST drift remediation pr: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("drift remediation pr status = %d, want 409", resp.StatusCode)
+	}
+	if branch := gitOutputForTest(t, projectDir, "rev-parse", "--abbrev-ref", "HEAD"); branch != "main" {
+		t.Fatalf("dirty rejection should leave branch on main, got %q", branch)
+	}
+	if _, err := os.Stat(filepath.Join(projectDir, ".iac-studio", "remediations", "iac-studio-drift-revert-demo", "README.md")); !os.IsNotExist(err) {
+		t.Fatalf("dirty rejection should not write review artifacts, stat err = %v", err)
+	}
+}
+
+func TestProjectDriftRemediationArtifactsEndpointRebuildsServerProposal(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
@@ -402,15 +545,16 @@ func TestProjectDriftRemediationArtifactsEndpointUsesProvidedProposal(t *testing
 		t.Fatalf("decode drift remediation artifacts response: %v", err)
 	}
 	if payload.ID != "iac-studio-drift-codify-demo" ||
-		payload.Proposal.Title != "Codify reviewed drift for demo" {
+		payload.Proposal.Title != "Codify drift for demo" {
 		t.Fatalf("unexpected artifact payload: %#v", payload)
 	}
 	prBody, err := os.ReadFile(filepath.Join(projectDir, ".iac-studio", "remediations", "iac-studio-drift-codify-demo", "pr-body.md"))
 	if err != nil {
 		t.Fatalf("read pr-body artifact: %v", err)
 	}
-	if !strings.Contains(string(prBody), "Reviewed finding: aws_s3_bucket.logs") {
-		t.Fatalf("artifact body should come from provided proposal, got:\n%s", string(prBody))
+	if strings.Contains(string(prBody), "Reviewed finding: aws_s3_bucket.logs") ||
+		!strings.Contains(string(prBody), "No active drift findings matched this remediation mode.") {
+		t.Fatalf("artifact body should be rebuilt server-side, got:\n%s", string(prBody))
 	}
 }
 
