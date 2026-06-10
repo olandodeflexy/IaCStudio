@@ -8,6 +8,7 @@ import {
   type DriftRemediationMode,
   type DriftRemediationPullRequestResponse,
   type DriftRemediationProposal,
+  type DriftRequestScope,
   type DriftReport,
   type PullRequestHandoff,
   type RollbackArtifactSet,
@@ -21,6 +22,7 @@ export interface DriftPanelProps {
   projectName: string;
   tool?: string;
   env?: string;
+  connectionId?: string | null;
   client?: Pick<typeof api, 'runDrift'> & Partial<Pick<typeof api,
     'createDriftRemediation' |
     'createDriftRemediationArtifacts' |
@@ -154,6 +156,7 @@ export function DriftPanel({
   projectName,
   tool = 'terraform',
   env,
+  connectionId,
   client = api,
 }: DriftPanelProps) {
   const [running, setRunning] = useState(false);
@@ -189,6 +192,13 @@ export function DriftPanel({
   const canListSnapshots = Boolean(client.listStateSnapshots);
   const canDraftRollback = Boolean(client.createRollbackProposal);
 
+  const driftScope = (): DriftRequestScope & { tool: string } => {
+    const scope: DriftRequestScope & { tool: string } = { tool };
+    if (env) scope.env = env;
+    if (connectionId) scope.connectionId = connectionId;
+    return scope;
+  };
+
   const run = async () => {
     if (!supported) return;
     setRunning(true);
@@ -201,9 +211,7 @@ export function DriftPanel({
     setArtifacts(null);
     setPullRequest(null);
     try {
-      const req: { tool: string; env?: string } = { tool };
-      if (env) req.env = env;
-      const response = await client.runDrift(projectName, req);
+      const response = await client.runDrift(projectName, driftScope());
       setReport(response);
     } catch (err) {
       setError(String(err));
@@ -222,8 +230,7 @@ export function DriftPanel({
     setArtifacts(null);
     setPullRequest(null);
     try {
-      const req: { tool: string; env?: string; mode: DriftRemediationMode } = { tool, mode };
-      if (env) req.env = env;
+      const req: DriftRequestScope & { tool: string; mode: DriftRemediationMode } = { ...driftScope(), mode };
       const response = await client.createDriftRemediation(projectName, req);
       setProposal(response);
     } catch (err) {
@@ -239,8 +246,7 @@ export function DriftPanel({
     setArtifactError(null);
     setArtifacts(null);
     try {
-      const req: { tool: string; env?: string; mode: DriftRemediationMode; proposal: DriftRemediationProposal } = { tool, mode: proposal.mode, proposal };
-      if (env) req.env = env;
+      const req: DriftRequestScope & { tool: string; mode: DriftRemediationMode; proposal: DriftRemediationProposal } = { ...driftScope(), mode: proposal.mode, proposal };
       const response = await client.createDriftRemediationArtifacts(projectName, req);
       setArtifacts(response);
     } catch (err) {
@@ -256,8 +262,7 @@ export function DriftPanel({
     setPullRequestError(null);
     setPullRequest(null);
     try {
-      const req: { tool: string; env?: string; mode: DriftRemediationMode; proposal: DriftRemediationProposal } = { tool, mode: proposal.mode, proposal };
-      if (env) req.env = env;
+      const req: DriftRequestScope & { tool: string; mode: DriftRemediationMode; proposal: DriftRemediationProposal } = { ...driftScope(), mode: proposal.mode, proposal };
       const response: DriftRemediationPullRequestResponse = await client.createDriftRemediationPullRequest(projectName, req);
       setArtifacts(response.artifacts);
       setPullRequest(response.pull_request);
@@ -568,6 +573,12 @@ export function DriftPanel({
               {report.state_path && (
                 <div className="mt-1 truncate text-[10px] font-mono text-muted-foreground">
                   state {report.state_path}
+                </div>
+              )}
+              {report.connection_id && (
+                <div className="mt-1 truncate text-[10px] font-mono text-muted-foreground">
+                  cloud {report.connection_name || report.connection_id}
+                  {report.connection_provider ? ` (${report.connection_provider})` : ''}
                 </div>
               )}
             </div>

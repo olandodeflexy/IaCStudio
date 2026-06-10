@@ -213,6 +213,9 @@ export interface DriftFinding {
 export interface DriftReport {
   has_state: boolean;
   state_path: string;
+  connection_id?: string;
+  connection_name?: string;
+  connection_provider?: string;
   drifted: DriftResource[];
   findings: DriftFinding[];
   suppressed_findings?: DriftFinding[];
@@ -226,6 +229,12 @@ export interface DriftReport {
 }
 
 export type DriftRemediationMode = 'codify' | 'revert';
+
+export interface DriftRequestScope {
+  tool?: string;
+  env?: string;
+  connectionId?: string | null;
+}
 
 export interface DriftRemediationFileChange {
   path?: string;
@@ -595,38 +604,59 @@ export const api = {
     return (await check(res)).json();
   },
 
-  async runDrift(projectName: string, req: { tool?: string; env?: string } = {}): Promise<DriftReport> {
+  async runDrift(projectName: string, req: DriftRequestScope = {}): Promise<DriftReport> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/drift`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
+      body: JSON.stringify({
+        tool: req.tool,
+        env: req.env,
+        connection_id: req.connectionId || undefined,
+      }),
     });
     return (await check(res)).json();
   },
 
-  async createDriftRemediation(projectName: string, req: { tool?: string; env?: string; mode: DriftRemediationMode }): Promise<DriftRemediationProposal> {
+  async createDriftRemediation(projectName: string, req: DriftRequestScope & { mode: DriftRemediationMode }): Promise<DriftRemediationProposal> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/drift/remediation`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
+      body: JSON.stringify({
+        tool: req.tool,
+        env: req.env,
+        connection_id: req.connectionId || undefined,
+        mode: req.mode,
+      }),
     });
     return (await check(res)).json();
   },
 
-  async createDriftRemediationArtifacts(projectName: string, req: { tool?: string; env?: string; mode: DriftRemediationMode; proposal?: DriftRemediationProposal }): Promise<DriftRemediationArtifactSet> {
+  async createDriftRemediationArtifacts(projectName: string, req: DriftRequestScope & { mode: DriftRemediationMode; proposal?: DriftRemediationProposal }): Promise<DriftRemediationArtifactSet> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/drift/remediation/artifacts`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
+      body: JSON.stringify({
+        tool: req.tool,
+        env: req.env,
+        connection_id: req.connectionId || undefined,
+        mode: req.mode,
+        proposal: req.proposal,
+      }),
     });
     return (await check(res)).json();
   },
 
-  async createDriftRemediationPullRequest(projectName: string, req: { tool?: string; env?: string; mode: DriftRemediationMode; proposal?: DriftRemediationProposal }): Promise<DriftRemediationPullRequestResponse> {
+  async createDriftRemediationPullRequest(projectName: string, req: DriftRequestScope & { mode: DriftRemediationMode; proposal?: DriftRemediationProposal }): Promise<DriftRemediationPullRequestResponse> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/drift/remediation/pr`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
+      body: JSON.stringify({
+        tool: req.tool,
+        env: req.env,
+        connection_id: req.connectionId || undefined,
+        mode: req.mode,
+        proposal: req.proposal,
+      }),
     });
     return (await check(res)).json();
   },

@@ -37,8 +37,8 @@ vi.mock('../ScanPanel', () => ({
 }));
 
 vi.mock('../DriftPanel', () => ({
-  DriftPanel: ({ projectName, tool, env }: any) => (
-    <div>Drift panel {projectName} {tool} {env}</div>
+  DriftPanel: ({ projectName, tool, env, connectionId }: any) => (
+    <div>Drift panel {projectName} {tool} {env} {connectionId || 'no-connection'}</div>
   ),
 }));
 
@@ -212,9 +212,18 @@ describe('InspectorPanel', () => {
   });
 
   it('renders the drift tab with tool and environment context', () => {
-    renderInspector({ activeTab: 'drift', activeEnv: 'dev' });
+    renderInspector({
+      activeTab: 'drift',
+      activeEnv: 'dev',
+      selectedCloudConnection: {
+        id: 'conn_1',
+        name: 'prod-aws',
+        provider: 'aws',
+        auth_method: 'aws_profile',
+      },
+    });
 
-    expect(screen.getByText('Drift panel demo terraform dev')).toBeInTheDocument();
+    expect(screen.getByText('Drift panel demo terraform dev conn_1')).toBeInTheDocument();
   });
 
   it('renders the cloud connections tab', () => {

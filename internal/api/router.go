@@ -411,8 +411,9 @@ func hybridToolResolutionMessage(missingEnvMessage, env string) string {
 }
 
 type projectDriftRequest struct {
-	Tool string
-	Env  string
+	Tool         string
+	Env          string
+	ConnectionID string
 }
 
 type projectDriftRun struct {
@@ -424,10 +425,25 @@ type projectDriftRun struct {
 	Env         string
 }
 
-func runProjectDrift(projectsDir, name string, req projectDriftRequest, detector *drift.Detector) (*projectDriftRun, int, string) {
+func runProjectDrift(projectsDir, name string, req projectDriftRequest, detector *drift.Detector, cloudConnections *cloudconnections.Manager) (*projectDriftRun, int, string) {
 	projectPath, err := safeProjectPath(projectsDir, name)
 	if err != nil {
 		return nil, http.StatusBadRequest, err.Error()
+	}
+
+	connectionID := strings.TrimSpace(req.ConnectionID)
+	var connection *cloudconnections.Connection
+	if connectionID != "" {
+		if cloudConnections == nil {
+			return nil, http.StatusInternalServerError, "cloud connections are not available"
+		}
+		connection, err = cloudConnections.Get(connectionID)
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				return nil, http.StatusNotFound, "cloud connection not found"
+			}
+			return nil, http.StatusInternalServerError, "load cloud connection: " + err.Error()
+		}
 	}
 
 	tool := effectiveProjectTool(projectPath, req.Tool, req.Env)
@@ -467,6 +483,11 @@ func runProjectDrift(projectsDir, name string, req projectDriftRequest, detector
 	})
 	if err != nil {
 		return nil, http.StatusInternalServerError, err.Error()
+	}
+	if connection != nil {
+		report.ConnectionID = connection.ID
+		report.ConnectionName = connection.Name
+		report.ConnectionProvider = connection.Provider
 	}
 	return &projectDriftRun{
 		Report:      report,
@@ -2459,8 +2480,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 
 		limitBody(w, r)
 		var req struct {
-			Tool string `json:"tool,omitempty"`
-			Env  string `json:"env,omitempty"`
+			Tool         string `json:"tool,omitempty"`
+			Env          string `json:"env,omitempty"`
+			ConnectionID string `json:"connection_id,omitempty"`
 		}
 		if r.Method == http.MethodPost {
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
@@ -2474,11 +2496,15 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		if req.Env == "" {
 			req.Env = r.URL.Query().Get("env")
 		}
+		if req.ConnectionID == "" {
+			req.ConnectionID = r.URL.Query().Get("connection_id")
+		}
 
 		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
-			Tool: req.Tool,
-			Env:  req.Env,
-		}, driftDetector)
+			Tool:         req.Tool,
+			Env:          req.Env,
+			ConnectionID: req.ConnectionID,
+		}, driftDetector, cloudConnections)
 		if run == nil {
 			http.Error(w, message, status)
 			return
@@ -2492,9 +2518,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		name := r.PathValue("name")
 		limitBody(w, r)
 		var req struct {
-			Tool string `json:"tool,omitempty"`
-			Env  string `json:"env,omitempty"`
-			Mode string `json:"mode"`
+			Tool         string `json:"tool,omitempty"`
+			Env          string `json:"env,omitempty"`
+			ConnectionID string `json:"connection_id,omitempty"`
+			Mode         string `json:"mode"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), 400)
@@ -2506,11 +2533,15 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		if req.Env == "" {
 			req.Env = r.URL.Query().Get("env")
 		}
+		if req.ConnectionID == "" {
+			req.ConnectionID = r.URL.Query().Get("connection_id")
+		}
 
 		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
-			Tool: req.Tool,
-			Env:  req.Env,
-		}, driftDetector)
+			Tool:         req.Tool,
+			Env:          req.Env,
+			ConnectionID: req.ConnectionID,
+		}, driftDetector, cloudConnections)
 		if run == nil {
 			http.Error(w, message, status)
 			return
@@ -2528,10 +2559,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		name := r.PathValue("name")
 		limitBody(w, r)
 		var req struct {
-			Tool     string                     `json:"tool,omitempty"`
-			Env      string                     `json:"env,omitempty"`
-			Mode     string                     `json:"mode"`
-			Proposal *drift.RemediationProposal `json:"proposal,omitempty"`
+			Tool         string                     `json:"tool,omitempty"`
+			Env          string                     `json:"env,omitempty"`
+			ConnectionID string                     `json:"connection_id,omitempty"`
+			Mode         string                     `json:"mode"`
+			Proposal     *drift.RemediationProposal `json:"proposal,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), 400)
@@ -2542,6 +2574,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		}
 		if req.Env == "" {
 			req.Env = r.URL.Query().Get("env")
+		}
+		if req.ConnectionID == "" {
+			req.ConnectionID = r.URL.Query().Get("connection_id")
 		}
 
 		projectPath, err := safeProjectPath(projectsDir, name)
@@ -2558,9 +2593,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			mode = req.Proposal.Mode
 		}
 		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
-			Tool: req.Tool,
-			Env:  req.Env,
-		}, driftDetector)
+			Tool:         req.Tool,
+			Env:          req.Env,
+			ConnectionID: req.ConnectionID,
+		}, driftDetector, cloudConnections)
 		if run == nil {
 			http.Error(w, message, status)
 			return
@@ -2587,10 +2623,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		name := r.PathValue("name")
 		limitBody(w, r)
 		var req struct {
-			Tool     string                     `json:"tool,omitempty"`
-			Env      string                     `json:"env,omitempty"`
-			Mode     string                     `json:"mode"`
-			Proposal *drift.RemediationProposal `json:"proposal,omitempty"`
+			Tool         string                     `json:"tool,omitempty"`
+			Env          string                     `json:"env,omitempty"`
+			ConnectionID string                     `json:"connection_id,omitempty"`
+			Mode         string                     `json:"mode"`
+			Proposal     *drift.RemediationProposal `json:"proposal,omitempty"`
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -2601,6 +2638,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 		}
 		if req.Env == "" {
 			req.Env = r.URL.Query().Get("env")
+		}
+		if req.ConnectionID == "" {
+			req.ConnectionID = r.URL.Query().Get("connection_id")
 		}
 
 		projectPath, err := safeProjectPath(projectsDir, name)
@@ -2617,9 +2657,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			mode = req.Proposal.Mode
 		}
 		run, status, message := runProjectDrift(projectsDir, name, projectDriftRequest{
-			Tool: req.Tool,
-			Env:  req.Env,
-		}, driftDetector)
+			Tool:         req.Tool,
+			Env:          req.Env,
+			ConnectionID: req.ConnectionID,
+		}, driftDetector, cloudConnections)
 		if run == nil {
 			http.Error(w, message, status)
 			return
