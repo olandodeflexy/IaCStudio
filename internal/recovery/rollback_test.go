@@ -130,4 +130,8 @@ func TestRenderRollbackArtifactsIncludesRunbookAndMetadata(t *testing.T) {
 	if metadata.Proposal.ID != proposal.ID || metadata.Files[0].Size == 0 {
 		t.Fatalf("unexpected metadata: %#v", metadata)
 	}
+	metadataFile := metadata.Files[len(metadata.Files)-1]
+	if metadataFile.Path != set.Root+"/proposal.json" || metadataFile.Size != len(contents[set.Root+"/proposal.json"]) {
+		t.Fatalf("metadata self-size = %#v, content length = %d", metadataFile, len(contents[set.Root+"/proposal.json"]))
+	}
 }

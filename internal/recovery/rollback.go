@@ -265,11 +265,26 @@ func renderRollbackMetadata(root string, createdAt time.Time, proposal RollbackP
 			Size:    len(file.Content),
 		})
 	}
-	files = append(files, RollbackArtifactFile{
+	metadataFile := RollbackArtifactFile{
 		Path:    root + "/proposal.json",
 		Kind:    "metadata",
 		Summary: "Machine-readable rollback proposal metadata.",
-	})
+	}
+	for range 8 {
+		content, err := marshalRollbackMetadata(cleanArtifactSegment(proposal.ID), root, createdAt, proposal, append(files, metadataFile))
+		if err != nil {
+			return "", err
+		}
+		size := len(content)
+		if metadataFile.Size == size {
+			return content, nil
+		}
+		metadataFile.Size = size
+	}
+	return marshalRollbackMetadata(cleanArtifactSegment(proposal.ID), root, createdAt, proposal, append(files, metadataFile))
+}
+
+func marshalRollbackMetadata(id, root string, createdAt time.Time, proposal RollbackProposal, files []RollbackArtifactFile) (string, error) {
 	payload := struct {
 		ID        string                 `json:"id"`
 		Root      string                 `json:"root"`
@@ -277,7 +292,7 @@ func renderRollbackMetadata(root string, createdAt time.Time, proposal RollbackP
 		Proposal  RollbackProposal       `json:"proposal"`
 		Files     []RollbackArtifactFile `json:"files"`
 	}{
-		ID:        cleanArtifactSegment(proposal.ID),
+		ID:        id,
 		Root:      root,
 		CreatedAt: createdAt,
 		Proposal:  proposal,

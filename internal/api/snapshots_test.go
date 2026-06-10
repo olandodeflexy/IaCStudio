@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	iacplan "github.com/iac-studio/iac-studio/internal/plan"
 	"github.com/iac-studio/iac-studio/internal/recovery"
 )
 
@@ -127,6 +128,9 @@ func TestCreateRollbackProposalForSnapshot(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("rollback status = %d", resp.StatusCode)
 	}
+	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("rollback content-type = %q, want application/json", got)
+	}
 
 	var proposal recovery.RollbackProposal
 	if err := json.NewDecoder(resp.Body).Decode(&proposal); err != nil {
@@ -184,6 +188,9 @@ func TestCreateRollbackArtifactsWritesReviewFiles(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("rollback artifacts status = %d", resp.StatusCode)
 	}
+	if got := resp.Header.Get("Content-Type"); !strings.Contains(got, "application/json") {
+		t.Fatalf("rollback artifacts content-type = %q, want application/json", got)
+	}
 
 	var set recovery.RollbackArtifactSet
 	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
@@ -199,6 +206,91 @@ func TestCreateRollbackArtifactsWritesReviewFiles(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "does not apply infrastructure changes automatically") {
 		t.Fatalf("runbook missing safety warning:\n%s", string(data))
+	}
+}
+
+func TestCreateRollbackArtifactsRebuildsServerProposal(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	target, err := recovery.RecordSnapshot(projectDir, projectDir, recovery.SnapshotInput{
+		Project: "demo",
+		Tool:    "terraform",
+		Command: "apply",
+	}, time.Date(2026, 6, 10, 12, 0, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatalf("record target snapshot: %v", err)
+	}
+	proposal, err := recovery.BuildRollbackProposal(recovery.RollbackInput{
+		ProjectName:    "demo",
+		TargetSnapshot: target,
+	})
+	if err != nil {
+		t.Fatalf("build proposal: %v", err)
+	}
+	proposal.Branch = "client-controlled-branch"
+	proposal.Body = "safe to apply"
+	proposal.Warnings = nil
+	proposal.Classification = &iacplan.ClassificationResult{
+		Summary: iacplan.ClassificationSummary{
+			Safe:                   1,
+			Total:                  1,
+			RequiresAcknowledgment: false,
+			Text:                   "Semantic plan: 1 safe change",
+		},
+	}
+	body, err := json.Marshal(map[string]any{"proposal": proposal})
+	if err != nil {
+		t.Fatalf("marshal request: %v", err)
+	}
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/snapshots/"+target.ID+"/rollback/artifacts",
+		"application/json",
+		bytes.NewReader(body),
+	)
+	if err != nil {
+		t.Fatalf("POST rollback artifacts: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("rollback artifacts status = %d", resp.StatusCode)
+	}
+
+	var set recovery.RollbackArtifactSet
+	if err := json.NewDecoder(resp.Body).Decode(&set); err != nil {
+		t.Fatalf("decode rollback artifacts: %v", err)
+	}
+	if set.Proposal.Branch == "client-controlled-branch" || set.Proposal.Body == "safe to apply" {
+		t.Fatalf("artifact set should use server-built proposal, got %#v", set.Proposal)
+	}
+	if set.Proposal.Classification == nil ||
+		!set.Proposal.Classification.Summary.RequiresAcknowledgment ||
+		set.Proposal.Classification.Summary.Unknown != 1 {
+		t.Fatalf("artifact set should preserve fail-closed classification: %#v", set.Proposal.Classification)
+	}
+	if !strings.Contains(strings.Join(set.Proposal.Warnings, "\n"), "Generate and review a fresh plan") {
+		t.Fatalf("artifact set should preserve server warnings: %#v", set.Proposal.Warnings)
+	}
+
+	metadataPath := filepath.Join(projectDir, ".iac-studio", "rollbacks", set.ID, "proposal.json")
+	metadataData, err := os.ReadFile(metadataPath)
+	if err != nil {
+		t.Fatalf("read rollback metadata: %v", err)
+	}
+	var metadata recovery.RollbackArtifactSet
+	if err := json.Unmarshal(metadataData, &metadata); err != nil {
+		t.Fatalf("decode rollback metadata: %v", err)
+	}
+	if metadata.Proposal.Classification == nil ||
+		!metadata.Proposal.Classification.Summary.RequiresAcknowledgment ||
+		metadata.Proposal.Classification.Summary.Unknown != 1 {
+		t.Fatalf("metadata should preserve fail-closed classification: %#v", metadata.Proposal.Classification)
 	}
 }
 

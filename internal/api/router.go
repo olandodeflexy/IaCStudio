@@ -2232,6 +2232,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, message, status)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(proposal)
 	})
 
@@ -2266,7 +2267,9 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				http.Error(w, "request proposal must match snapshot id", http.StatusBadRequest)
 				return
 			}
-			proposal = *req.Proposal
+			// The submitted proposal is only a stale-request guard. Artifacts
+			// are always rendered from a fresh server-built proposal so clients
+			// cannot weaken fail-closed classification or scrub warnings.
 		}
 		artifactSet, rendered, err := recovery.RenderRollbackArtifacts(proposal, time.Now().UTC())
 		if err != nil {
@@ -2277,6 +2280,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(artifactSet)
 	})
 
