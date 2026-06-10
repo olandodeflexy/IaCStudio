@@ -316,6 +316,44 @@ func TestSafeProjectFilePathAcceptsValidPaths(t *testing.T) {
 	}
 }
 
+func TestSafeReviewArtifactPathEnforcesPrefix(t *testing.T) {
+	reject := []string{
+		"main.tf",
+		"../escape",
+		".iac-studio/snapshots/foo.json",
+		".iac-studio/remediations",        // directory itself, no trailing slash
+		".iac-studio/rollbacks",            // directory itself, no trailing slash
+		".iac-studio/remediations_evil/x",  // adjacent directory, not the allowed one
+		".iac-studio/remediations/foo/../../outside",
+		".iac-studio/rollbacks/foo/../../../etc/passwd",
+		"/absolute/path",
+	}
+	for _, p := range reject {
+		t.Run("reject:"+p, func(t *testing.T) {
+			if _, err := safeReviewArtifactPath(p); err == nil {
+				t.Fatalf("safeReviewArtifactPath(%q) should have returned an error", p)
+			}
+		})
+	}
+
+	accept := []string{
+		".iac-studio/remediations/my-drift/README.md",
+		".iac-studio/remediations/my-drift/pr-body.md",
+		".iac-studio/rollbacks/snap-1/proposal.md",
+	}
+	for _, p := range accept {
+		t.Run("accept:"+p, func(t *testing.T) {
+			got, err := safeReviewArtifactPath(p)
+			if err != nil {
+				t.Fatalf("safeReviewArtifactPath(%q) unexpected error: %v", p, err)
+			}
+			if got == "" {
+				t.Fatalf("safeReviewArtifactPath(%q) returned empty string", p)
+			}
+		})
+	}
+}
+
 func TestWriteRenderedRemediationArtifactsRejectsSymlinkDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink permissions vary on Windows")
