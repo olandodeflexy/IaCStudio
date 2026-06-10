@@ -236,13 +236,16 @@ func snapshotID(snapshot StateSnapshot) string {
 func slug(value string) string {
 	value = strings.ToLower(strings.TrimSpace(value))
 	var b strings.Builder
+	lastWasHyphen := false
 	for _, r := range value {
 		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') {
 			b.WriteRune(r)
+			lastWasHyphen = false
 			continue
 		}
-		if b.Len() > 0 {
+		if b.Len() > 0 && !lastWasHyphen {
 			b.WriteByte('-')
+			lastWasHyphen = true
 		}
 	}
 	out := strings.Trim(b.String(), "-")

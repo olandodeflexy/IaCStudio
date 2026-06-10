@@ -92,6 +92,20 @@ func TestBuildSnapshotRejectsWorkDirOutsideProject(t *testing.T) {
 	}
 }
 
+func TestSlugCollapsesAdjacentSeparators(t *testing.T) {
+	tests := map[string]string{
+		"apply --auto-approve": "apply-auto-approve",
+		"plan  -out=tfplan":    "plan-out-tfplan",
+		"up --yes":             "up-yes",
+	}
+
+	for input, want := range tests {
+		if got := slug(input); got != want {
+			t.Fatalf("slug(%q) = %q, want %q", input, got, want)
+		}
+	}
+}
+
 func sha(data []byte) string {
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:])
