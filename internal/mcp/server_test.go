@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/iac-studio/iac-studio/internal/cloudconnections"
+	"github.com/iac-studio/iac-studio/internal/runner"
 )
 
 func TestServerLifecycleAndToolList(t *testing.T) {
@@ -177,6 +178,35 @@ func TestConnectionScopeRedactsSecrets(t *testing.T) {
 	mustRemarshal(t, result.StructuredContent, &payload)
 	if !contains(payload.CommandEnvKeys, "AWS_SECRET_ACCESS_KEY") || !contains(payload.Connection.SecretFields, "secret_access_key") {
 		t.Fatalf("expected redacted secret field metadata, got %+v", payload)
+	}
+}
+
+func TestSanitizeExecutionResultRedactsCredentialValues(t *testing.T) {
+	result := sanitizeExecutionResult(&runner.ExecutionResult{
+		ID:       "plan-1",
+		Output:   "aws=AKIATEST secret=super-secret token=session-secret client=tenant-client-secret creds={\"private_key\":\"abc\"} region=us-east-1",
+		ExitCode: 1,
+		Status:   "failed",
+	}, map[string]string{
+		"AWS_ACCESS_KEY_ID":     "AKIATEST",
+		"AWS_SECRET_ACCESS_KEY": "super-secret",
+		"AWS_SESSION_TOKEN":     "session-secret",
+		"ARM_CLIENT_SECRET":     "tenant-client-secret",
+		"GOOGLE_CREDENTIALS":    "{\"private_key\":\"abc\"}",
+		"AWS_REGION":            "us-east-1",
+	})
+	if result == nil {
+		t.Fatal("expected sanitized result")
+	}
+	if strings.Contains(result.Output, "AKIATEST") ||
+		strings.Contains(result.Output, "super-secret") ||
+		strings.Contains(result.Output, "session-secret") ||
+		strings.Contains(result.Output, "tenant-client-secret") ||
+		strings.Contains(result.Output, "{\"private_key\":\"abc\"}") {
+		t.Fatalf("expected secrets to be redacted, got %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "region=us-east-1") {
+		t.Fatalf("expected non-secret env values to remain visible, got %q", result.Output)
 	}
 }
 

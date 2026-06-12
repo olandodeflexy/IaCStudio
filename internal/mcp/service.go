@@ -21,6 +21,7 @@ import (
 	pulumiparser "github.com/iac-studio/iac-studio/internal/pulumi"
 	"github.com/iac-studio/iac-studio/internal/recovery"
 	"github.com/iac-studio/iac-studio/internal/review"
+	"github.com/iac-studio/iac-studio/internal/runner"
 )
 
 type projectArgs struct {
@@ -175,13 +176,14 @@ func (s *Server) handleGeneratePlan(ctx context.Context, raw json.RawMessage) to
 		return errResponse("generate_plan", err, projectAudit("generate_plan", args))
 	}
 	result, runErr := s.run.ExecuteWithEnv(ctx, projectCtx.WorkDir, projectCtx.Tool, "plan", projectCtx.Env, env)
+	sanitized := sanitizeExecutionResult(result, env)
 	payload := map[string]any{
 		"project":    projectCtx.Name,
 		"tool":       projectCtx.Tool,
 		"env":        projectCtx.Env,
 		"work_dir":   projectCtx.WorkDir,
 		"connection": connSummary,
-		"result":     result,
+		"result":     sanitized,
 	}
 	if runErr != nil {
 		payload["error"] = runErr.Error()
@@ -677,6 +679,41 @@ func (s *Server) commandEnvironment(connectionID string) (map[string]string, any
 		"command_env_keys": keys,
 	}
 	return env, public, nil
+}
+
+func sanitizeExecutionResult(result *runner.ExecutionResult, env map[string]string) *runner.ExecutionResult {
+	if result == nil {
+		return nil
+	}
+	sanitized := *result
+	sanitized.Output = redactExecutionOutput(sanitized.Output, env)
+	return &sanitized
+}
+
+func redactExecutionOutput(output string, env map[string]string) string {
+	if output == "" || len(env) == 0 {
+		return output
+	}
+	redacted := output
+	for key, value := range env {
+		if !sensitiveEnvKey(key) {
+			continue
+		}
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		redacted = strings.ReplaceAll(redacted, value, "[REDACTED]")
+	}
+	return redacted
+}
+
+func sensitiveEnvKey(key string) bool {
+	switch key {
+	case "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "ARM_CLIENT_SECRET", "GOOGLE_CREDENTIALS":
+		return true
+	default:
+		return false
+	}
 }
 
 func parseResources(dir, tool string) ([]parser.Resource, error) {
