@@ -41,6 +41,7 @@
           <a href="#cloud-connections">Cloud Connections</a>
           <a href="#semantic-plan-gate">Semantic Plan Gate</a>
           <a href="#ai">AI Setup</a>
+          <a href="#mcp-server">MCP Server</a>
           <a href="#policy-security">Policy and Security</a>
           <a href="#api-reference">API Reference</a>
           <a href="#architecture">Architecture</a>
@@ -726,6 +727,86 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
             local Ollama requests stay on your machine. API providers receive the prompt content needed
             for the requested action. IaC Studio does not add telemetry or account tracking.
           </div>
+        </section>
+
+        <section id="mcp-server" class="doc-section" data-title="mcp server ai clients claude cursor codex tools approval audit">
+          <h2>MCP Server</h2>
+          <p>
+            IaC Studio includes a local MCP stdio server for AI clients that need
+            structured access to infrastructure projects. The goal is not autonomous
+            production changes. The goal is a safe broker: inspect projects, classify
+            plans, run checks, explain drift, draft remediation, and keep dangerous
+            actions behind explicit approval.
+          </p>
+
+          <h3>Build or run it</h3>
+          <pre><code>make build-mcp
+./bin/iac-studio-mcp --projects-dir "$HOME/iac-projects"</code></pre>
+
+          <p>During development you can run the server without building first.</p>
+          <pre><code>go run ./cmd/mcp --projects-dir "$HOME/iac-projects"</code></pre>
+
+          <h3>Client configuration</h3>
+          <p>
+            MCP clients usually launch stdio servers as subprocesses. Point the client
+            at <code>iac-studio-mcp</code> and pass the same projects directory used by
+            the web app.
+          </p>
+          <pre><code>{
+  "mcpServers": {
+    "iac-studio": {
+      "command": "/path/to/IaCStudio/bin/iac-studio-mcp",
+      "args": ["--projects-dir", "/Users/you/iac-projects"],
+      "env": {
+        "IAC_STUDIO_MCP_APPROVAL_TOKEN": "local-approval-token"
+      }
+    }
+  }
+}</code></pre>
+
+          <div class="callout">
+            <strong>Credential model:</strong>
+            MCP tools reuse IaC Studio Cloud Connections. They can list and inspect
+            redacted connection scope, but they do not return secret values or accept
+            raw credentials as a shortcut.
+          </div>
+
+          <h3>Tool groups</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Group</th>
+                  <th>Tools</th>
+                  <th>Behavior</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td>Read-only</td>
+                  <td><code>list_projects</code>, <code>inspect_project</code>, <code>list_cloud_connections</code>, <code>inspect_connection_scope</code>, <code>generate_plan</code>, <code>classify_plan</code>, <code>run_policy_check</code>, <code>scan_drift</code>, <code>explain_resource</code>, <code>summarize_recent_changes</code></td>
+                  <td>Return structured context for LLMs without applying infrastructure changes.</td>
+                </tr>
+                <tr>
+                  <td>Proposal</td>
+                  <td><code>propose_iac_change</code>, <code>propose_drift_remediation</code>, <code>open_remediation_pr</code>, <code>generate_runbook</code></td>
+                  <td>Draft review material. Tools that write local artifacts or branches require the approval token.</td>
+                </tr>
+                <tr>
+                  <td>High risk</td>
+                  <td><code>apply</code>, <code>destroy</code>, <code>assume_role</code>, <code>modify_connection</code>, <code>open_public_network_access</code></td>
+                  <td>Return approval gates and audit records. The MCP foundation does not become a direct secret-entry or autonomous apply path.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <h3>Audit log</h3>
+          <p>
+            Every MCP tool call records the tool name, target project, connection scope,
+            approval requirement, approval decision, mutation flag, and errors when present.
+          </p>
+          <pre><code>~/iac-projects/.iac-studio/mcp-audit.jsonl</code></pre>
         </section>
 
         <section id="policy-security" class="doc-section" data-title="policy security scan guardrails local safety apply gate">
