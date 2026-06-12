@@ -21,6 +21,7 @@ Most IaC tools are CLI-only. Visual tools are either cloud-hosted SaaS or locked
 - **Cloud connection targets** — test and select AWS, Azure, or GCP auth context before deployment
 - **Topology-aware** — visual connection lines that generate real Terraform references
 - **AI-powered** — local LLM or external API converts natural language to infrastructure
+- **MCP server** — connect AI clients to IaC Studio tools without handing them raw cloud credentials
 - **Security scanning** — graph-based checks with CIS, SOC2, HIPAA compliance mapping
 - **Open source** — Apache 2.0, no telemetry, no accounts, no cloud dependency
 - **Single binary** — download one file, run it, done
@@ -70,6 +71,7 @@ start the local server for you.
 | **Smart Suggestions** | AI predicts your next resource based on IaC best practices |
 | **Import Projects** | Browse filesystem, scan existing .tf/.yml files, auto-detect topology |
 | **Cloud Connections** | Save, test, and select named AWS, Azure, or GCP targets before plan/apply |
+| **MCP Server** | Local stdio server for AI clients to inspect projects, classify plans, run policy/drift checks, and draft remediation workflows |
 | **Semantic Plan Gate** | Classifies Terraform/OpenTofu changes as safe, risky, destructive, or unknown before apply |
 | **Live Code Preview** | Every canvas change updates the code in real time |
 | **Project Persistence** | Auto-save canvas state, restore on reopen |
@@ -122,6 +124,60 @@ IaC Studio works with **any AI provider**:
 
 Click **gear icon** in the app header to switch providers at any time.
 
+## MCP Server for AI Clients
+
+IaC Studio includes a local MCP stdio server for connecting Claude, Cursor,
+Codex, and other MCP-compatible clients to your infrastructure workspace without
+giving the model direct cloud credentials.
+
+Build it from source:
+
+```bash
+make build-mcp
+```
+
+Or run it directly during development:
+
+```bash
+go run ./cmd/mcp --projects-dir "$HOME/iac-projects"
+```
+
+Example MCP client config:
+
+```json
+{
+  "mcpServers": {
+    "iac-studio": {
+      "command": "/path/to/IaCStudio/bin/iac-studio-mcp",
+      "args": ["--projects-dir", "/Users/you/iac-projects"],
+      "env": {
+        "IAC_STUDIO_MCP_APPROVAL_TOKEN": "local-approval-token"
+      }
+    }
+  }
+}
+```
+
+Read-only tools include `list_projects`, `inspect_project`,
+`list_cloud_connections`, `inspect_connection_scope`, `generate_plan`,
+`classify_plan`, `run_policy_check`, `scan_drift`, `explain_resource`, and
+`summarize_recent_changes`.
+
+Proposal tools include `propose_iac_change`, `propose_drift_remediation`,
+`open_remediation_pr`, and `generate_runbook`. Tools that can create local
+review artifacts or branches require the configured approval token.
+
+High-risk tools such as `apply`, `destroy`, `assume_role`,
+`modify_connection`, and `open_public_network_access` are deliberately gated.
+The MCP server records approval attempts but does not become a secret-entry or
+autonomous production-change path.
+
+MCP audit events are written to:
+
+```text
+~/iac-projects/.iac-studio/mcp-audit.jsonl
+```
+
 ### Recommended Local Models
 
 | RAM | Model | Size | Quality |
@@ -145,6 +201,7 @@ IaC Studio runs locally and is designed to be secure by default:
 - **Semantic plan review** — Terraform/OpenTofu plans are classified before apply; risky, destructive, or unknown changes require explicit acknowledgement
 - **Recovery checkpoints** — successful apply-style runs write metadata and state/plan hashes under `.iac-studio/snapshots`; rollback requests generate review artifacts, not automatic undo actions
 - **Review-branch handoff** — drift and rollback PR workflows create local branches that commit only generated `.iac-studio/remediations` or `.iac-studio/rollbacks` artifacts, reject unrelated dirty source files, and return explicit `git push` / `gh pr create` commands instead of collecting GitHub tokens
+- **MCP approval and audit** — AI clients can inspect and propose, while mutating or high-risk MCP tools require explicit approval and are logged to `.iac-studio/mcp-audit.jsonl`
 - **Cloud target checks** — selected Cloud Connections are tested before command execution
 - **Secret redaction** — static credentials are not echoed in API responses, terminal messages, or generated IaC
 - **No telemetry** — zero data collection, no phone-home
@@ -168,6 +225,7 @@ make deps             # Install Go + Node dependencies
 make dev              # Hot reload (frontend :5173, backend :3001)
 make test             # Run all tests
 make build            # Production binary -> bin/iac-studio
+make build-mcp        # MCP stdio server -> bin/iac-studio-mcp
 make release          # Cross-compile all platforms -> dist/
 make docker           # Docker image
 ```
@@ -209,6 +267,7 @@ All flags have sensible defaults. Just run `iac-studio` and go.
 - [x] Recovery checkpoint metadata for successful apply runs
 - [x] Reviewed rollback proposal artifacts from recovery checkpoints
 - [x] PR-ready local review branches for drift and rollback artifacts
+- [x] MCP server for AI-native project inspection, plan classification, drift/policy checks, runbooks, and approval-gated workflows
 - [x] Cost estimation (30+ resource types)
 - [x] CI/CD pipeline generator (GitHub Actions, GitLab CI)
 - [x] Environment promotion (dev/staging/prod workspaces)

@@ -4,7 +4,7 @@ BUILD    := $(shell git rev-parse --short HEAD 2>/dev/null || echo "dev")
 LDFLAGS  := -ldflags "-s -w -X main.AppVersion=$(VERSION)-$(BUILD)"
 GO_PACKAGES := ./cmd/... ./internal/...
 
-.PHONY: all build dev test clean deps docker install release
+.PHONY: all build build-backend build-mcp dev test clean deps docker install release
 
 all: build
 
@@ -23,7 +23,7 @@ dev:
 
 ## ─── Build ───
 
-build: build-frontend embed-frontend build-backend
+build: build-frontend embed-frontend build-backend build-mcp
 
 build-frontend:
 	cd web && npm run build
@@ -34,6 +34,9 @@ embed-frontend:
 
 build-backend:
 	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/$(APP_NAME) ./cmd/server
+
+build-mcp:
+	CGO_ENABLED=0 go build $(LDFLAGS) -o bin/$(APP_NAME)-mcp ./cmd/mcp
 
 ## ─── Test ───
 
@@ -73,6 +76,11 @@ release: build-frontend embed-frontend
 	GOOS=darwin  GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-darwin-amd64  ./cmd/server
 	GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-darwin-arm64  ./cmd/server
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-windows-amd64.exe ./cmd/server
+	GOOS=linux   GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-mcp-linux-amd64   ./cmd/mcp
+	GOOS=linux   GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-mcp-linux-arm64   ./cmd/mcp
+	GOOS=darwin  GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-mcp-darwin-amd64  ./cmd/mcp
+	GOOS=darwin  GOARCH=arm64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-mcp-darwin-arm64  ./cmd/mcp
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build $(LDFLAGS) -o dist/$(APP_NAME)-mcp-windows-amd64.exe ./cmd/mcp
 	@echo "Binaries in dist/"
 
 ## ─── Clean ───
