@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -320,5 +319,3 @@ func firstErr(errs ...error) error {
 	}
 	return nil
 }
-
-var errApprovalRequired = errors.New("approval required")

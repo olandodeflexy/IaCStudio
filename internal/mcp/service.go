@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"time"
 
 	"github.com/iac-studio/iac-studio/internal/cloudconnections"
 	"github.com/iac-studio/iac-studio/internal/drift"
@@ -907,21 +906,20 @@ func resourceReviewGuidance(res parser.Resource, report *policy.PolicyReport) []
 func classifyChangeRequest(request string) (string, []string) {
 	lower := strings.ToLower(request)
 	cues := []string{}
-	risk := "unknown"
 	for _, cue := range []string{"delete", "destroy", "replace", "public", "0.0.0.0/0", "::/0", "iam", "role", "policy", "security group", "firewall", "database", "rds", "bucket"} {
 		if strings.Contains(lower, cue) {
 			cues = append(cues, cue)
 		}
 	}
+	risk := "review_required"
 	if len(cues) == 0 {
-		risk = "review_required"
-	} else {
-		risk = "risky"
-		for _, cue := range cues {
-			if cue == "delete" || cue == "destroy" || cue == "replace" {
-				risk = "destructive"
-				break
-			}
+		return risk, cues
+	}
+	risk = "risky"
+	for _, cue := range cues {
+		if cue == "delete" || cue == "destroy" || cue == "replace" {
+			risk = "destructive"
+			break
 		}
 	}
 	return risk, cues
@@ -1058,8 +1056,4 @@ func highRiskReason(tool string) string {
 	default:
 		return "high-risk infrastructure action"
 	}
-}
-
-func utcNow() time.Time {
-	return time.Now().UTC()
 }
