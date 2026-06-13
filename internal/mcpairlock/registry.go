@@ -37,21 +37,22 @@ type Check struct {
 // ServerDefinition describes a trusted external MCP server without storing
 // credentials or launcher state.
 type ServerDefinition struct {
-	ID              string   `json:"id"`
-	Name            string   `json:"name"`
-	Vendor          string   `json:"vendor"`
-	Description     string   `json:"description"`
-	SourceURL       string   `json:"source_url"`
-	DocsURL         string   `json:"docs_url,omitempty"`
-	InstallHint     string   `json:"install_hint,omitempty"`
-	Transport       string   `json:"transport"`
-	Command         string   `json:"command,omitempty"`
-	Args            []string `json:"args,omitempty"`
-	HealthCheckArgs []string `json:"health_check_args,omitempty"`
-	Trusted         bool     `json:"trusted"`
-	ReadOnlyDefault bool     `json:"read_only_default"`
-	CredentialMode  string   `json:"credential_mode"`
-	Capabilities    []string `json:"capabilities,omitempty"`
+	ID                string   `json:"id"`
+	Name              string   `json:"name"`
+	Vendor            string   `json:"vendor"`
+	Description       string   `json:"description"`
+	SourceURL         string   `json:"source_url"`
+	DocsURL           string   `json:"docs_url,omitempty"`
+	InstallHint       string   `json:"install_hint,omitempty"`
+	Transport         string   `json:"transport"`
+	Command           string   `json:"command,omitempty"`
+	Args              []string `json:"args,omitempty"`
+	HealthCheckArgs   []string `json:"health_check_args,omitempty"`
+	VersionConstraint string   `json:"version_constraint,omitempty"`
+	Trusted           bool     `json:"trusted"`
+	ReadOnlyDefault   bool     `json:"read_only_default"`
+	CredentialMode    string   `json:"credential_mode"`
+	Capabilities      []string `json:"capabilities,omitempty"`
 }
 
 // ServerStatus is the public health/status view returned by the API and MCP
@@ -59,12 +60,16 @@ type ServerDefinition struct {
 type ServerStatus struct {
 	Server           ServerDefinition `json:"server"`
 	Ready            bool             `json:"ready"`
+	Running          bool             `json:"running"`
 	Configured       bool             `json:"configured"`
 	CommandAvailable bool             `json:"command_available"`
 	State            string           `json:"state"`
 	Summary          string           `json:"summary"`
 	Checks           []Check          `json:"checks"`
 	CheckedAt        string           `json:"checked_at,omitempty"`
+	StartedAt        string           `json:"started_at,omitempty"`
+	LastExitAt       string           `json:"last_exit_at,omitempty"`
+	LastExitReason   string           `json:"last_exit_reason,omitempty"`
 }
 
 // ProbeResult is the sanitized result shape used by health-check probes.
@@ -86,6 +91,8 @@ type Manager struct {
 	definitions []ServerDefinition
 	timeout     time.Duration
 	probe       ProbeFunc
+	launcher    LauncherFunc
+	lifecycle   *lifecycleStore
 }
 
 // NewManager creates an Airlock registry. projectsDir is accepted for future
@@ -97,6 +104,8 @@ func NewManager(projectsDir string, opts ...Option) *Manager {
 		definitions: builtInDefinitions(),
 		timeout:     defaultHealthTimeout,
 		probe:       defaultProbe,
+		launcher:    defaultLauncher,
+		lifecycle:   newLifecycleStore(),
 	}
 	for _, opt := range opts {
 		opt(m)
@@ -136,7 +145,7 @@ func WithTimeout(timeout time.Duration) Option {
 func (m *Manager) List(_ context.Context) []ServerStatus {
 	statuses := make([]ServerStatus, 0, len(m.definitions))
 	for _, definition := range m.definitions {
-		statuses = append(statuses, m.passiveStatus(definition))
+		statuses = append(statuses, m.withLifecycleStatus(m.passiveStatus(definition)))
 	}
 	sort.SliceStable(statuses, func(i, j int) bool {
 		return statuses[i].Server.Name < statuses[j].Server.Name
@@ -153,7 +162,7 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 	status := m.passiveStatus(definition)
 	status.CheckedAt = time.Now().UTC().Format(time.RFC3339)
 	if status.State != "available" {
-		return status, nil
+		return m.withLifecycleStatus(status), nil
 	}
 	args := append([]string{}, definition.Args...)
 	args = append(args, definition.HealthCheckArgs...)
@@ -162,7 +171,7 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 		status.State = "ready"
 		status.Summary = "Command is available. No active health probe is configured for this server."
 		status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "warn", Message: "no version or health command is configured"})
-		return status, nil
+		return m.withLifecycleStatus(status), nil
 	}
 	result := m.probe(ctx, definition.Command, args, m.timeout)
 	if result.TimedOut {
@@ -170,7 +179,7 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 		status.State = "timeout"
 		status.Summary = "Health check timed out before the MCP server responded."
 		status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "error", Message: "probe timed out"})
-		return status, nil
+		return m.withLifecycleStatus(status), nil
 	}
 	if result.Err != nil {
 		status.Ready = false
@@ -181,7 +190,7 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 		}
 		status.Summary = "Health check failed. Review the local command configuration before enabling this server."
 		status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "error", Message: message})
-		return status, nil
+		return m.withLifecycleStatus(status), nil
 	}
 	status.Ready = true
 	status.State = "ready"
@@ -191,7 +200,7 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 		message = output
 	}
 	status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "pass", Message: message})
-	return status, nil
+	return m.withLifecycleStatus(status), nil
 }
 
 func (m *Manager) lookup(id string) (ServerDefinition, bool) {
@@ -224,6 +233,12 @@ func (m *Manager) passiveStatus(definition ServerDefinition) ServerStatus {
 		status.Checks = append(status.Checks, Check{Name: "default_mode", Status: "warn", Message: "server is not read-only by default"})
 	} else {
 		status.Checks = append(status.Checks, Check{Name: "default_mode", Status: "pass", Message: "server starts in read-only review mode"})
+	}
+	if definition.Transport != "stdio" {
+		status.State = "unsupported_transport"
+		status.Summary = "Only stdio MCP servers are supported by this Airlock launcher."
+		status.Checks = append(status.Checks, Check{Name: "transport", Status: "error", Message: "unsupported transport: " + definition.Transport})
+		return status
 	}
 	command := strings.TrimSpace(definition.Command)
 	if command == "" {

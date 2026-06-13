@@ -3,6 +3,7 @@ package mcpairlock
 import (
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,115 @@ func TestCheckUnknownServerFailsClosed(t *testing.T) {
 	}
 }
 
+func TestStartStopLifecycleUsesLauncherAndReportsRunning(t *testing.T) {
+	command := testExecutable(t)
+	handle := newFakeProcess()
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         command,
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithLauncher(func(_ context.Context, definition ServerDefinition, _ time.Duration) (ProcessHandle, error) {
+			if definition.Command != command {
+				t.Fatalf("unexpected launch command: %q", definition.Command)
+			}
+			return handle, nil
+		}),
+	)
+
+	status, err := manager.Start(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if !status.Running || status.State != "running" || status.StartedAt == "" {
+		t.Fatalf("expected running status, got %+v", status)
+	}
+
+	listed := manager.List(context.Background())
+	if len(listed) != 1 || !listed[0].Running {
+		t.Fatalf("expected running status in list, got %+v", listed)
+	}
+
+	status, err = manager.Stop(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if status.Running || status.State != "stopped" || !handle.stopped {
+		t.Fatalf("expected stopped status, got status=%+v stopped=%v", status, handle.stopped)
+	}
+}
+
+func TestStartRejectsUnsupportedTransportWithoutLaunching(t *testing.T) {
+	calls := 0
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "http",
+			Name:            "HTTP",
+			Command:         testExecutable(t),
+			Transport:       "sse",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
+			calls++
+			return newFakeProcess(), nil
+		}),
+	)
+
+	status, err := manager.Start(context.Background(), "http")
+
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("unsupported transport should not launch, got %d calls", calls)
+	}
+	if status.State != "unsupported_transport" || status.Running {
+		t.Fatalf("expected unsupported transport status, got %+v", status)
+	}
+}
+
+func TestExitedProcessIsReapedIntoStatus(t *testing.T) {
+	handle := newFakeProcess()
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
+			return handle, nil
+		}),
+	)
+
+	if _, err := manager.Start(context.Background(), "terraform"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	handle.exit(errors.New("boom secret_access_key=super-secret"))
+
+	statuses := manager.List(context.Background())
+	if len(statuses) != 1 {
+		t.Fatalf("expected one status, got %+v", statuses)
+	}
+	status := statuses[0]
+	if status.Running || status.State != "exited" || status.LastExitAt == "" {
+		t.Fatalf("expected reaped exited status, got %+v", status)
+	}
+	if strings.Contains(status.LastExitReason, "super-secret") {
+		t.Fatalf("exit reason leaked secret value: %q", status.LastExitReason)
+	}
+}
+
 func containsStatus(statuses []ServerStatus, id string) bool {
 	for _, status := range statuses {
 		if status.Server.ID == id {
@@ -132,4 +242,39 @@ func containsStatus(statuses []ServerStatus, id string) bool {
 		}
 	}
 	return false
+}
+
+func testExecutable(t *testing.T) string {
+	t.Helper()
+	path, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+type fakeProcess struct {
+	done    chan error
+	stopped bool
+}
+
+func newFakeProcess() *fakeProcess {
+	return &fakeProcess{done: make(chan error, 1)}
+}
+
+func (p *fakeProcess) Done() <-chan error {
+	return p.done
+}
+
+func (p *fakeProcess) Stop(context.Context) error {
+	p.stopped = true
+	p.exit(nil)
+	return nil
+}
+
+func (p *fakeProcess) exit(err error) {
+	select {
+	case p.done <- err:
+	default:
+	}
 }

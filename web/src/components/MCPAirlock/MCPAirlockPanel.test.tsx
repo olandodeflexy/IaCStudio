@@ -22,6 +22,7 @@ function server(overrides: Partial<MCPAirlockServerStatus> = {}): MCPAirlockServ
       capabilities: ['terraform registry'],
     },
     ready: false,
+    running: false,
     configured: true,
     command_available: false,
     state: 'command_missing',
@@ -48,6 +49,8 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => checked),
+      startMCPAirlockServer: vi.fn(async () => checked),
+      stopMCPAirlockServer: vi.fn(async () => checked),
     };
 
     render(<MCPAirlockPanel client={client} />);
@@ -63,5 +66,50 @@ describe('MCPAirlockPanel', () => {
     });
     expect(await screen.findByText('Ready')).toBeInTheDocument();
     expect(screen.getByText('Health check completed without exposing cloud credentials.')).toBeInTheDocument();
+  });
+
+  it('starts and stops configured servers', async () => {
+    const initial = server({
+      command_available: true,
+      state: 'available',
+      summary: 'Command is available.',
+    });
+    const running = server({
+      ready: true,
+      running: true,
+      command_available: true,
+      state: 'running',
+      summary: 'MCP server process is running with cloud credentials withheld.',
+      started_at: '2026-06-13T10:00:00Z',
+    });
+    const stopped = server({
+      command_available: true,
+      state: 'stopped',
+      summary: 'MCP server process stopped.',
+      last_exit_at: '2026-06-13T10:01:00Z',
+      last_exit_reason: 'stopped by user',
+    });
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      startMCPAirlockServer: vi.fn(async () => running),
+      stopMCPAirlockServer: vi.fn(async () => stopped),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Start Terraform MCP Server' }));
+
+    await waitFor(() => {
+      expect(client.startMCPAirlockServer).toHaveBeenCalledWith('terraform-official');
+    });
+    expect(await screen.findByText('Running')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Stop Terraform MCP Server' }));
+
+    await waitFor(() => {
+      expect(client.stopMCPAirlockServer).toHaveBeenCalledWith('terraform-official');
+    });
+    expect(await screen.findByText('MCP server process stopped.')).toBeInTheDocument();
   });
 });

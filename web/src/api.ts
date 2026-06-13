@@ -166,12 +166,16 @@ export interface MCPAirlockServerDefinition {
 export interface MCPAirlockServerStatus {
   server: MCPAirlockServerDefinition;
   ready: boolean;
+  running: boolean;
   configured: boolean;
   command_available: boolean;
   state: string;
   summary: string;
   checks: MCPAirlockCheck[];
   checked_at?: string;
+  started_at?: string;
+  last_exit_at?: string;
+  last_exit_reason?: string;
 }
 
 export type PlanRiskLevel = 'safe' | 'risky' | 'destructive' | 'unknown';
@@ -410,6 +414,16 @@ export const api = {
 
   async checkMCPAirlockServer(id: string): Promise<MCPAirlockServerStatus> {
     const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/health`, { method: 'POST' });
+    return (await check(res)).json();
+  },
+
+  async startMCPAirlockServer(id: string): Promise<MCPAirlockServerStatus> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/start`, { method: 'POST' });
+    return (await check(res)).json();
+  },
+
+  async stopMCPAirlockServer(id: string): Promise<MCPAirlockServerStatus> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/stop`, { method: 'POST' });
     return (await check(res)).json();
   },
 

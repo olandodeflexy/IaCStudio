@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
-import { CheckCircle2, ExternalLink, RefreshCw, ServerCog, ShieldCheck, XCircle } from 'lucide-react';
+import { CheckCircle2, ExternalLink, Play, RefreshCw, ServerCog, ShieldCheck, Square, XCircle } from 'lucide-react';
 
 import { api, type MCPAirlockServerStatus } from '../../api';
 import { Button } from '../ui/button';
 
-type MCPAirlockClient = Pick<typeof api, 'listMCPAirlockServers' | 'checkMCPAirlockServer'>;
+type MCPAirlockClient = Pick<typeof api, 'listMCPAirlockServers' | 'checkMCPAirlockServer' | 'startMCPAirlockServer' | 'stopMCPAirlockServer'>;
 
 export interface MCPAirlockPanelProps {
   client?: MCPAirlockClient;
@@ -12,6 +12,7 @@ export interface MCPAirlockPanelProps {
 
 const stateLabels: Record<string, string> = {
   ready: 'Ready',
+  running: 'Running',
   available: 'Available',
   not_configured: 'Not configured',
   command_missing: 'Missing',
@@ -22,6 +23,7 @@ const stateLabels: Record<string, string> = {
 };
 
 function stateClass(state: string) {
+  if (state === 'running') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
   if (state === 'ready') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
   if (state === 'available') return 'border-primary/30 bg-primary/10 text-primary';
   if (state === 'not_configured' || state === 'command_missing') return 'border-yellow-500/30 bg-yellow-500/10 text-yellow-200';
@@ -37,7 +39,7 @@ function checkIcon(status: string) {
 export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
   const [servers, setServers] = useState<MCPAirlockServerStatus[]>([]);
   const [loading, setLoading] = useState(false);
-  const [checkingId, setCheckingId] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
@@ -57,7 +59,7 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
   }, []);
 
   const check = async (id: string) => {
-    setCheckingId(id);
+    setBusyId(id);
     setError(null);
     try {
       const next = await client.checkMCPAirlockServer(id);
@@ -65,7 +67,33 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
     } catch (err) {
       setError(String(err));
     } finally {
-      setCheckingId(null);
+      setBusyId(null);
+    }
+  };
+
+  const start = async (id: string) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      const next = await client.startMCPAirlockServer(id);
+      setServers(current => current.map(status => status.server.id === id ? next : status));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const stop = async (id: string) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      const next = await client.stopMCPAirlockServer(id);
+      setServers(current => current.map(status => status.server.id === id ? next : status));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -110,6 +138,11 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
               key={status.server.id}
               className="rounded-md border border-border bg-card p-3"
             >
+              {(() => {
+                const busy = busyId === status.server.id;
+                const startDisabled = busy || status.running || !status.command_available;
+                const stopDisabled = busy || !status.running;
+                return (
               <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
@@ -124,16 +157,42 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
                     {status.server.vendor} - {status.server.transport}
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="secondary"
-                  className="h-7 px-2 text-[10px]"
-                  onClick={() => check(status.server.id)}
-                  disabled={checkingId === status.server.id}
-                >
-                  {checkingId === status.server.id ? 'Checking' : 'Check'}
-                </Button>
+                <div className="flex shrink-0 gap-1">
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="h-7 px-2 text-[10px]"
+                    onClick={() => check(status.server.id)}
+                    disabled={busy}
+                  >
+                    {busy ? '...' : 'Check'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 w-7 p-0"
+                    title="Start MCP server"
+                    aria-label={`Start ${status.server.name}`}
+                    onClick={() => start(status.server.id)}
+                    disabled={startDisabled}
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 w-7 p-0"
+                    title="Stop MCP server"
+                    aria-label={`Stop ${status.server.name}`}
+                    onClick={() => stop(status.server.id)}
+                    disabled={stopDisabled}
+                  >
+                    <Square className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
               </div>
+                );
+              })()}
 
               <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                 {status.summary}
@@ -179,6 +238,8 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
               </div>
 
               <div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
+                {status.started_at && <span>started {new Date(status.started_at).toLocaleTimeString()}</span>}
+                {status.last_exit_at && !status.running && <span>last exit {new Date(status.last_exit_at).toLocaleTimeString()}</span>}
                 {status.checked_at && <span>checked {new Date(status.checked_at).toLocaleTimeString()}</span>}
                 <a
                   className="ml-auto inline-flex items-center gap-1 hover:text-foreground"
