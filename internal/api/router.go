@@ -25,6 +25,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/exporter"
 	"github.com/iac-studio/iac-studio/internal/generator"
 	"github.com/iac-studio/iac-studio/internal/importer"
+	"github.com/iac-studio/iac-studio/internal/mcpairlock"
 	"github.com/iac-studio/iac-studio/internal/parser"
 	iacplan "github.com/iac-studio/iac-studio/internal/plan"
 	"github.com/iac-studio/iac-studio/internal/project"
@@ -1403,6 +1404,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	})
 
 	cloudConnections := cloudconnections.NewManager(projectsDir)
+	mcpAirlock := mcpairlock.NewManager(projectsDir)
 
 	// Run IaC command (init, plan, apply)
 	mux.HandleFunc("POST /api/projects/{name}/run", func(w http.ResponseWriter, r *http.Request) {
@@ -1870,6 +1872,23 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 			"azure": cloudconnections.SupportedAuthMethods(cloudconnections.ProviderAzure),
 			"gcp":   cloudconnections.SupportedAuthMethods(cloudconnections.ProviderGCP),
 		})
+	})
+
+	mux.HandleFunc("GET /api/mcp-airlock/servers", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(mcpAirlock.List(r.Context()))
+	})
+
+	mux.HandleFunc("POST /api/mcp-airlock/servers/{id}/health", func(w http.ResponseWriter, r *http.Request) {
+		status, err := mcpAirlock.Check(r.Context(), r.PathValue("id"))
+		if err != nil {
+			if errors.Is(err, mcpairlock.ErrUnknownServer) {
+				http.Error(w, "mcp airlock server not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "mcp airlock health check failed", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(status)
 	})
 
 	mux.HandleFunc("GET /api/cloud/connections", func(w http.ResponseWriter, _ *http.Request) {

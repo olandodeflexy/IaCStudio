@@ -48,6 +48,12 @@ vi.mock('../ModuleRegistry', () => ({
   ),
 }));
 
+vi.mock('../MCPAirlock', () => ({
+  MCPAirlockPanel: () => (
+    <div>MCP Airlock panel</div>
+  ),
+}));
+
 const nodes: InspectorResource[] = [
   {
     id: 'vpc',
@@ -206,6 +212,7 @@ describe('InspectorPanel', () => {
     renderInspector({ activeTab: 'modules' });
 
     expect(screen.getByRole('button', { name: 'Cloud' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'MCP' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Drift' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Modules' })).toBeInTheDocument();
     expect(screen.getByText('Module registry vpc')).toBeInTheDocument();
@@ -230,6 +237,12 @@ describe('InspectorPanel', () => {
     renderInspector({ activeTab: 'cloud' });
 
     expect(screen.getByText('Cloud connections panel')).toBeInTheDocument();
+  });
+
+  it('renders the MCP Airlock tab', () => {
+    renderInspector({ activeTab: 'mcp' });
+
+    expect(screen.getByText('MCP Airlock panel')).toBeInTheDocument();
   });
 
   it('guards unresolved hybrid environments', () => {
