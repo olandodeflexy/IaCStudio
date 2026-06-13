@@ -58,7 +58,7 @@ func TestServerLifecycleAndToolList(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &listResp); err != nil {
 		t.Fatalf("decode tools/list response: %v", err)
 	}
-	for _, name := range []string{"list_projects", "inspect_project", "classify_plan", "scan_drift", "open_remediation_pr", "apply"} {
+	for _, name := range []string{"list_projects", "inspect_project", "list_mcp_airlock_servers", "check_mcp_airlock_server", "classify_plan", "scan_drift", "open_remediation_pr", "apply"} {
 		if !containsTool(listResp.Result.Tools, name) {
 			t.Fatalf("tools/list missing %s", name)
 		}
@@ -178,6 +178,49 @@ func TestConnectionScopeRedactsSecrets(t *testing.T) {
 	mustRemarshal(t, result.StructuredContent, &payload)
 	if !contains(payload.CommandEnvKeys, "AWS_SECRET_ACCESS_KEY") || !contains(payload.Connection.SecretFields, "secret_access_key") {
 		t.Fatalf("expected redacted secret field metadata, got %+v", payload)
+	}
+}
+
+func TestMCPAirlockToolsExposeTrustedReadOnlyStatus(t *testing.T) {
+	server := newTestServer(t)
+
+	listResult := callTool(t, server, "list_mcp_airlock_servers", map[string]any{})
+	if listResult.IsError {
+		t.Fatalf("list_mcp_airlock_servers returned error: %s", listResult.Content[0].Text)
+	}
+	var listPayload struct {
+		Servers []struct {
+			Server struct {
+				ID              string `json:"id"`
+				Trusted         bool   `json:"trusted"`
+				ReadOnlyDefault bool   `json:"read_only_default"`
+				CredentialMode  string `json:"credential_mode"`
+			} `json:"server"`
+		} `json:"servers"`
+	}
+	mustRemarshal(t, listResult.StructuredContent, &listPayload)
+	if len(listPayload.Servers) == 0 {
+		t.Fatal("expected Airlock server definitions")
+	}
+	for _, status := range listPayload.Servers {
+		if !status.Server.Trusted || !status.Server.ReadOnlyDefault || status.Server.CredentialMode != "none" {
+			t.Fatalf("Airlock server is not constrained by default: %+v", status.Server)
+		}
+	}
+
+	checkResult := callTool(t, server, "check_mcp_airlock_server", map[string]any{"server_id": "aws-official"})
+	if checkResult.IsError {
+		t.Fatalf("check_mcp_airlock_server returned error: %s", checkResult.Content[0].Text)
+	}
+	var checkPayload struct {
+		Server struct {
+			State      string `json:"state"`
+			Configured bool   `json:"configured"`
+		} `json:"server"`
+	}
+	mustRemarshal(t, checkResult.StructuredContent, &checkPayload)
+	if checkPayload.Server.State != "not_configured" || checkPayload.Server.Configured {
+		t.Fatalf("expected AWS built-in to require explicit local command config, got %+v", checkPayload.Server)
 	}
 }
 

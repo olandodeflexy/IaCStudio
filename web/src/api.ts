@@ -139,6 +139,41 @@ export interface CloudConnectionTestResult {
   checks: { name: string; status: 'pass' | 'warn' | 'error'; message: string }[];
 }
 
+export interface MCPAirlockCheck {
+  name: string;
+  status: 'pass' | 'warn' | 'error';
+  message: string;
+}
+
+export interface MCPAirlockServerDefinition {
+  id: string;
+  name: string;
+  vendor: string;
+  description: string;
+  source_url: string;
+  docs_url?: string;
+  install_hint?: string;
+  transport: string;
+  command?: string;
+  args?: string[];
+  health_check_args?: string[];
+  trusted: boolean;
+  read_only_default: boolean;
+  credential_mode: string;
+  capabilities?: string[];
+}
+
+export interface MCPAirlockServerStatus {
+  server: MCPAirlockServerDefinition;
+  ready: boolean;
+  configured: boolean;
+  command_available: boolean;
+  state: string;
+  summary: string;
+  checks: MCPAirlockCheck[];
+  checked_at?: string;
+}
+
 export type PlanRiskLevel = 'safe' | 'risky' | 'destructive' | 'unknown';
 
 export interface PlanFieldChange {
@@ -368,6 +403,16 @@ async function check(res: Response): Promise<Response> {
 }
 
 export const api = {
+  async listMCPAirlockServers(): Promise<MCPAirlockServerStatus[]> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers`);
+    return (await check(res)).json();
+  },
+
+  async checkMCPAirlockServer(id: string): Promise<MCPAirlockServerStatus> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/health`, { method: 'POST' });
+    return (await check(res)).json();
+  },
+
   async listCloudConnections(): Promise<CloudConnection[]> {
     const res = await fetch(`${BASE}/api/cloud/connections`);
     return (await check(res)).json();

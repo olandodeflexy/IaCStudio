@@ -13,6 +13,7 @@ import (
 
 	"github.com/iac-studio/iac-studio/internal/cloudconnections"
 	"github.com/iac-studio/iac-studio/internal/drift"
+	"github.com/iac-studio/iac-studio/internal/mcpairlock"
 	"github.com/iac-studio/iac-studio/internal/parser"
 	iacplan "github.com/iac-studio/iac-studio/internal/plan"
 	"github.com/iac-studio/iac-studio/internal/policy"
@@ -158,6 +159,37 @@ func (s *Server) handleInspectConnectionScope(_ context.Context, raw json.RawMes
 			"scope":            "Credentials remain inside IaC Studio's cloud connection broker; MCP responses expose names, providers, readiness, and environment variable keys only.",
 		}),
 		Audit: AuditDecision{Tool: "inspect_connection_scope", ConnectionID: args.ConnectionID, Decision: "allowed"},
+	}
+}
+
+func (s *Server) handleListMCPAirlockServers(ctx context.Context, _ json.RawMessage) toolResponse {
+	servers := s.mcpAirlock.List(ctx)
+	return toolResponse{
+		Result: structuredResult(map[string]any{"servers": servers}),
+		Audit:  AuditDecision{Tool: "list_mcp_airlock_servers", Decision: "allowed"},
+	}
+}
+
+func (s *Server) handleCheckMCPAirlockServer(ctx context.Context, raw json.RawMessage) toolResponse {
+	var args struct {
+		ServerID string `json:"server_id"`
+	}
+	if err := decode(raw, &args); err != nil {
+		return errResponse("check_mcp_airlock_server", err, AuditDecision{Tool: "check_mcp_airlock_server"})
+	}
+	if err := requireNonEmpty("server_id", args.ServerID); err != nil {
+		return errResponse("check_mcp_airlock_server", err, AuditDecision{Tool: "check_mcp_airlock_server"})
+	}
+	status, err := s.mcpAirlock.Check(ctx, args.ServerID)
+	if err != nil {
+		if errors.Is(err, mcpairlock.ErrUnknownServer) {
+			return errResponse("check_mcp_airlock_server", err, AuditDecision{Tool: "check_mcp_airlock_server", Decision: "blocked"})
+		}
+		return errResponse("check_mcp_airlock_server", err, AuditDecision{Tool: "check_mcp_airlock_server"})
+	}
+	return toolResponse{
+		Result: structuredResult(map[string]any{"server": status}),
+		Audit:  AuditDecision{Tool: "check_mcp_airlock_server", Decision: "allowed"},
 	}
 }
 

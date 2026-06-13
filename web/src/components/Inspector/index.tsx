@@ -4,11 +4,12 @@ import { S } from '../../styles';
 import { CloudConnectionsPanel } from '../CloudConnections';
 import { CodeEditor } from '../CodeEditor';
 import { DriftPanel } from '../DriftPanel';
+import { MCPAirlockPanel } from '../MCPAirlock';
 import { ModuleRegistryPanel } from '../ModuleRegistry';
 import { PolicyStudioPanel } from '../PolicyStudio';
 import { ScanPanel } from '../ScanPanel';
 
-export type RightPanelTab = 'inspect' | 'cloud' | 'drift' | 'policy' | 'scan' | 'modules';
+export type RightPanelTab = 'inspect' | 'cloud' | 'mcp' | 'drift' | 'policy' | 'scan' | 'modules';
 
 export interface InspectorResource extends Resource {
   icon: string;
@@ -100,6 +101,7 @@ export function InspectorPanel({
   const tabs: { key: RightPanelTab; label: string }[] = [
     { key: 'inspect', label: selected || selectedEdge ? 'Inspect' : 'Code' },
     { key: 'cloud', label: 'Cloud' },
+    { key: 'mcp', label: 'MCP' },
     { key: 'drift', label: 'Drift' },
     { key: 'policy', label: 'Policy' },
     { key: 'scan', label: 'Scan' },
@@ -263,6 +265,12 @@ export function InspectorPanel({
             selectedConnectionId={selectedCloudConnection?.id}
             onConnectionSelected={onCloudConnectionSelect}
           />
+        </div>
+      )}
+
+      {activeTab === 'mcp' && (
+        <div style={{ flex: 1, minHeight: 0 }}>
+          <MCPAirlockPanel />
         </div>
       )}
 

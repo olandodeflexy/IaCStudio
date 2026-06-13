@@ -12,6 +12,10 @@ func (s *Server) buildTools() ([]Tool, map[string]toolHandler) {
 		readTool("inspect_connection_scope", "Inspect Connection Scope", "Inspect a saved cloud connection's provider, auth method, readiness, and environment variable keys without returning secret values.", objectSchema(map[string]any{
 			"connection_id": stringProp("Saved cloud connection ID."),
 		}, []string{"connection_id"})),
+		readTool("list_mcp_airlock_servers", "List MCP Airlock Servers", "List trusted external MCP servers that IaC Studio can route through Airlock without exposing credentials.", objectSchema(nil, nil)),
+		readTool("check_mcp_airlock_server", "Check MCP Airlock Server", "Run a bounded local health check for one trusted external MCP server using a sanitized environment.", objectSchema(map[string]any{
+			"server_id": stringProp("Trusted Airlock server ID."),
+		}, []string{"server_id"})),
 		readTool("generate_plan", "Generate Plan", "Run a local plan/preview command through the IaC Studio safe runner. This reads provider state and may write local plan artifacts, but does not apply changes.", objectSchema(projectExecutionProps(), []string{"project"})),
 		readTool("classify_plan", "Classify Plan", "Classify Terraform/OpenTofu plan JSON into safe, risky, destructive, and unknown changes.", objectSchema(map[string]any{
 			"plan_json": stringProp("Raw terraform show -json output. Use this for direct classification."),
@@ -70,6 +74,8 @@ func (s *Server) buildTools() ([]Tool, map[string]toolHandler) {
 		"inspect_project":            s.handleInspectProject,
 		"list_cloud_connections":     s.handleListCloudConnections,
 		"inspect_connection_scope":   s.handleInspectConnectionScope,
+		"list_mcp_airlock_servers":   s.handleListMCPAirlockServers,
+		"check_mcp_airlock_server":   s.handleCheckMCPAirlockServer,
 		"generate_plan":              s.handleGeneratePlan,
 		"classify_plan":              s.handleClassifyPlan,
 		"run_policy_check":           s.handleRunPolicyCheck,

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/iac-studio/iac-studio/internal/cloudconnections"
+	"github.com/iac-studio/iac-studio/internal/mcpairlock"
 	"github.com/iac-studio/iac-studio/internal/runner"
 )
 
@@ -32,6 +33,7 @@ type Server struct {
 	now           func() time.Time
 
 	cloudConnections *cloudconnections.Manager
+	mcpAirlock       *mcpairlock.Manager
 	run              *runner.SafeRunner
 	audit            *AuditLogger
 
@@ -106,6 +108,7 @@ func NewServer(cfg Config) *Server {
 		version:          cfg.Version,
 		now:              cfg.Now,
 		cloudConnections: cloudconnections.NewManager(cfg.ProjectsDir),
+		mcpAirlock:       mcpairlock.NewManager(cfg.ProjectsDir),
 		run:              run,
 		audit:            NewAuditLogger(cfg.ProjectsDir, cfg.Now),
 	}
