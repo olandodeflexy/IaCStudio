@@ -94,17 +94,59 @@ describe('api.cloudConnections', () => {
       },
       checks: [{ name: 'auth_method', status: 'pass', message: 'configured' }],
     };
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify(response), {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
-      }),
-    );
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
     vi.stubGlobal('fetch', fetchMock);
 
     await expect(api.testCloudConnection('conn_1')).resolves.toEqual(response);
 
     expect(fetchMock).toHaveBeenCalledWith('/api/cloud/connections/conn_1/test', {
+      method: 'POST',
+    });
+  });
+});
+
+describe('api.mcpAirlock', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('calls MCP Airlock lifecycle endpoints', async () => {
+    const response = {
+      server: { id: 'terraform-official', name: 'Terraform MCP Server' },
+      ready: true,
+      running: true,
+      configured: true,
+      command_available: true,
+      state: 'running',
+      summary: 'running',
+      checks: [],
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.startMCPAirlockServer('terraform-official')).resolves.toEqual(response);
+    await expect(api.stopMCPAirlockServer('terraform-official')).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/mcp-airlock/servers/terraform-official/start', {
+      method: 'POST',
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/mcp-airlock/servers/terraform-official/stop', {
       method: 'POST',
     });
   });

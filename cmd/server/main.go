@@ -17,6 +17,7 @@ import (
 	"github.com/iac-studio/iac-studio/internal/ai"
 	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/api"
+	"github.com/iac-studio/iac-studio/internal/mcpairlock"
 	"github.com/iac-studio/iac-studio/internal/runner"
 	"github.com/iac-studio/iac-studio/internal/watcher"
 )
@@ -94,8 +95,15 @@ func main() {
 	// Build origin allowlist from actual bind address
 	api.InitAllowedOrigins(*host, *port)
 
+	mcpAirlock := mcpairlock.NewManager(*projectsDir)
+	defer func() {
+		if err := mcpAirlock.Close(); err != nil {
+			log.Printf("mcp airlock cleanup: %v", err)
+		}
+	}()
+
 	// Build router
-	router := api.NewRouter(hub, fw, aiClient, safeRun, *projectsDir)
+	router := api.NewRouterWithOptions(hub, fw, aiClient, safeRun, *projectsDir, api.RouterOptions{MCPAirlock: mcpAirlock})
 
 	// Serve embedded frontend
 	frontendContent, _ := fs.Sub(frontendFS, "frontend/dist")

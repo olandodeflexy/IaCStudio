@@ -969,8 +969,19 @@ func limitBody(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 }
 
+// RouterOptions allows callers to provide long-lived services that need
+// explicit lifecycle management outside the router.
+type RouterOptions struct {
+	MCPAirlock *mcpairlock.Manager
+}
+
 // NewRouter creates the HTTP router with all endpoints.
 func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runner.SafeRunner, projectsDir string) *http.ServeMux {
+	return NewRouterWithOptions(hub, fw, aiClient, run, projectsDir, RouterOptions{})
+}
+
+// NewRouterWithOptions creates the HTTP router with explicit service options.
+func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runner.SafeRunner, projectsDir string, opts RouterOptions) *http.ServeMux {
 	mux := http.NewServeMux()
 
 	// Health
@@ -1404,7 +1415,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 	})
 
 	cloudConnections := cloudconnections.NewManager(projectsDir)
-	mcpAirlock := mcpairlock.NewManager(projectsDir)
+	mcpAirlock := opts.MCPAirlock
+	if mcpAirlock == nil {
+		mcpAirlock = mcpairlock.NewManager(projectsDir)
+	}
 
 	// Run IaC command (init, plan, apply)
 	mux.HandleFunc("POST /api/projects/{name}/run", func(w http.ResponseWriter, r *http.Request) {
@@ -1886,6 +1900,32 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 				return
 			}
 			http.Error(w, "mcp airlock health check failed", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(status)
+	})
+
+	mux.HandleFunc("POST /api/mcp-airlock/servers/{id}/start", func(w http.ResponseWriter, r *http.Request) {
+		status, err := mcpAirlock.Start(r.Context(), r.PathValue("id"))
+		if err != nil {
+			if errors.Is(err, mcpairlock.ErrUnknownServer) {
+				http.Error(w, "mcp airlock server not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "mcp airlock start failed", http.StatusInternalServerError)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(status)
+	})
+
+	mux.HandleFunc("POST /api/mcp-airlock/servers/{id}/stop", func(w http.ResponseWriter, r *http.Request) {
+		status, err := mcpAirlock.Stop(r.Context(), r.PathValue("id"))
+		if err != nil {
+			if errors.Is(err, mcpairlock.ErrUnknownServer) {
+				http.Error(w, "mcp airlock server not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "mcp airlock stop failed", http.StatusInternalServerError)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(status)
