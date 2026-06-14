@@ -302,7 +302,7 @@ func TestApprovalTokenValidation(t *testing.T) {
 	if !server.approved("approve-me") {
 		t.Fatalf("expected configured approval token to validate")
 	}
-	for _, token := range []string{"", "approve-m", "approve-me "} {
+	for _, token := range []string{"", "approve-m", "approve-me ", strings.Repeat("x", 1024)} {
 		if server.approved(token) {
 			t.Fatalf("expected token %q to be rejected", token)
 		}

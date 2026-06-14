@@ -291,6 +291,9 @@ func (s *Server) approved(token string) bool {
 	if s.approvalToken == "" || token == "" {
 		return false
 	}
+	if len(token) != len(s.approvalToken) {
+		return false
+	}
 	expected := sha256.Sum256([]byte(s.approvalToken))
 	provided := sha256.Sum256([]byte(token))
 	return subtle.ConstantTimeCompare(provided[:], expected[:]) == 1
