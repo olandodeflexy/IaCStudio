@@ -12,6 +12,7 @@ services:
     environment:
       - IAC_STUDIO_AI_ENDPOINT=http://ollama:11434
       - IAC_STUDIO_AI_MODEL=deepseek-coder:6.7b
+    command: ["--host", "0.0.0.0", "--port", "3000", "--projects-dir", "/projects"]
     depends_on:
       - ollama
     restart: unless-stopped
