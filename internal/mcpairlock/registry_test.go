@@ -83,6 +83,62 @@ func TestCheckRejectsShellCommandConfiguration(t *testing.T) {
 	}
 }
 
+func TestListReportsSingleTrustVerdictForUntrustedDefinitions(t *testing.T) {
+	manager := NewManager(t.TempDir(), WithDefinitions([]ServerDefinition{{
+		ID:              "untrusted",
+		Name:            "Untrusted",
+		Command:         testExecutable(t),
+		Trusted:         false,
+		ReadOnlyDefault: true,
+		CredentialMode:  "none",
+	}}))
+
+	statuses := manager.List(context.Background())
+
+	if len(statuses) != 1 {
+		t.Fatalf("expected one status, got %+v", statuses)
+	}
+	status := statuses[0]
+	if status.State != "blocked" {
+		t.Fatalf("expected blocked status, got %+v", status)
+	}
+	trustChecks := 0
+	for _, check := range status.Checks {
+		if check.Name != "trusted_registry" {
+			continue
+		}
+		trustChecks++
+		if check.Status != "error" {
+			t.Fatalf("expected trusted_registry error check, got %+v", check)
+		}
+	}
+	if trustChecks != 1 {
+		t.Fatalf("expected one trusted_registry check, got %d in %+v", trustChecks, status.Checks)
+	}
+}
+
+func TestValidateCommandAllowsAbsolutePathsWithSpaces(t *testing.T) {
+	commands := []string{
+		"/Applications/Hashi Corp/terraform-mcp-server",
+		`C:\Program Files\Terraform MCP\terraform-mcp-server.exe`,
+		`\\server\Terraform MCP\terraform-mcp-server.exe`,
+	}
+
+	for _, command := range commands {
+		if err := validateCommand(command); err != nil {
+			t.Fatalf("validateCommand(%q): %v", command, err)
+		}
+	}
+}
+
+func TestValidateCommandRejectsRelativeCommandsWithSpaces(t *testing.T) {
+	command := "terraform mcp server"
+
+	if err := validateCommand(command); err == nil {
+		t.Fatalf("expected relative command with spaces to be rejected")
+	}
+}
+
 func TestCheckRedactsProbeOutput(t *testing.T) {
 	manager := NewManager(t.TempDir(),
 		WithDefinitions([]ServerDefinition{{
