@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect, useMemo } from 'react';
-import { api, Resource, ToolInfo, CatalogResource, Suggestion, type CloudConnection } from './api';
+import { api, Resource, ToolInfo, CatalogResource, Suggestion, type CloudConnection, type PlanReference } from './api';
 import { useWebSocket, WSMessage } from './useWebSocket';
 import { useHistory } from './useHistory';
 import { useKeyboardShortcuts } from './useKeyboardShortcuts';
@@ -58,6 +58,7 @@ export default function App() {
   const [activeEnvironment, setActiveEnvironment] = useState<string | null>(null);
   const [canvasMode, setCanvasMode] = useState<CanvasMode>('freeform');
   const [selectedCloudConnection, setSelectedCloudConnection] = useState<CloudConnection | null>(null);
+  const [latestPlan, setLatestPlan] = useState<PlanReference | null>(null);
 
   const [terminalOutput, setTerminalOutput] = useState<string[]>([]);
   const [dragging, setDragging] = useState<{ id: string; ox: number; oy: number } | null>(null);
@@ -160,6 +161,7 @@ export default function App() {
     projectId,
     activeEnv,
     selectedCloudConnection,
+    latestPlanHash: latestPlan?.hash,
     activeResourceFile,
     unresolvedHybridEnv,
     nodes,
@@ -190,6 +192,7 @@ export default function App() {
   const { detectProvider, saveCodeToDisk: saveCodeWithContext } = actions;
 
   const saveCodeToDisk = useCallback((value: string) => {
+    setLatestPlan(null);
     saveCodeWithContext(value, { setCodeSaving, isSyncing, showNotification });
   }, [saveCodeWithContext, showNotification]);
 
@@ -231,10 +234,23 @@ export default function App() {
     }
   }, [tool, rightTab]);
 
+  useEffect(() => {
+    setLatestPlan(null);
+  }, [activeEnv, concreteTool, projectId, selectedCloudConnection?.id]);
+
   // WebSocket for live sync
   const handleWSMessage = useCallback((msg: WSMessage) => {
     if (msg.type === 'terminal' && msg.output) {
       setTerminalOutput(prev => [...prev, ...msg.output!.split('\n')]);
+      if (
+        msg.project === projectId &&
+        msg.plan &&
+        msg.plan.tool === concreteTool &&
+        (msg.plan.env || '') === (activeEnv || '') &&
+        (msg.plan.connection_id || '') === (selectedCloudConnection?.id || '')
+      ) {
+        setLatestPlan(msg.plan);
+      }
       if (msg.error) {
         setTerminalOutput(prev => [...prev, `ERROR: ${msg.error}`]);
         // Capture the error for "Fix with AI" — include last command output
@@ -263,6 +279,9 @@ export default function App() {
       }
     }
     if (msg.type === 'file_changed') {
+      if (msg.project === projectId) {
+        setLatestPlan(null);
+      }
       // Skip ALL file_changed events from our own operations:
       // - Our sync writes (isSyncing flag)
       // - Scaffold creation (hasCreatedProject is true but we just started)
@@ -273,7 +292,7 @@ export default function App() {
       // re-open the project or use the import feature.
       showNotification(`File updated: ${msg.file?.split('/').pop()}`);
     }
-  }, [clearNotification, setImportLoading, setImportPreview, showNotification, showPersistentNotification, topologyProvider]);
+  }, [activeEnv, clearNotification, concreteTool, projectId, selectedCloudConnection?.id, setImportLoading, setImportPreview, showNotification, showPersistentNotification, topologyProvider]);
 
   const { connected } = useWebSocket(handleWSMessage);
 

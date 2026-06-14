@@ -217,6 +217,16 @@ export interface PlanClassification {
   markdown?: string;
 }
 
+export interface PlanReference {
+  hash: string;
+  tool: string;
+  env?: string;
+  connection_id?: string;
+  plan_command: string;
+  created_at: string;
+  expires_at: string;
+}
+
 export interface DriftField {
   path: string;
   code_value?: unknown;
@@ -636,7 +646,7 @@ export const api = {
     projectName: string,
     tool: string,
     command: string,
-    opts: { approved?: boolean; env?: string; acknowledged?: boolean; riskAcknowledged?: boolean; connectionId?: string | null } = {},
+    opts: { approved?: boolean; env?: string; acknowledged?: boolean; riskAcknowledged?: boolean; connectionId?: string | null; planHash?: string | null } = {},
   ): Promise<{ status: string; connection?: CloudConnection }> {
     const res = await fetch(`${BASE}/api/projects/${projectName}/run`, {
       method: 'POST',
@@ -649,6 +659,7 @@ export const api = {
         acknowledged: opts.acknowledged ?? false,
         risk_acknowledged: opts.riskAcknowledged ?? false,
         connection_id: opts.connectionId || undefined,
+        plan_hash: opts.planHash || undefined,
       }),
     });
     return (await check(res)).json();

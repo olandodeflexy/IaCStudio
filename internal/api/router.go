@@ -812,14 +812,6 @@ func simpleRelativeFileName(target string) bool {
 	return target != "" && !filepath.IsAbs(target) && !strings.ContainsAny(target, `/\`)
 }
 
-func invalidatePlan(projectPaths ...string) {
-	planGate.mu.Lock()
-	defer planGate.mu.Unlock()
-	for _, projectPath := range projectPaths {
-		delete(planGate.plans, projectPath)
-	}
-}
-
 func planInvalidationPaths(projectPath string, targets ...string) []string {
 	seen := map[string]bool{projectPath: true}
 	paths := []string{projectPath}
@@ -938,28 +930,6 @@ func handlePulumiSync(w http.ResponseWriter, fw *watcher.FileWatcher, projectPat
 	})
 }
 
-// planGate tracks which projects have had a recent plan run.
-// Apply/destroy is only allowed after a plan has been run for the same project.
-var planGate = struct {
-	mu    sync.Mutex
-	plans map[string]time.Time // projectPath -> last plan time
-}{plans: make(map[string]time.Time)}
-
-// recordPlan marks that a plan was run for a project.
-func recordPlan(projectPath string) {
-	planGate.mu.Lock()
-	planGate.plans[projectPath] = time.Now()
-	planGate.mu.Unlock()
-}
-
-// hasPlan checks that a plan was run for a project within the last hour.
-func hasPlan(projectPath string) bool {
-	planGate.mu.Lock()
-	defer planGate.mu.Unlock()
-	t, ok := planGate.plans[projectPath]
-	return ok && time.Since(t) < time.Hour
-}
-
 // maxRequestBody is the maximum allowed request body size (1MB).
 // Prevents clients from sending oversized payloads to exhaust memory.
 const maxRequestBody = 1 << 20
@@ -984,6 +954,11 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 // NewRouterWithOptions creates the HTTP router with explicit service options.
 func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runner.SafeRunner, projectsDir string, opts RouterOptions) *http.ServeMux {
 	mux := http.NewServeMux()
+	if fw != nil {
+		fw.OnChange(func(file, _ string) {
+			invalidatePlanForChangedFile(projectsDir, file)
+		})
+	}
 
 	// Health
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
@@ -1446,6 +1421,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			// the audit trail can distinguish plan semantics from policy
 			// violations.
 			RiskAcknowledged bool `json:"risk_acknowledged"`
+			// PlanHash binds approval to the exact latest successful
+			// plan/preview/check artifact emitted by the server.
+			PlanHash string `json:"plan_hash,omitempty"`
 			// Env names the environment subdirectory to execute in for
 			// layered-v1 projects (environments/<env>/...). Empty runs
 			// commands at the project root (flat layout). Validated as a
@@ -1513,17 +1491,19 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		}
 
 		// Block apply/destroy unless:
-		// 1. A plan was run for this project within the last hour (server-verified)
+		// 1. The caller submits the exact latest plan_hash for this
+		//    project/environment/tool/connection/command context.
 		// 2. The client explicitly confirms (approved:true)
 		// 3. No error-severity policy findings exist, OR the client sets
 		//    acknowledged:true after reading the findings.
 		if run.RequiresApproval(req.Command) {
-			if !hasPlan(runPath) {
+			_, planGateErr := validatePlanForCommand(runPath, effectiveTool, req.Env, req.ConnectionID, req.Command, req.PlanHash)
+			if planGateErr != nil {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusConflict)
 				_ = json.NewEncoder(w).Encode(map[string]string{
-					"error":  "plan_required",
-					"detail": "run plan first — no plan has been run for this project recently",
+					"error":  planGateErr.Error,
+					"detail": planGateErr.Detail,
 				})
 				return
 			}
@@ -1532,7 +1512,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 				w.WriteHeader(http.StatusConflict)
 				_ = json.NewEncoder(w).Encode(map[string]string{
 					"error":  "approval_required",
-					"detail": "plan exists — re-submit with approved:true to proceed",
+					"detail": "plan hash matches — re-submit with approved:true to proceed",
 				})
 				return
 			}
@@ -1588,6 +1568,24 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		// a request-scoped context and kill the command. SafeRunner applies its
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
+			if run.RequiresApproval(req.Command) {
+				if _, planGateErr := consumePlanForCommand(runPath, effectiveTool, req.Env, req.ConnectionID, req.Command, req.PlanHash); planGateErr != nil {
+					msg := map[string]interface{}{
+						"type":    "terminal",
+						"project": name,
+						"status":  req.Command,
+						"output":  "",
+						"error":   "apply gate invalidated before execution: " + planGateErr.Detail,
+					}
+					data, marshalErr := json.Marshal(msg)
+					if marshalErr != nil {
+						log.Printf("marshal terminal invalidation message: %v", marshalErr)
+						return
+					}
+					hub.Broadcast(data)
+					return
+				}
+			}
 			var result *runner.ExecutionResult
 			var err error
 			if scopedConnection {
@@ -1597,6 +1595,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			}
 			var classification *iacplan.ClassificationResult
 			var snapshot *recovery.StateSnapshot
+			var planRef *planReference
 			var snapshotErr error
 			// Only record a successful plan — failed/cancelled plans don't count.
 			// 'preview' is Pulumi's equivalent of terraform plan; without it
@@ -1629,7 +1628,15 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 						result.Output = appendPlanClassificationOutput(result.Output, classification)
 					}
 				}
-				recordPlan(runPath)
+				output := ""
+				if result != nil {
+					output = result.Output
+				}
+				recordedPlan := recordCommandPlan(runPath, effectiveTool, req.Env, req.ConnectionID, req.Command, output)
+				planRef = &recordedPlan
+				if result != nil {
+					result.Output = appendPlanReferenceOutput(result.Output, recordedPlan)
+				}
 			}
 			if err == nil && commandRecordsSnapshot(req.Command) {
 				recorded, recordErr := recovery.RecordSnapshot(projectRoot, runPath, recovery.SnapshotInput{
@@ -1651,6 +1658,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			}
 			if classification != nil {
 				msg["plan_classification"] = classification
+			}
+			if planRef != nil {
+				msg["plan"] = planRef
 			}
 			if snapshot != nil {
 				msg["state_snapshot"] = snapshot

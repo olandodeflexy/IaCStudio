@@ -547,7 +547,7 @@ func (sr *SafeRunner) RequiresApproval(command string) bool {
 		return false
 	}
 	switch command {
-	case "apply", "up", "destroy", "refresh":
+	case "apply", "playbook", "up", "destroy", "refresh":
 		return true
 	}
 	return false
