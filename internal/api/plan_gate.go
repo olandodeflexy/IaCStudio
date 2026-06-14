@@ -111,8 +111,23 @@ func hasPlan(projectPath string) bool {
 
 func validatePlanForCommand(projectPath, tool, env, connectionID, command, providedHash string) (*planReference, *planGateRejection) {
 	planGate.mu.Lock()
+	defer planGate.mu.Unlock()
+	return validatePlanForCommandLocked(projectPath, tool, env, connectionID, command, providedHash)
+}
+
+func consumePlanForCommand(projectPath, tool, env, connectionID, command, providedHash string) (*planReference, *planGateRejection) {
+	planGate.mu.Lock()
+	defer planGate.mu.Unlock()
+	ref, rejection := validatePlanForCommandLocked(projectPath, tool, env, connectionID, command, providedHash)
+	if rejection != nil {
+		return nil, rejection
+	}
+	delete(planGate.plans, projectPath)
+	return ref, nil
+}
+
+func validatePlanForCommandLocked(projectPath, tool, env, connectionID, command, providedHash string) (*planReference, *planGateRejection) {
 	record, ok := planGate.plans[projectPath]
-	planGate.mu.Unlock()
 	if !ok || time.Since(record.createdAt) >= planGateTTL {
 		return nil, &planGateRejection{
 			Error:  "plan_required",

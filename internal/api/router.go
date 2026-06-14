@@ -1568,6 +1568,24 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		// a request-scoped context and kill the command. SafeRunner applies its
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
+			if run.RequiresApproval(req.Command) {
+				if _, planGateErr := consumePlanForCommand(runPath, effectiveTool, req.Env, req.ConnectionID, req.Command, req.PlanHash); planGateErr != nil {
+					msg := map[string]interface{}{
+						"type":    "terminal",
+						"project": name,
+						"status":  req.Command,
+						"output":  "",
+						"error":   "apply gate invalidated before execution: " + planGateErr.Detail,
+					}
+					data, marshalErr := json.Marshal(msg)
+					if marshalErr != nil {
+						log.Printf("marshal terminal invalidation message: %v", marshalErr)
+						return
+					}
+					hub.Broadcast(data)
+					return
+				}
+			}
 			var result *runner.ExecutionResult
 			var err error
 			if scopedConnection {

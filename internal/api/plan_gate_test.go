@@ -62,6 +62,38 @@ func TestPlanGateAcceptsMatchingPlanHash(t *testing.T) {
 	}
 }
 
+func TestConsumePlanRejectsPlanInvalidatedAfterValidation(t *testing.T) {
+	projectDir := t.TempDir()
+	t.Cleanup(func() { invalidatePlan(projectDir) })
+
+	ref := recordCommandPlan(projectDir, "terraform", "dev", "aws-dev", "plan", "dev plan")
+	if _, rejection := validatePlanForCommand(projectDir, "terraform", "dev", "aws-dev", "apply", ref.Hash); rejection != nil {
+		t.Fatalf("expected initial validation to pass, got %#v", rejection)
+	}
+
+	invalidatePlan(projectDir)
+
+	if _, rejection := consumePlanForCommand(projectDir, "terraform", "dev", "aws-dev", "apply", ref.Hash); rejection == nil || rejection.Error != "plan_required" {
+		t.Fatalf("expected invalidated plan_required rejection, got %#v", rejection)
+	}
+}
+
+func TestConsumePlanAllowsSingleUse(t *testing.T) {
+	projectDir := t.TempDir()
+	t.Cleanup(func() { invalidatePlan(projectDir) })
+
+	ref := recordCommandPlan(projectDir, "terraform", "", "", "plan", "safe plan")
+	if _, rejection := consumePlanForCommand(projectDir, "terraform", "", "", "apply", ref.Hash); rejection != nil {
+		t.Fatalf("expected first consume to pass, got %#v", rejection)
+	}
+	if hasPlan(projectDir) {
+		t.Fatal("plan gate should be removed after consume")
+	}
+	if _, rejection := consumePlanForCommand(projectDir, "terraform", "", "", "apply", ref.Hash); rejection == nil || rejection.Error != "plan_required" {
+		t.Fatalf("expected second consume to fail, got %#v", rejection)
+	}
+}
+
 func TestPlanGateInvalidatesChangedLayeredFile(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo")
@@ -137,4 +169,31 @@ func TestRunCommandAcceptsMatchingPlanHash(t *testing.T) {
 	if resp.StatusCode != http.StatusAccepted {
 		t.Fatalf("apply status = %d, want 202", resp.StatusCode)
 	}
+}
+
+func TestRunCommandRequiresSubmittedPlanHashForAnsiblePlaybook(t *testing.T) {
+	root := t.TempDir()
+	projectDir := filepath.Join(root, "demo")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatalf("mkdir project: %v", err)
+	}
+	t.Cleanup(func() { invalidatePlan(projectDir) })
+	_ = recordCommandPlan(projectDir, "ansible", "", "", "check", "safe check")
+
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/api/projects/demo/run",
+		"application/json",
+		strings.NewReader(`{"tool":"ansible","command":"playbook","approved":true}`),
+	)
+	if err != nil {
+		t.Fatalf("POST run playbook: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusConflict {
+		t.Fatalf("playbook status = %d, want 409", resp.StatusCode)
+	}
+	assertResponseBodyContains(t, resp, "plan_hash_required")
 }

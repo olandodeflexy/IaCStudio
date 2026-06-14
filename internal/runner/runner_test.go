@@ -192,12 +192,13 @@ func TestBuildArgs_PulumiPassesStack(t *testing.T) {
 func TestRequiresApproval_CoversPulumiUp(t *testing.T) {
 	sr := NewSafeRunner(DefaultSafetyConfig())
 	cases := map[string]bool{
-		"plan":    false,
-		"preview": false,
-		"apply":   true,
-		"up":      true,
-		"destroy": true,
-		"refresh": true, // state-mutating — gated alongside apply/destroy
+		"plan":     false,
+		"preview":  false,
+		"apply":    true,
+		"playbook": true,
+		"up":       true,
+		"destroy":  true,
+		"refresh":  true, // state-mutating — gated alongside apply/destroy
 	}
 	for cmd, want := range cases {
 		if got := sr.RequiresApproval(cmd); got != want {

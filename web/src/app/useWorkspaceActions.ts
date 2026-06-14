@@ -348,7 +348,7 @@ export function useWorkspaceActions({
       setTerminalOutput(prev => [...prev, `Error: environment "${activeEnv}" has no configured IaC tool`]);
       return;
     }
-    const needsApproval = command === 'apply' || command === 'destroy';
+    const needsApproval = command === 'apply' || command === 'playbook' || command === 'destroy';
     if (needsApproval && !confirm(`Are you sure you want to run "${command}"? This will modify real infrastructure.`)) {
       return;
     }
