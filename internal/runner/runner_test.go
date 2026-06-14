@@ -342,6 +342,49 @@ func TestScopedCommandEnvBlocksAWSSharedFileFallbackWithoutCompleteAWSCredential
 	}
 }
 
+func TestScopedCommandEnvIgnoresEmptyAWSCredentialSources(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"HOME=/home/alice",
+		},
+		map[string]string{
+			"AWS_PROFILE":                            "",
+			"AWS_ACCESS_KEY_ID":                      "",
+			"AWS_SECRET_ACCESS_KEY":                  "",
+			"AWS_ROLE_ARN":                           "",
+			"AWS_WEB_IDENTITY_TOKEN_FILE":            "",
+			"AWS_SHARED_CREDENTIALS_FILE":            "",
+			"AWS_CONFIG_FILE":                        "",
+			"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "",
+			"AWS_CONTAINER_CREDENTIALS_FULL_URI":     "",
+		},
+	))
+
+	if got["AWS_SHARED_CREDENTIALS_FILE"] != os.DevNull || got["AWS_CONFIG_FILE"] != os.DevNull {
+		t.Fatalf("empty AWS credential sources should not reopen shared file fallback: %#v", got)
+	}
+}
+
+func TestScopedCommandEnvForcesMetadataDisabledWhenEmpty(t *testing.T) {
+	env := scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+		},
+		map[string]string{
+			"AWS_EC2_METADATA_DISABLED": "",
+		},
+	)
+	got := envValues(env)
+
+	if got["AWS_EC2_METADATA_DISABLED"] != "true" {
+		t.Fatalf("empty AWS_EC2_METADATA_DISABLED should be forced to true: %#v", got)
+	}
+	if countEnvKey(env, "AWS_EC2_METADATA_DISABLED") != 1 {
+		t.Fatalf("AWS_EC2_METADATA_DISABLED should be updated in place, got env: %#v", env)
+	}
+}
+
 func TestScopedCommandEnvPreservesWindowsExecutableLookup(t *testing.T) {
 	got := envValues(scopedCommandEnv(
 		[]string{
@@ -474,4 +517,15 @@ func envValues(entries []string) map[string]string {
 		}
 	}
 	return values
+}
+
+func countEnvKey(entries []string, want string) int {
+	count := 0
+	for _, entry := range entries {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && key == want {
+			count++
+		}
+	}
+	return count
 }
