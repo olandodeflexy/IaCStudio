@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -2827,58 +2828,61 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 }
 
 // allowedOrigins is populated at startup from the server's actual bind address.
-var allowedOrigins = map[string]bool{}
-
-// serverPort stores the configured port for same-origin checks.
-var serverPort string
-
-// isWildcardBind is true when the server binds to 0.0.0.0 or [::].
-var isWildcardBind bool
+var allowedOrigins = struct {
+	mu   sync.RWMutex
+	list map[string]bool
+}{list: map[string]bool{}}
 
 // InitAllowedOrigins builds the origin allowlist from the server's host and port.
 // Called once at startup so the list matches the actual deployment.
 func InitAllowedOrigins(host string, port int) {
-	serverPort = fmt.Sprintf("%d", port)
-	isWildcardBind = host == "0.0.0.0" || host == "::" || host == ""
+	serverPort := fmt.Sprintf("%d", port)
+	isWildcardBind := host == "0.0.0.0" || host == "::" || host == ""
+	origins := map[string]bool{}
 
 	// Always allow localhost variants
 	for _, h := range []string{"localhost", "127.0.0.1"} {
-		allowedOrigins["http://"+h+":"+serverPort] = true
+		origins[localHTTPOrigin(h, serverPort)] = true
 	}
 	// If binding a specific host, allow that too
 	if !isWildcardBind {
-		allowedOrigins["http://"+host+":"+serverPort] = true
+		origins[localHTTPOrigin(host, serverPort)] = true
 	}
 	// Also allow the Vite dev server (port 5173) for development
 	for _, h := range []string{"localhost", "127.0.0.1"} {
-		allowedOrigins["http://"+h+":5173"] = true
+		origins[localHTTPOrigin(h, "5173")] = true
 	}
+
+	allowedOrigins.mu.Lock()
+	allowedOrigins.list = origins
+	allowedOrigins.mu.Unlock()
+}
+
+func localHTTPOrigin(host, port string) string {
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // IsAllowedOrigin checks whether an origin is in the allowlist.
-// When the server binds to 0.0.0.0, browsers send the LAN IP as the origin
-// (e.g. http://192.168.1.5:3000). We can't predict all LAN IPs at startup,
-// so for wildcard binds we also accept any origin whose port matches the
-// configured server port — the same trust level as listening on all interfaces.
 func IsAllowedOrigin(origin string) bool {
-	if allowedOrigins[origin] {
-		return true
-	}
-	if isWildcardBind && strings.HasPrefix(origin, "http://") && strings.HasSuffix(origin, ":"+serverPort) {
-		return true
-	}
-	return false
+	allowedOrigins.mu.RLock()
+	defer allowedOrigins.mu.RUnlock()
+	return allowedOrigins.list[origin]
 }
 
 // CORS restricts cross-origin requests to the localhost allowlist.
 func CORS(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		origin := r.Header.Get("Origin")
-		if origin != "" && IsAllowedOrigin(origin) {
+		if origin != "" {
+			w.Header().Set("Vary", "Origin")
+			if !IsAllowedOrigin(origin) {
+				http.Error(w, "origin not allowed", http.StatusForbidden)
+				return
+			}
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			w.Header().Set("Vary", "Origin")
 		}
 		if r.Method == "OPTIONS" {
 			w.WriteHeader(http.StatusOK)

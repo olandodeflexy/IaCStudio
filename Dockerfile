@@ -54,4 +54,4 @@ ENV IAC_STUDIO_PROJECTS_DIR=/projects
 EXPOSE 3000
 
 ENTRYPOINT ["/app/iac-studio"]
-CMD ["--host", "0.0.0.0", "--port", "3000", "--projects-dir", "/projects"]
+CMD ["--host", "127.0.0.1", "--port", "3000", "--projects-dir", "/projects"]

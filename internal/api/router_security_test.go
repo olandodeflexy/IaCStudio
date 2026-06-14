@@ -47,6 +47,91 @@ func assertResponseBodyContains(t *testing.T, resp *http.Response, want ...strin
 	}
 }
 
+func TestCORSRejectsDisallowedOriginBeforeHandler(t *testing.T) {
+	InitAllowedOrigins("127.0.0.1", 3000)
+	t.Cleanup(func() { InitAllowedOrigins("127.0.0.1", 3000) })
+	called := false
+	handler := CORS(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/sync", strings.NewReader(`{"resources":[]}`))
+	req.Header.Set("Origin", "http://attacker.example")
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected disallowed origin to be rejected with 403, got %d", rec.Code)
+	}
+	if called {
+		t.Fatal("disallowed origin reached wrapped handler")
+	}
+}
+
+func TestCORSAllowsConfiguredLocalhostOrigin(t *testing.T) {
+	InitAllowedOrigins("127.0.0.1", 3000)
+	t.Cleanup(func() { InitAllowedOrigins("127.0.0.1", 3000) })
+	handler := CORS(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/sync", strings.NewReader(`{"resources":[]}`))
+	req.Header.Set("Origin", "http://localhost:3000")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("expected allowed origin through handler, got %d", rec.Code)
+	}
+	if got := rec.Header().Get("Access-Control-Allow-Origin"); got != "http://localhost:3000" {
+		t.Fatalf("expected CORS allow header for localhost, got %q", got)
+	}
+}
+
+func TestCORSRejectsDisallowedPreflight(t *testing.T) {
+	InitAllowedOrigins("127.0.0.1", 3000)
+	t.Cleanup(func() { InitAllowedOrigins("127.0.0.1", 3000) })
+	handler := CORS(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	req := httptest.NewRequest(http.MethodOptions, "/api/projects/demo/run", nil)
+	req.Header.Set("Origin", "http://attacker.example")
+	req.Header.Set("Access-Control-Request-Method", "POST")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("expected disallowed preflight to be rejected with 403, got %d", rec.Code)
+	}
+}
+
+func TestWildcardBindDoesNotAllowArbitrarySamePortOrigin(t *testing.T) {
+	InitAllowedOrigins("0.0.0.0", 3000)
+	t.Cleanup(func() { InitAllowedOrigins("127.0.0.1", 3000) })
+
+	if IsAllowedOrigin("http://192.168.1.25:3000") {
+		t.Fatal("wildcard bind should not trust arbitrary LAN origins")
+	}
+	if !IsAllowedOrigin("http://localhost:3000") || !IsAllowedOrigin("http://127.0.0.1:3000") {
+		t.Fatal("wildcard bind should still allow localhost browser origins")
+	}
+}
+
+func TestInitAllowedOriginsFormatsIPv6LoopbackOrigin(t *testing.T) {
+	InitAllowedOrigins("::1", 3000)
+	t.Cleanup(func() { InitAllowedOrigins("127.0.0.1", 3000) })
+
+	if !IsAllowedOrigin("http://[::1]:3000") {
+		t.Fatal("IPv6 loopback bind should allow bracketed browser origin")
+	}
+	if IsAllowedOrigin("http://::1:3000") {
+		t.Fatal("IPv6 origins should not use unbracketed host syntax")
+	}
+}
+
 func TestStateRoutesRejectTraversalProjectName(t *testing.T) {
 	root := t.TempDir()
 	srv := httptest.NewServer(fullRouterForTest(t, root))
@@ -322,8 +407,8 @@ func TestSafeReviewArtifactPathEnforcesPrefix(t *testing.T) {
 		"../escape",
 		".iac-studio/snapshots/foo.json",
 		".iac-studio/remediations",        // directory itself, no trailing slash
-		".iac-studio/rollbacks",            // directory itself, no trailing slash
-		".iac-studio/remediations_evil/x",  // adjacent directory, not the allowed one
+		".iac-studio/rollbacks",           // directory itself, no trailing slash
+		".iac-studio/remediations_evil/x", // adjacent directory, not the allowed one
 		".iac-studio/remediations/foo/../../outside",
 		".iac-studio/rollbacks/foo/../../../etc/passwd",
 		"/absolute/path",

@@ -223,9 +223,10 @@ iac-studio</code></pre>
           <h3>Run with Docker</h3>
           <p>The container includes the server, built web UI, Terraform, and OpenTofu.</p>
           <pre><code>docker run --rm -it \
-  -p 3000:3000 \
+  -p 127.0.0.1:3000:3000 \
   -v "$HOME/iac-projects:/projects" \
-  ghcr.io/olandodeflexy/iacstudio:latest</code></pre>
+  ghcr.io/olandodeflexy/iacstudio:latest \
+  --host 0.0.0.0 --port 3000 --projects-dir /projects</code></pre>
 
           <div class="callout">
             <strong>Default server behavior:</strong>
@@ -814,11 +815,11 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
           <div class="feature-grid compact">
             <article>
               <h3>Local binding</h3>
-              <p>The default server binds to <code>127.0.0.1</code>. Docker uses <code>0.0.0.0</code> inside the container so the host port can map correctly.</p>
+              <p>The default server binds to <code>127.0.0.1</code>. Docker examples explicitly use <code>0.0.0.0</code> inside the container only with a host port pinned to <code>127.0.0.1</code>.</p>
             </article>
             <article>
               <h3>Origin checks</h3>
-              <p>CORS and WebSocket origin validation are intended to accept localhost development and app origins only.</p>
+              <p>CORS and WebSocket origin validation accept localhost development and app origins only; disallowed browser origins are rejected before API handlers run.</p>
             </article>
             <article>
               <h3>Path sandboxing</h3>
