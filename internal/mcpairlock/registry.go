@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"sort"
@@ -219,7 +220,6 @@ func (m *Manager) passiveStatus(definition ServerDefinition) ServerStatus {
 		State:   "available",
 		Summary: "Command is configured and available. Run a health check before routing an agent to it.",
 		Checks: []Check{
-			{Name: "trusted_registry", Status: "pass", Message: "server is in IaC Studio's trusted MCP Airlock registry"},
 			{Name: "credential_scope", Status: "pass", Message: "Airlock health checks do not forward cloud credentials"},
 		},
 	}
@@ -229,6 +229,7 @@ func (m *Manager) passiveStatus(definition ServerDefinition) ServerStatus {
 		status.Checks = append(status.Checks, Check{Name: "trusted_registry", Status: "error", Message: "definition is not trusted"})
 		return status
 	}
+	status.Checks = append(status.Checks, Check{Name: "trusted_registry", Status: "pass", Message: "server is in IaC Studio's trusted MCP Airlock registry"})
 	if !definition.ReadOnlyDefault {
 		status.Checks = append(status.Checks, Check{Name: "default_mode", Status: "warn", Message: "server is not read-only by default"})
 	} else {
@@ -355,10 +356,27 @@ func validateCommand(command string) error {
 	if command == "" {
 		return errors.New("command is required")
 	}
-	if strings.ContainsAny(command, "\x00\r\n\t|&;<>`$") || strings.Contains(command, " ") {
-		return fmt.Errorf("command %q must be a single executable name or absolute path without shell metacharacters", command)
+	if strings.ContainsAny(command, "\x00\r\n\t|&;<>`$") {
+		return fmt.Errorf("command %q must not contain control characters or shell metacharacters", command)
+	}
+	if strings.Contains(command, " ") && !isAbsoluteCommandPath(command) {
+		return fmt.Errorf("command %q contains spaces; use an absolute executable path or put arguments in IAC_STUDIO_MCP_*_ARGS", command)
 	}
 	return nil
+}
+
+func isAbsoluteCommandPath(command string) bool {
+	if filepath.IsAbs(command) {
+		return true
+	}
+	if len(command) >= 3 && isASCIIAlpha(command[0]) && command[1] == ':' && (command[2] == '\\' || command[2] == '/') {
+		return true
+	}
+	return strings.HasPrefix(command, `\\`)
+}
+
+func isASCIIAlpha(char byte) bool {
+	return (char >= 'A' && char <= 'Z') || (char >= 'a' && char <= 'z')
 }
 
 func defaultProbe(ctx context.Context, command string, args []string, timeout time.Duration) ProbeResult {
