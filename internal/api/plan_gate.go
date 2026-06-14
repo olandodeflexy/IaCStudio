@@ -78,22 +78,22 @@ func recordPlan(projectPath string) string {
 }
 
 func recordCommandPlan(projectPath, tool, env, connectionID, command, output string) planReference {
-	return recordCommandPlanAt(projectPath, tool, env, connectionID, command, output, time.Now().UTC())
+	return recordCommandPlanAt(projectPath, tool, env, connectionID, command, output, time.Now())
 }
 
 func recordCommandPlanAt(projectPath, tool, env, connectionID, command, output string, now time.Time) planReference {
 	if now.IsZero() {
-		now = time.Now().UTC()
+		now = time.Now()
 	}
-	now = now.UTC()
+	displayTime := now.UTC()
 	ref := planReference{
 		Hash:         planHash(projectPath, tool, env, connectionID, command, output),
 		Tool:         tool,
 		Env:          env,
 		ConnectionID: connectionID,
 		PlanCommand:  command,
-		CreatedAt:    now.Format(time.RFC3339),
-		ExpiresAt:    now.Add(planGateTTL).Format(time.RFC3339),
+		CreatedAt:    displayTime.Format(time.RFC3339),
+		ExpiresAt:    displayTime.Add(planGateTTL).Format(time.RFC3339),
 	}
 
 	planGate.mu.Lock()
@@ -189,12 +189,13 @@ func planHash(projectPath, tool, env, connectionID, command, output string) stri
 	writeHashField(h, command)
 	writeHashField(h, output)
 	for _, name := range []string{savedTerraformPlanFile, savedPlanJSONFile} {
-		data, err := os.ReadFile(filepath.Join(projectPath, name))
+		file, err := os.Open(filepath.Join(projectPath, name))
 		if err != nil {
 			continue
 		}
 		writeHashField(h, name)
-		_, _ = h.Write(data)
+		_, _ = io.Copy(h, file)
+		_ = file.Close()
 	}
 	return hex.EncodeToString(h.Sum(nil))
 }
