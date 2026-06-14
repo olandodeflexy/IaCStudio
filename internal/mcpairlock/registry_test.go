@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -223,6 +225,111 @@ func TestStartStopLifecycleUsesLauncherAndReportsRunning(t *testing.T) {
 	if status.Running || status.State != "stopped" || !handle.stopped {
 		t.Fatalf("expected stopped status, got status=%+v stopped=%v", status, handle.stopped)
 	}
+	if status.LastExitReason != "stopped by user" {
+		t.Fatalf("expected user stop exit reason, got %+v", status)
+	}
+	for _, check := range status.Checks {
+		if check.Name == "lifecycle" && check.Status == "warn" {
+			t.Fatalf("successful stop returned lifecycle warning: %+v", status.Checks)
+		}
+	}
+}
+
+func TestStartDoesNotBlockLifecycleStatusDuringLaunch(t *testing.T) {
+	launcherEntered := make(chan struct{})
+	releaseLauncher := make(chan struct{})
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
+			close(launcherEntered)
+			<-releaseLauncher
+			return newFakeProcess(), nil
+		}),
+	)
+
+	startDone := make(chan error, 1)
+	go func() {
+		_, err := manager.Start(context.Background(), "terraform")
+		startDone <- err
+	}()
+	<-launcherEntered
+
+	statusesDone := make(chan []ServerStatus, 1)
+	go func() {
+		statusesDone <- manager.List(context.Background())
+	}()
+
+	select {
+	case statuses := <-statusesDone:
+		if len(statuses) != 1 || statuses[0].State != "starting" {
+			t.Fatalf("expected starting status during launch, got %+v", statuses)
+		}
+	case <-time.After(250 * time.Millisecond):
+		close(releaseLauncher)
+		t.Fatalf("List blocked behind Start launcher")
+	}
+
+	close(releaseLauncher)
+	if err := <-startDone; err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+}
+
+func TestConcurrentStopClaimsProcessOnce(t *testing.T) {
+	handle := newBlockingStopProcess()
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
+			return handle, nil
+		}),
+	)
+
+	if _, err := manager.Start(context.Background(), "terraform"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	firstStopDone := make(chan ServerStatus, 1)
+	go func() {
+		status, err := manager.Stop(context.Background(), "terraform")
+		if err != nil {
+			t.Errorf("Stop: %v", err)
+		}
+		firstStopDone <- status
+	}()
+	<-handle.stopEntered
+
+	secondStatus, err := manager.Stop(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("second Stop: %v", err)
+	}
+	if secondStatus.State != "stopping" {
+		t.Fatalf("expected concurrent stop to report stopping, got %+v", secondStatus)
+	}
+	if calls := handle.stopCalls.Load(); calls != 1 {
+		t.Fatalf("expected one ProcessHandle.Stop call, got %d", calls)
+	}
+
+	close(handle.releaseStop)
+	firstStatus := <-firstStopDone
+	if firstStatus.State != "stopped" || firstStatus.Running {
+		t.Fatalf("expected first stop to complete, got %+v", firstStatus)
+	}
 }
 
 func TestStartRejectsUnsupportedTransportWithoutLaunching(t *testing.T) {
@@ -329,6 +436,45 @@ func (p *fakeProcess) Stop(context.Context) error {
 }
 
 func (p *fakeProcess) exit(err error) {
+	select {
+	case p.done <- err:
+	default:
+	}
+}
+
+type blockingStopProcess struct {
+	done        chan error
+	stopEntered chan struct{}
+	releaseStop chan struct{}
+	stopCalls   atomic.Int32
+	once        sync.Once
+}
+
+func newBlockingStopProcess() *blockingStopProcess {
+	return &blockingStopProcess{
+		done:        make(chan error, 1),
+		stopEntered: make(chan struct{}),
+		releaseStop: make(chan struct{}),
+	}
+}
+
+func (p *blockingStopProcess) Done() <-chan error {
+	return p.done
+}
+
+func (p *blockingStopProcess) Stop(ctx context.Context) error {
+	p.stopCalls.Add(1)
+	p.once.Do(func() { close(p.stopEntered) })
+	select {
+	case <-p.releaseStop:
+		p.exit(nil)
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *blockingStopProcess) exit(err error) {
 	select {
 	case p.done <- err:
 	default:
