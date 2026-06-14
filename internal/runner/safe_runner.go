@@ -91,6 +91,17 @@ func (sr *SafeRunner) Execute(ctx context.Context, projectDir, tool, command, en
 // ExecuteWithEnv runs a command with additional environment variables. Values
 // in extraEnv override the inherited process environment for this command only.
 func (sr *SafeRunner) ExecuteWithEnv(ctx context.Context, projectDir, tool, command, env string, extraEnv map[string]string) (*ExecutionResult, error) {
+	return sr.executeWithEnv(ctx, projectDir, tool, command, env, extraEnv, false)
+}
+
+// ExecuteWithScopedEnv runs a command with a minimal command environment plus
+// the selected connection variables. It is intended for Cloud Connection scoped
+// runs where ambient host cloud credentials must not leak into the subprocess.
+func (sr *SafeRunner) ExecuteWithScopedEnv(ctx context.Context, projectDir, tool, command, env string, extraEnv map[string]string) (*ExecutionResult, error) {
+	return sr.executeWithEnv(ctx, projectDir, tool, command, env, extraEnv, true)
+}
+
+func (sr *SafeRunner) executeWithEnv(ctx context.Context, projectDir, tool, command, env string, extraEnv map[string]string, scoped bool) (*ExecutionResult, error) {
 	// Project-level lock — prevent concurrent executions on the same project
 	// which would cause terraform state lock contention and corruption.
 	sr.mu.Lock()
@@ -134,7 +145,10 @@ func (sr *SafeRunner) ExecuteWithEnv(ctx context.Context, projectDir, tool, comm
 
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	cmd.Dir = projectDir
-	if len(extraEnv) > 0 {
+	switch {
+	case scoped:
+		cmd.Env = scopedCommandEnv(os.Environ(), extraEnv)
+	case len(extraEnv) > 0:
 		cmd.Env = mergeEnv(os.Environ(), extraEnv)
 	}
 
@@ -189,6 +203,119 @@ func (sr *SafeRunner) ExecuteWithEnv(ctx context.Context, projectDir, tool, comm
 		execution.Status = "completed"
 		result.ExitCode = 0
 		return result, nil
+	}
+}
+
+func scopedCommandEnv(base []string, overrides map[string]string) []string {
+	env := mergeEnv(minimalCommandEnv(base), overrides)
+	if !envHasKey(env, "AWS_EC2_METADATA_DISABLED") {
+		env = append(env, "AWS_EC2_METADATA_DISABLED=true")
+	}
+	return env
+}
+
+func minimalCommandEnv(base []string) []string {
+	allow := map[string]bool{
+		"PATH":               true,
+		"HOME":               true,
+		"USERPROFILE":        true,
+		"HOMEDRIVE":          true,
+		"HOMEPATH":           true,
+		"APPDATA":            true,
+		"LOCALAPPDATA":       true,
+		"SystemRoot":         true,
+		"WINDIR":             true,
+		"TMPDIR":             true,
+		"TMP":                true,
+		"TEMP":               true,
+		"LANG":               true,
+		"LC_ALL":             true,
+		"SSL_CERT_FILE":      true,
+		"SSL_CERT_DIR":       true,
+		"REQUESTS_CA_BUNDLE": true,
+		"CURL_CA_BUNDLE":     true,
+		"HTTP_PROXY":         true,
+		"HTTPS_PROXY":        true,
+		"NO_PROXY":           true,
+		"http_proxy":         true,
+		"https_proxy":        true,
+		"no_proxy":           true,
+	}
+	out := make([]string, 0, len(allow))
+	seen := map[string]bool{}
+	for _, entry := range base {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" || seen[key] || !allow[key] || isCloudCredentialEnvKey(key) {
+			continue
+		}
+		out = append(out, key+"="+value)
+		seen[key] = true
+	}
+	return out
+}
+
+func envHasKey(env []string, want string) bool {
+	for _, entry := range env {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && key == want {
+			return true
+		}
+	}
+	return false
+}
+
+func isCloudCredentialEnvKey(key string) bool {
+	if strings.HasPrefix(key, "TF_TOKEN_") {
+		return true
+	}
+	switch key {
+	case
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN",
+		"AWS_PROFILE",
+		"AWS_DEFAULT_PROFILE",
+		"AWS_SHARED_CREDENTIALS_FILE",
+		"AWS_CONFIG_FILE",
+		"AWS_SDK_LOAD_CONFIG",
+		"AWS_ROLE_ARN",
+		"AWS_WEB_IDENTITY_TOKEN_FILE",
+		"AWS_CONTAINER_CREDENTIALS_FULL_URI",
+		"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN",
+		"AWS_CONTAINER_AUTHORIZATION_TOKEN_FILE",
+		"AWS_EC2_METADATA_DISABLED",
+		"AWS_REGION",
+		"AWS_DEFAULT_REGION",
+		"ARM_CLIENT_ID",
+		"ARM_CLIENT_SECRET",
+		"ARM_CLIENT_CERTIFICATE_PATH",
+		"ARM_CLIENT_CERTIFICATE_PASSWORD",
+		"ARM_TENANT_ID",
+		"ARM_SUBSCRIPTION_ID",
+		"ARM_USE_MSI",
+		"ARM_MSI_ENDPOINT",
+		"ARM_OIDC_TOKEN",
+		"ARM_USE_OIDC",
+		"AZURE_CLIENT_ID",
+		"AZURE_CLIENT_SECRET",
+		"AZURE_TENANT_ID",
+		"AZURE_SUBSCRIPTION_ID",
+		"GOOGLE_APPLICATION_CREDENTIALS",
+		"GOOGLE_CREDENTIALS",
+		"GOOGLE_CLOUD_KEYFILE_JSON",
+		"GOOGLE_OAUTH_ACCESS_TOKEN",
+		"GOOGLE_PROJECT",
+		"GOOGLE_CLOUD_PROJECT",
+		"GOOGLE_REGION",
+		"CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
+		"CLOUDSDK_CORE_PROJECT",
+		"CLOUDSDK_COMPUTE_REGION",
+		"TF_CLOUD_TOKEN",
+		"TFE_TOKEN":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -297,6 +424,17 @@ func (sr *SafeRunner) ExecutePlanJSON(ctx context.Context, projectDir, tool stri
 // by `plan -out=tfplan` into full JSON (`show -json tfplan`). The result is
 // used by policy engines and the semantic apply gate.
 func (sr *SafeRunner) ExportSavedPlanJSON(ctx context.Context, projectDir, tool string, extraEnv map[string]string) (*ExecutionResult, error) {
+	return sr.exportSavedPlanJSON(ctx, projectDir, tool, extraEnv, false)
+}
+
+// ExportSavedPlanJSONWithScopedEnv is the Cloud Connection scoped variant of
+// ExportSavedPlanJSON. It avoids leaking ambient host cloud credentials while
+// rendering the saved plan.
+func (sr *SafeRunner) ExportSavedPlanJSONWithScopedEnv(ctx context.Context, projectDir, tool string, extraEnv map[string]string) (*ExecutionResult, error) {
+	return sr.exportSavedPlanJSON(ctx, projectDir, tool, extraEnv, true)
+}
+
+func (sr *SafeRunner) exportSavedPlanJSON(ctx context.Context, projectDir, tool string, extraEnv map[string]string, scoped bool) (*ExecutionResult, error) {
 	timeout := sr.defaults.PlanTimeout
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
@@ -313,7 +451,10 @@ func (sr *SafeRunner) ExportSavedPlanJSON(ctx context.Context, projectDir, tool 
 
 	cmd := exec.CommandContext(ctx, binary, "show", "-json", "tfplan")
 	cmd.Dir = projectDir
-	if len(extraEnv) > 0 {
+	switch {
+	case scoped:
+		cmd.Env = scopedCommandEnv(os.Environ(), extraEnv)
+	case len(extraEnv) > 0:
 		cmd.Env = mergeEnv(os.Environ(), extraEnv)
 	}
 	configureCommandCancel(cmd)

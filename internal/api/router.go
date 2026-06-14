@@ -1480,8 +1480,10 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		}
 
 		var commandEnv map[string]string
+		scopedConnection := false
 		var connectionSummary cloudconnections.PublicConnection
 		if req.ConnectionID != "" {
+			scopedConnection = true
 			connection, connErr := cloudConnections.Get(req.ConnectionID)
 			if connErr != nil {
 				if errors.Is(connErr, os.ErrNotExist) {
@@ -1586,7 +1588,13 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		// a request-scoped context and kill the command. SafeRunner applies its
 		// own per-command timeout (init=5m, plan=10m, apply=30m).
 		go func() {
-			result, err := run.ExecuteWithEnv(context.Background(), runPath, effectiveTool, req.Command, req.Env, commandEnv)
+			var result *runner.ExecutionResult
+			var err error
+			if scopedConnection {
+				result, err = run.ExecuteWithScopedEnv(context.Background(), runPath, effectiveTool, req.Command, req.Env, commandEnv)
+			} else {
+				result, err = run.ExecuteWithEnv(context.Background(), runPath, effectiveTool, req.Command, req.Env, commandEnv)
+			}
 			var classification *iacplan.ClassificationResult
 			var snapshot *recovery.StateSnapshot
 			var snapshotErr error
@@ -1598,7 +1606,13 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			// independently.
 			if err == nil && commandProducesPlan(req.Command) {
 				if planSupportsSemanticClassification(effectiveTool) {
-					exported, exportErr := run.ExportSavedPlanJSON(context.Background(), runPath, effectiveTool, commandEnv)
+					var exported *runner.ExecutionResult
+					var exportErr error
+					if scopedConnection {
+						exported, exportErr = run.ExportSavedPlanJSONWithScopedEnv(context.Background(), runPath, effectiveTool, commandEnv)
+					} else {
+						exported, exportErr = run.ExportSavedPlanJSON(context.Background(), runPath, effectiveTool, commandEnv)
+					}
 					if exportErr != nil {
 						classification = iacplan.UnknownClassification("saved plan JSON export failed; rerun plan before applying")
 						_ = os.Remove(filepath.Join(runPath, savedPlanJSONFile))

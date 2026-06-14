@@ -206,7 +206,13 @@ func (s *Server) handleGeneratePlan(ctx context.Context, raw json.RawMessage) to
 	if err != nil {
 		return errResponse("generate_plan", err, projectAudit("generate_plan", args))
 	}
-	result, runErr := s.run.ExecuteWithEnv(ctx, projectCtx.WorkDir, projectCtx.Tool, "plan", projectCtx.Env, env)
+	var result *runner.ExecutionResult
+	var runErr error
+	if strings.TrimSpace(args.ConnectionID) != "" {
+		result, runErr = s.run.ExecuteWithScopedEnv(ctx, projectCtx.WorkDir, projectCtx.Tool, "plan", projectCtx.Env, env)
+	} else {
+		result, runErr = s.run.ExecuteWithEnv(ctx, projectCtx.WorkDir, projectCtx.Tool, "plan", projectCtx.Env, env)
+	}
 	sanitized := sanitizeExecutionResult(result, env)
 	payload := map[string]any{
 		"project":    projectCtx.Name,
