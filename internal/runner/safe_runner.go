@@ -217,6 +217,8 @@ func scopedCommandEnv(base []string, overrides map[string]string) []string {
 func minimalCommandEnv(base []string) []string {
 	allow := map[string]bool{
 		"PATH":               true,
+		"Path":               true,
+		"PATHEXT":            true,
 		"HOME":               true,
 		"USERPROFILE":        true,
 		"HOMEDRIVE":          true,

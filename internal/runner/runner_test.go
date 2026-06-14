@@ -287,6 +287,34 @@ func TestScopedCommandEnvDropsAmbientCloudCredentials(t *testing.T) {
 	}
 }
 
+func TestScopedCommandEnvPreservesWindowsExecutableLookup(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			`Path=C:\Windows\System32;C:\tools`,
+			"PATHEXT=.COM;.EXE;.BAT;.CMD",
+			"SystemRoot=C:\\Windows",
+			"WINDIR=C:\\Windows",
+			"AWS_PROFILE=ambient-admin",
+		},
+		map[string]string{
+			"AWS_PROFILE": "selected-profile",
+		},
+	))
+
+	if got["Path"] != `C:\Windows\System32;C:\tools` {
+		t.Fatalf("Windows Path should be preserved for executable lookup: %#v", got)
+	}
+	if got["PATHEXT"] != ".COM;.EXE;.BAT;.CMD" {
+		t.Fatalf("Windows PATHEXT should be preserved for executable lookup: %#v", got)
+	}
+	if got["SystemRoot"] != "C:\\Windows" || got["WINDIR"] != "C:\\Windows" {
+		t.Fatalf("Windows system roots should be preserved: %#v", got)
+	}
+	if got["AWS_PROFILE"] != "selected-profile" {
+		t.Fatalf("selected connection should override ambient AWS_PROFILE: %#v", got)
+	}
+}
+
 func TestScopedCommandEnvAllowsSelectedProfileWithoutAmbientStaticKeys(t *testing.T) {
 	got := envValues(scopedCommandEnv(
 		[]string{
