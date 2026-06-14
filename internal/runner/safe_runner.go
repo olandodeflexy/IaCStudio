@@ -260,11 +260,6 @@ func minimalCommandEnv(base []string) []string {
 	return out
 }
 
-func envHasKey(env []string, want string) bool {
-	_, ok := envValue(env, want)
-	return ok
-}
-
 func envHasNonEmptyValue(env []string, want string) bool {
 	value, ok := envValue(env, want)
 	return ok && strings.TrimSpace(value) != ""
