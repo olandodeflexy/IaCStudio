@@ -262,6 +262,37 @@ describe('api.runCommand', () => {
       }),
     });
   });
+
+  it('sends plan_hash for approved mutating commands', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ status: 'running' }), {
+        status: 202,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await api.runCommand('demo', 'terraform', 'apply', {
+      approved: true,
+      env: 'prod',
+      planHash: 'plan_abc123',
+    });
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        tool: 'terraform',
+        command: 'apply',
+        approved: true,
+        env: 'prod',
+        acknowledged: false,
+        risk_acknowledged: false,
+        connection_id: undefined,
+        plan_hash: 'plan_abc123',
+      }),
+    });
+  });
 });
 
 describe('api.runDrift', () => {

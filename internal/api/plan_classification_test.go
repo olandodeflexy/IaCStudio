@@ -71,7 +71,6 @@ func TestApplyGateBlocksUnacknowledgedPlanRisk(t *testing.T) {
 		t.Fatalf("mkdir project: %v", err)
 	}
 	t.Cleanup(func() { invalidatePlan(projectDir) })
-	recordPlan(projectDir)
 	if err := os.WriteFile(filepath.Join(projectDir, savedPlanJSONFile), []byte(`{
 		"resource_changes": [{
 			"address": "aws_db_instance.primary",
@@ -86,6 +85,7 @@ func TestApplyGateBlocksUnacknowledgedPlanRisk(t *testing.T) {
 	}`), 0o600); err != nil {
 		t.Fatalf("write plan json: %v", err)
 	}
+	planRef := recordCommandPlan(projectDir, "terraform", "", "", "plan", "replace primary database")
 
 	srv := httptest.NewServer(fullRouterForTest(t, root))
 	defer srv.Close()
@@ -93,7 +93,7 @@ func TestApplyGateBlocksUnacknowledgedPlanRisk(t *testing.T) {
 	resp, err := http.Post(
 		srv.URL+"/api/projects/demo/run",
 		"application/json",
-		strings.NewReader(`{"tool":"terraform","command":"apply","approved":true}`),
+		strings.NewReader(`{"tool":"terraform","command":"apply","approved":true,"plan_hash":"`+planRef.Hash+`"}`),
 	)
 	if err != nil {
 		t.Fatalf("POST run apply: %v", err)

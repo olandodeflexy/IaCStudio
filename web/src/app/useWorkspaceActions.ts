@@ -52,6 +52,7 @@ export interface UseWorkspaceActionsInput {
   projectId: string;
   activeEnv: string | null;
   selectedCloudConnection: CloudConnection | null;
+  latestPlanHash?: string | null;
   activeResourceFile?: string;
   unresolvedHybridEnv: boolean;
   nodes: AppResource[];
@@ -86,6 +87,7 @@ export function useWorkspaceActions({
   projectId,
   activeEnv,
   selectedCloudConnection,
+  latestPlanHash,
   activeResourceFile,
   unresolvedHybridEnv,
   nodes,
@@ -373,6 +375,7 @@ export function useWorkspaceActions({
         acknowledged: true,
         riskAcknowledged,
         connectionId: selectedCloudConnection?.id,
+        planHash: needsApproval ? latestPlanHash : undefined,
       }).catch(overrideErr => {
         setTerminalOutput(prev => [...prev, `Error: ${overrideErr.message}`]);
       });
@@ -382,6 +385,7 @@ export function useWorkspaceActions({
       approved: needsApproval,
       env: activeEnv,
       connectionId: selectedCloudConnection?.id,
+      planHash: needsApproval ? latestPlanHash : undefined,
     }).catch(err => {
       if (needsApproval && isPlanRiskBlockedError(err)) {
         const summary = summarizePlanClassification(err.payload?.classification);
@@ -399,6 +403,7 @@ export function useWorkspaceActions({
           env: activeEnv,
           riskAcknowledged: true,
           connectionId: selectedCloudConnection?.id,
+          planHash: latestPlanHash,
         }).catch(overrideErr => {
           if (needsApproval && isPolicyBlockedError(overrideErr)) {
             handlePolicyBlock(overrideErr, true);
@@ -414,7 +419,7 @@ export function useWorkspaceActions({
       }
       setTerminalOutput(prev => [...prev, `Error: ${err.message}`]);
     });
-  }, [activeEnv, projectId, selectedCloudConnection, setTerminalOutput, tool, unresolvedHybridEnv]);
+  }, [activeEnv, latestPlanHash, projectId, selectedCloudConnection, setTerminalOutput, tool, unresolvedHybridEnv]);
 
   const fixLastError = useCallback(async () => {
     if (!lastCmdError || !tool) return;

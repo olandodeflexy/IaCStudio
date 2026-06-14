@@ -16,12 +16,16 @@ type Broadcaster interface {
 	Broadcast(msg []byte)
 }
 
+type FileChangeHook func(file, dir string)
+
 // FileWatcher monitors project directories and notifies the UI of changes.
 type FileWatcher struct {
 	watcher    *fsnotify.Watcher
 	hub        Broadcaster
 	paused     map[string]bool
 	mu         sync.RWMutex
+	hookMu     sync.RWMutex
+	onChange   FileChangeHook
 	debounce   map[string]*time.Timer
 	debounceMu sync.Mutex
 }
@@ -47,6 +51,12 @@ func New(hub Broadcaster) *FileWatcher {
 func (fw *FileWatcher) Watch(dir string) error {
 	log.Printf("Watching: %s", dir)
 	return fw.watcher.Add(dir)
+}
+
+func (fw *FileWatcher) OnChange(hook FileChangeHook) {
+	fw.hookMu.Lock()
+	defer fw.hookMu.Unlock()
+	fw.onChange = hook
 }
 
 // Pause temporarily stops notifications for a directory (used during UI → disk writes).
@@ -148,4 +158,11 @@ func (fw *FileWatcher) notify(file, dir string) {
 
 	log.Printf("File changed: %s", file)
 	fw.hub.Broadcast(data)
+
+	fw.hookMu.RLock()
+	hook := fw.onChange
+	fw.hookMu.RUnlock()
+	if hook != nil {
+		hook(file, dir)
+	}
 }
