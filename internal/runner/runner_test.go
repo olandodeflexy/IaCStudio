@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -235,4 +236,296 @@ func TestMergeEnvOverridesBase(t *testing.T) {
 	if values["GOOGLE_REGION"] != "" {
 		t.Fatalf("empty override value should be preserved: %#v", values)
 	}
+}
+
+func TestScopedCommandEnvDropsAmbientCloudCredentials(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"HOME=/home/alice",
+			"AWS_PROFILE=ambient-admin",
+			"AWS_ACCESS_KEY_ID=ambient-key",
+			"AWS_SECRET_ACCESS_KEY=ambient-secret",
+			"AWS_SESSION_TOKEN=ambient-session",
+			"AWS_EC2_METADATA_DISABLED=false",
+			"ARM_CLIENT_SECRET=ambient-azure-secret",
+			"GOOGLE_APPLICATION_CREDENTIALS=/tmp/ambient-gcp.json",
+			"TFE_TOKEN=ambient-tfe-token",
+			"TF_TOKEN_app_terraform_io=ambient-tf-token",
+			"UNRELATED_SECRET=ambient",
+		},
+		map[string]string{
+			"AWS_ACCESS_KEY_ID":     "selected-key",
+			"AWS_SECRET_ACCESS_KEY": "selected-secret",
+			"AWS_REGION":            "us-east-1",
+		},
+	))
+
+	if got["PATH"] != "/usr/bin" || got["HOME"] != "/home/alice" {
+		t.Fatalf("minimal OS env should be preserved: %#v", got)
+	}
+	if got["AWS_ACCESS_KEY_ID"] != "selected-key" || got["AWS_SECRET_ACCESS_KEY"] != "selected-secret" {
+		t.Fatalf("selected connection credentials should be present: %#v", got)
+	}
+	if got["AWS_REGION"] != "us-east-1" {
+		t.Fatalf("selected connection region should be present: %#v", got)
+	}
+	if got["AWS_EC2_METADATA_DISABLED"] != "true" {
+		t.Fatalf("scoped env should disable AWS metadata fallback: %#v", got)
+	}
+	for _, key := range []string{
+		"AWS_PROFILE",
+		"AWS_SESSION_TOKEN",
+		"ARM_CLIENT_SECRET",
+		"GOOGLE_APPLICATION_CREDENTIALS",
+		"TFE_TOKEN",
+		"TF_TOKEN_app_terraform_io",
+		"UNRELATED_SECRET",
+	} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("scoped env leaked ambient %s: %#v", key, got)
+		}
+	}
+}
+
+func TestScopedCommandEnvBlocksAWSSharedFileFallbackForNonAWSConnection(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"HOME=/home/alice",
+			"USERPROFILE=C:\\Users\\Alice",
+			"AWS_PROFILE=ambient-admin",
+			"AWS_SHARED_CREDENTIALS_FILE=/home/alice/.aws/credentials",
+			"AWS_CONFIG_FILE=/home/alice/.aws/config",
+		},
+		map[string]string{
+			"ARM_CLIENT_ID":       "selected-client",
+			"ARM_CLIENT_SECRET":   "selected-secret",
+			"ARM_TENANT_ID":       "selected-tenant",
+			"ARM_SUBSCRIPTION_ID": "selected-subscription",
+		},
+	))
+
+	if got["HOME"] != "/home/alice" || got["USERPROFILE"] != "C:\\Users\\Alice" {
+		t.Fatalf("home env should remain available for tool runtime context: %#v", got)
+	}
+	if got["ARM_CLIENT_SECRET"] != "selected-secret" || got["ARM_CLIENT_ID"] != "selected-client" {
+		t.Fatalf("selected Azure credentials should be present: %#v", got)
+	}
+	if got["AWS_SHARED_CREDENTIALS_FILE"] != os.DevNull || got["AWS_CONFIG_FILE"] != os.DevNull {
+		t.Fatalf("non-AWS scoped runs should block AWS shared file fallback: %#v", got)
+	}
+	if got["AWS_PROFILE"] == "ambient-admin" {
+		t.Fatalf("non-AWS scoped run leaked ambient AWS_PROFILE: %#v", got)
+	}
+}
+
+func TestScopedCommandEnvBlocksAWSSharedFileFallbackWithoutCompleteAWSCredentials(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"HOME=/home/alice",
+			"AWS_SHARED_CREDENTIALS_FILE=/home/alice/.aws/credentials",
+			"AWS_CONFIG_FILE=/home/alice/.aws/config",
+		},
+		map[string]string{
+			"AWS_ACCESS_KEY_ID": "selected-key",
+			"AWS_REGION":        "us-east-1",
+		},
+	))
+
+	if got["AWS_ACCESS_KEY_ID"] != "selected-key" || got["AWS_REGION"] != "us-east-1" {
+		t.Fatalf("selected AWS values should be present: %#v", got)
+	}
+	if got["AWS_SHARED_CREDENTIALS_FILE"] != os.DevNull || got["AWS_CONFIG_FILE"] != os.DevNull {
+		t.Fatalf("incomplete AWS scoped runs should block shared file fallback: %#v", got)
+	}
+}
+
+func TestScopedCommandEnvIgnoresEmptyAWSCredentialSources(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"HOME=/home/alice",
+		},
+		map[string]string{
+			"AWS_PROFILE":                            "",
+			"AWS_ACCESS_KEY_ID":                      "",
+			"AWS_SECRET_ACCESS_KEY":                  "",
+			"AWS_ROLE_ARN":                           "",
+			"AWS_WEB_IDENTITY_TOKEN_FILE":            "",
+			"AWS_SHARED_CREDENTIALS_FILE":            "",
+			"AWS_CONFIG_FILE":                        "",
+			"AWS_CONTAINER_CREDENTIALS_RELATIVE_URI": "",
+			"AWS_CONTAINER_CREDENTIALS_FULL_URI":     "",
+		},
+	))
+
+	if got["AWS_SHARED_CREDENTIALS_FILE"] != os.DevNull || got["AWS_CONFIG_FILE"] != os.DevNull {
+		t.Fatalf("empty AWS credential sources should not reopen shared file fallback: %#v", got)
+	}
+}
+
+func TestScopedCommandEnvForcesMetadataDisabledWhenEmpty(t *testing.T) {
+	env := scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+		},
+		map[string]string{
+			"AWS_EC2_METADATA_DISABLED": "",
+		},
+	)
+	got := envValues(env)
+
+	if got["AWS_EC2_METADATA_DISABLED"] != "true" {
+		t.Fatalf("empty AWS_EC2_METADATA_DISABLED should be forced to true: %#v", got)
+	}
+	if countEnvKey(env, "AWS_EC2_METADATA_DISABLED") != 1 {
+		t.Fatalf("AWS_EC2_METADATA_DISABLED should be updated in place, got env: %#v", env)
+	}
+}
+
+func TestScopedCommandEnvPreservesWindowsExecutableLookup(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			`Path=C:\Windows\System32;C:\tools`,
+			"PATHEXT=.COM;.EXE;.BAT;.CMD",
+			"SystemRoot=C:\\Windows",
+			"WINDIR=C:\\Windows",
+			"AWS_PROFILE=ambient-admin",
+		},
+		map[string]string{
+			"AWS_PROFILE": "selected-profile",
+		},
+	))
+
+	if got["Path"] != `C:\Windows\System32;C:\tools` {
+		t.Fatalf("Windows Path should be preserved for executable lookup: %#v", got)
+	}
+	if got["PATHEXT"] != ".COM;.EXE;.BAT;.CMD" {
+		t.Fatalf("Windows PATHEXT should be preserved for executable lookup: %#v", got)
+	}
+	if got["SystemRoot"] != "C:\\Windows" || got["WINDIR"] != "C:\\Windows" {
+		t.Fatalf("Windows system roots should be preserved: %#v", got)
+	}
+	if got["AWS_PROFILE"] != "selected-profile" {
+		t.Fatalf("selected connection should override ambient AWS_PROFILE: %#v", got)
+	}
+}
+
+func TestScopedCommandEnvAllowsSelectedProfileWithoutAmbientStaticKeys(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"HOME=/home/alice",
+			"AWS_ACCESS_KEY_ID=ambient-key",
+			"AWS_SECRET_ACCESS_KEY=ambient-secret",
+			"AWS_SESSION_TOKEN=ambient-session",
+			"AWS_SHARED_CREDENTIALS_FILE=/tmp/wrong-credentials",
+			"AWS_CONFIG_FILE=/tmp/wrong-config",
+		},
+		map[string]string{
+			"AWS_PROFILE":         "prod-sso",
+			"AWS_SDK_LOAD_CONFIG": "1",
+			"AWS_DEFAULT_REGION":  "eu-west-1",
+		},
+	))
+
+	if got["AWS_PROFILE"] != "prod-sso" || got["AWS_SDK_LOAD_CONFIG"] != "1" {
+		t.Fatalf("selected profile connection should be present: %#v", got)
+	}
+	if got["AWS_DEFAULT_REGION"] != "eu-west-1" {
+		t.Fatalf("selected profile region should be present: %#v", got)
+	}
+	for _, key := range []string{
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN",
+		"AWS_SHARED_CREDENTIALS_FILE",
+		"AWS_CONFIG_FILE",
+	} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("selected profile run leaked ambient %s: %#v", key, got)
+		}
+	}
+}
+
+func TestScopedCommandEnvKeepsSelectedProviderOnly(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"AWS_ACCESS_KEY_ID=ambient-key",
+			"ARM_CLIENT_SECRET=ambient-azure-secret",
+			"GOOGLE_CREDENTIALS=ambient-gcp-json",
+			"CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE=/tmp/ambient-gcp.json",
+		},
+		map[string]string{
+			"ARM_CLIENT_ID":       "selected-client",
+			"ARM_CLIENT_SECRET":   "selected-secret",
+			"ARM_TENANT_ID":       "selected-tenant",
+			"ARM_SUBSCRIPTION_ID": "selected-subscription",
+		},
+	))
+
+	if got["ARM_CLIENT_SECRET"] != "selected-secret" || got["ARM_CLIENT_ID"] != "selected-client" {
+		t.Fatalf("selected Azure credentials should be present: %#v", got)
+	}
+	for _, key := range []string{
+		"AWS_ACCESS_KEY_ID",
+		"GOOGLE_CREDENTIALS",
+		"CLOUDSDK_AUTH_CREDENTIAL_FILE_OVERRIDE",
+	} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("selected Azure run leaked ambient %s: %#v", key, got)
+		}
+	}
+
+	got = envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"AWS_ACCESS_KEY_ID=ambient-key",
+			"ARM_CLIENT_SECRET=ambient-azure-secret",
+			"GOOGLE_APPLICATION_CREDENTIALS=/tmp/ambient-gcp.json",
+		},
+		map[string]string{
+			"GOOGLE_CREDENTIALS":    `{"type":"service_account"}`,
+			"GOOGLE_CLOUD_PROJECT":  "selected-project",
+			"CLOUDSDK_CORE_PROJECT": "selected-project",
+		},
+	))
+
+	if got["GOOGLE_CREDENTIALS"] != `{"type":"service_account"}` || got["GOOGLE_CLOUD_PROJECT"] != "selected-project" {
+		t.Fatalf("selected GCP credentials should be present: %#v", got)
+	}
+	for _, key := range []string{
+		"AWS_ACCESS_KEY_ID",
+		"ARM_CLIENT_SECRET",
+		"GOOGLE_APPLICATION_CREDENTIALS",
+	} {
+		if _, ok := got[key]; ok {
+			t.Fatalf("selected GCP run leaked ambient %s: %#v", key, got)
+		}
+	}
+}
+
+func envValues(entries []string) map[string]string {
+	values := map[string]string{}
+	for _, entry := range entries {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok {
+			values[key] = value
+		}
+	}
+	return values
+}
+
+func countEnvKey(entries []string, want string) int {
+	count := 0
+	for _, entry := range entries {
+		key, _, ok := strings.Cut(entry, "=")
+		if ok && key == want {
+			count++
+		}
+	}
+	return count
 }
