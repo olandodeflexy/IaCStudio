@@ -23,9 +23,11 @@ type ProcessHandle interface {
 type LauncherFunc func(ctx context.Context, definition ServerDefinition, timeout time.Duration) (ProcessHandle, error)
 
 type lifecycleStore struct {
-	mu      sync.Mutex
-	running map[string]*processRecord
-	exits   map[string]exitRecord
+	mu       sync.Mutex
+	starting map[string]time.Time
+	running  map[string]*processRecord
+	stopping map[string]*processRecord
+	exits    map[string]exitRecord
 }
 
 type processRecord struct {
@@ -40,8 +42,10 @@ type exitRecord struct {
 
 func newLifecycleStore() *lifecycleStore {
 	return &lifecycleStore{
-		running: make(map[string]*processRecord),
-		exits:   make(map[string]exitRecord),
+		starting: make(map[string]time.Time),
+		running:  make(map[string]*processRecord),
+		stopping: make(map[string]*processRecord),
+		exits:    make(map[string]exitRecord),
 	}
 }
 
@@ -68,15 +72,32 @@ func (m *Manager) Start(ctx context.Context, id string) (ServerStatus, error) {
 
 	now := time.Now().UTC()
 	m.lifecycle.mu.Lock()
-	defer m.lifecycle.mu.Unlock()
 	m.reapLocked(id, now)
+	if startedAt, ok := m.lifecycle.starting[id]; ok {
+		status = m.withStartingStatusLocked(status, startedAt)
+		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server launch is already in progress"})
+		m.lifecycle.mu.Unlock()
+		return status, nil
+	}
 	if record, ok := m.lifecycle.running[id]; ok {
 		status = m.withLifecycleStatusLocked(status, record)
 		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "pass", Message: "server is already running"})
+		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
+	if record, ok := m.lifecycle.stopping[id]; ok {
+		status = m.withStoppingStatusLocked(status, record)
+		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server stop is in progress"})
+		m.lifecycle.mu.Unlock()
+		return status, nil
+	}
+	m.lifecycle.starting[id] = now
+	m.lifecycle.mu.Unlock()
 
 	handle, err := m.launcher(ctx, definition, m.timeout)
+	m.lifecycle.mu.Lock()
+	defer m.lifecycle.mu.Unlock()
+	delete(m.lifecycle.starting, id)
 	if err != nil {
 		status.State = "launch_failed"
 		status.Summary = "Airlock could not start the MCP server process."
@@ -103,6 +124,18 @@ func (m *Manager) Stop(ctx context.Context, id string) (ServerStatus, error) {
 
 	m.lifecycle.mu.Lock()
 	m.reapLocked(id, now)
+	if record, ok := m.lifecycle.stopping[id]; ok {
+		status = m.withStoppingStatusLocked(status, record)
+		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server stop is already in progress"})
+		m.lifecycle.mu.Unlock()
+		return status, nil
+	}
+	if startedAt, ok := m.lifecycle.starting[id]; ok {
+		status = m.withStartingStatusLocked(status, startedAt)
+		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server is still starting"})
+		m.lifecycle.mu.Unlock()
+		return status, nil
+	}
 	record, ok := m.lifecycle.running[id]
 	if !ok {
 		status = m.withLifecycleStatusLocked(status, nil)
@@ -110,13 +143,16 @@ func (m *Manager) Stop(ctx context.Context, id string) (ServerStatus, error) {
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
+	delete(m.lifecycle.running, id)
+	m.lifecycle.stopping[id] = record
 	m.lifecycle.mu.Unlock()
 
 	stopCtx, cancel := context.WithTimeout(ctx, m.timeout)
 	defer cancel()
 	if err := record.handle.Stop(stopCtx); err != nil {
 		m.lifecycle.mu.Lock()
-		status = m.withLifecycleStatusLocked(status, record)
+		delete(m.lifecycle.stopping, id)
+		status = m.restoreAfterStopFailureLocked(status, id, record)
 		status.State = "stop_failed"
 		status.Summary = "Airlock could not stop the MCP server process before the timeout."
 		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "error", Message: redactOutput(err.Error())})
@@ -125,11 +161,13 @@ func (m *Manager) Stop(ctx context.Context, id string) (ServerStatus, error) {
 	}
 
 	m.lifecycle.mu.Lock()
-	delete(m.lifecycle.running, id)
-	m.lifecycle.exits[id] = exitRecord{at: time.Now().UTC(), reason: "stopped by user"}
-	status = m.withLifecycleStatusLocked(status, nil)
+	delete(m.lifecycle.stopping, id)
+	exit := exitRecord{at: time.Now().UTC(), reason: "stopped by user"}
+	m.lifecycle.exits[id] = exit
 	status.State = "stopped"
 	status.Summary = "MCP server process stopped."
+	status.LastExitAt = exit.at.Format(time.RFC3339)
+	status.LastExitReason = exit.reason
 	status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "pass", Message: "server process stopped"})
 	m.lifecycle.mu.Unlock()
 	return status, nil
@@ -181,6 +219,12 @@ func (m *Manager) withLifecycleStatusLocked(status ServerStatus, record *process
 		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "pass", Message: "server process is running"})
 		return status
 	}
+	if startedAt, ok := m.lifecycle.starting[status.Server.ID]; ok {
+		return m.withStartingStatusLocked(status, startedAt)
+	}
+	if record, ok := m.lifecycle.stopping[status.Server.ID]; ok {
+		return m.withStoppingStatusLocked(status, record)
+	}
 	if exit, ok := m.lifecycle.exits[status.Server.ID]; ok {
 		status.LastExitAt = exit.at.Format(time.RFC3339)
 		status.LastExitReason = exit.reason
@@ -191,6 +235,36 @@ func (m *Manager) withLifecycleStatusLocked(status ServerStatus, record *process
 		}
 	}
 	return status
+}
+
+func (m *Manager) withStartingStatusLocked(status ServerStatus, startedAt time.Time) ServerStatus {
+	status.State = "starting"
+	status.StartedAt = startedAt.Format(time.RFC3339)
+	status.Summary = "MCP server process is starting with cloud credentials withheld."
+	status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server process is starting"})
+	return status
+}
+
+func (m *Manager) withStoppingStatusLocked(status ServerStatus, record *processRecord) ServerStatus {
+	status.State = "stopping"
+	status.StartedAt = record.startedAt.Format(time.RFC3339)
+	status.Summary = "MCP server process is stopping."
+	status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server stop is in progress"})
+	return status
+}
+
+func (m *Manager) restoreAfterStopFailureLocked(status ServerStatus, id string, record *processRecord) ServerStatus {
+	select {
+	case err := <-record.handle.Done():
+		exit := exitRecord{at: time.Now().UTC(), reason: exitReason(err)}
+		m.lifecycle.exits[id] = exit
+		status.LastExitAt = exit.at.Format(time.RFC3339)
+		status.LastExitReason = exit.reason
+		return status
+	default:
+		m.lifecycle.running[id] = record
+		return m.withLifecycleStatusLocked(status, record)
+	}
 }
 
 func (m *Manager) reapLocked(id string, now time.Time) {
