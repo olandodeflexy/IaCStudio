@@ -208,6 +208,10 @@ func (sr *SafeRunner) executeWithEnv(ctx context.Context, projectDir, tool, comm
 
 func scopedCommandEnv(base []string, overrides map[string]string) []string {
 	env := mergeEnv(minimalCommandEnv(base), overrides)
+	if !hasAWSCredentialSource(env) {
+		env = setEnvValue(env, "AWS_SHARED_CREDENTIALS_FILE", os.DevNull)
+		env = setEnvValue(env, "AWS_CONFIG_FILE", os.DevNull)
+	}
 	if !envHasKey(env, "AWS_EC2_METADATA_DISABLED") {
 		env = append(env, "AWS_EC2_METADATA_DISABLED=true")
 	}
@@ -264,6 +268,29 @@ func envHasKey(env []string, want string) bool {
 		}
 	}
 	return false
+}
+
+func hasAWSCredentialSource(env []string) bool {
+	hasStaticKey := envHasKey(env, "AWS_ACCESS_KEY_ID") && envHasKey(env, "AWS_SECRET_ACCESS_KEY")
+	hasWebIdentity := envHasKey(env, "AWS_ROLE_ARN") && envHasKey(env, "AWS_WEB_IDENTITY_TOKEN_FILE")
+	return hasStaticKey ||
+		hasWebIdentity ||
+		envHasKey(env, "AWS_PROFILE") ||
+		envHasKey(env, "AWS_DEFAULT_PROFILE") ||
+		envHasKey(env, "AWS_SHARED_CREDENTIALS_FILE") ||
+		envHasKey(env, "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI") ||
+		envHasKey(env, "AWS_CONTAINER_CREDENTIALS_FULL_URI")
+}
+
+func setEnvValue(env []string, key, value string) []string {
+	for i, entry := range env {
+		entryKey, _, ok := strings.Cut(entry, "=")
+		if ok && entryKey == key {
+			env[i] = key + "=" + value
+			return env
+		}
+	}
+	return append(env, key+"="+value)
 }
 
 func isCloudCredentialEnvKey(key string) bool {

@@ -1,6 +1,7 @@
 package runner
 
 import (
+	"os"
 	"strings"
 	"testing"
 )
@@ -284,6 +285,60 @@ func TestScopedCommandEnvDropsAmbientCloudCredentials(t *testing.T) {
 		if _, ok := got[key]; ok {
 			t.Fatalf("scoped env leaked ambient %s: %#v", key, got)
 		}
+	}
+}
+
+func TestScopedCommandEnvBlocksAWSSharedFileFallbackForNonAWSConnection(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"HOME=/home/alice",
+			"USERPROFILE=C:\\Users\\Alice",
+			"AWS_PROFILE=ambient-admin",
+			"AWS_SHARED_CREDENTIALS_FILE=/home/alice/.aws/credentials",
+			"AWS_CONFIG_FILE=/home/alice/.aws/config",
+		},
+		map[string]string{
+			"ARM_CLIENT_ID":       "selected-client",
+			"ARM_CLIENT_SECRET":   "selected-secret",
+			"ARM_TENANT_ID":       "selected-tenant",
+			"ARM_SUBSCRIPTION_ID": "selected-subscription",
+		},
+	))
+
+	if got["HOME"] != "/home/alice" || got["USERPROFILE"] != "C:\\Users\\Alice" {
+		t.Fatalf("home env should remain available for tool runtime context: %#v", got)
+	}
+	if got["ARM_CLIENT_SECRET"] != "selected-secret" || got["ARM_CLIENT_ID"] != "selected-client" {
+		t.Fatalf("selected Azure credentials should be present: %#v", got)
+	}
+	if got["AWS_SHARED_CREDENTIALS_FILE"] != os.DevNull || got["AWS_CONFIG_FILE"] != os.DevNull {
+		t.Fatalf("non-AWS scoped runs should block AWS shared file fallback: %#v", got)
+	}
+	if got["AWS_PROFILE"] == "ambient-admin" {
+		t.Fatalf("non-AWS scoped run leaked ambient AWS_PROFILE: %#v", got)
+	}
+}
+
+func TestScopedCommandEnvBlocksAWSSharedFileFallbackWithoutCompleteAWSCredentials(t *testing.T) {
+	got := envValues(scopedCommandEnv(
+		[]string{
+			"PATH=/usr/bin",
+			"HOME=/home/alice",
+			"AWS_SHARED_CREDENTIALS_FILE=/home/alice/.aws/credentials",
+			"AWS_CONFIG_FILE=/home/alice/.aws/config",
+		},
+		map[string]string{
+			"AWS_ACCESS_KEY_ID": "selected-key",
+			"AWS_REGION":        "us-east-1",
+		},
+	))
+
+	if got["AWS_ACCESS_KEY_ID"] != "selected-key" || got["AWS_REGION"] != "us-east-1" {
+		t.Fatalf("selected AWS values should be present: %#v", got)
+	}
+	if got["AWS_SHARED_CREDENTIALS_FILE"] != os.DevNull || got["AWS_CONFIG_FILE"] != os.DevNull {
+		t.Fatalf("incomplete AWS scoped runs should block shared file fallback: %#v", got)
 	}
 }
 
