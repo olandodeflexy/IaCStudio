@@ -3,6 +3,8 @@ package mcp
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -286,10 +288,15 @@ func approvalRequiredResult(tool, reason string) ToolCallResult {
 }
 
 func (s *Server) approved(token string) bool {
-	if s.approvalToken == "" {
+	if s.approvalToken == "" || token == "" {
 		return false
 	}
-	return token == s.approvalToken
+	if len(token) != len(s.approvalToken) {
+		return false
+	}
+	expected := sha256.Sum256([]byte(s.approvalToken))
+	provided := sha256.Sum256([]byte(token))
+	return subtle.ConstantTimeCompare(provided[:], expected[:]) == 1
 }
 
 func errResponse(tool string, err error, audit AuditDecision) toolResponse {

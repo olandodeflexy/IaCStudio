@@ -181,10 +181,10 @@ func (m *Manager) Get(id string) (*Connection, error) {
 	}
 	for _, connection := range connections {
 		if connection.ID == id {
-			copy := connection
-			copy.Metadata = cloneMap(connection.Metadata)
-			copy.Secrets = cloneMap(connection.Secrets)
-			return &copy, nil
+			connectionCopy := connection
+			connectionCopy.Metadata = cloneMap(connection.Metadata)
+			connectionCopy.Secrets = cloneMap(connection.Secrets)
+			return &connectionCopy, nil
 		}
 	}
 	return nil, os.ErrNotExist
