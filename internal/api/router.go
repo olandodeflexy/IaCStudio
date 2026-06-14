@@ -2827,32 +2827,41 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 }
 
 // allowedOrigins is populated at startup from the server's actual bind address.
-var allowedOrigins = map[string]bool{}
+var allowedOrigins = struct {
+	mu   sync.RWMutex
+	list map[string]bool
+}{list: map[string]bool{}}
 
 // InitAllowedOrigins builds the origin allowlist from the server's host and port.
 // Called once at startup so the list matches the actual deployment.
 func InitAllowedOrigins(host string, port int) {
 	serverPort := fmt.Sprintf("%d", port)
 	isWildcardBind := host == "0.0.0.0" || host == "::" || host == ""
-	allowedOrigins = map[string]bool{}
+	origins := map[string]bool{}
 
 	// Always allow localhost variants
 	for _, h := range []string{"localhost", "127.0.0.1"} {
-		allowedOrigins["http://"+h+":"+serverPort] = true
+		origins["http://"+h+":"+serverPort] = true
 	}
 	// If binding a specific host, allow that too
 	if !isWildcardBind {
-		allowedOrigins["http://"+host+":"+serverPort] = true
+		origins["http://"+host+":"+serverPort] = true
 	}
 	// Also allow the Vite dev server (port 5173) for development
 	for _, h := range []string{"localhost", "127.0.0.1"} {
-		allowedOrigins["http://"+h+":5173"] = true
+		origins["http://"+h+":5173"] = true
 	}
+
+	allowedOrigins.mu.Lock()
+	allowedOrigins.list = origins
+	allowedOrigins.mu.Unlock()
 }
 
 // IsAllowedOrigin checks whether an origin is in the allowlist.
 func IsAllowedOrigin(origin string) bool {
-	return allowedOrigins[origin]
+	allowedOrigins.mu.RLock()
+	defer allowedOrigins.mu.RUnlock()
+	return allowedOrigins.list[origin]
 }
 
 // CORS restricts cross-origin requests to the localhost allowlist.
