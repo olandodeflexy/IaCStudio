@@ -212,11 +212,13 @@ func TestStartStopLifecycleUsesLauncherAndReportsRunning(t *testing.T) {
 	if !status.Running || status.State != "running" || status.StartedAt == "" {
 		t.Fatalf("expected running status, got %+v", status)
 	}
+	assertUniqueCheckNames(t, status)
 
 	listed := manager.List(context.Background())
 	if len(listed) != 1 || !listed[0].Running {
 		t.Fatalf("expected running status in list, got %+v", listed)
 	}
+	assertUniqueCheckNames(t, listed[0])
 
 	status, err = manager.Stop(context.Background(), "terraform")
 	if err != nil {
@@ -228,6 +230,7 @@ func TestStartStopLifecycleUsesLauncherAndReportsRunning(t *testing.T) {
 	if status.LastExitReason != "stopped by user" {
 		t.Fatalf("expected user stop exit reason, got %+v", status)
 	}
+	assertUniqueCheckNames(t, status)
 	for _, check := range status.Checks {
 		if check.Name == "lifecycle" && check.Status == "warn" {
 			t.Fatalf("successful stop returned lifecycle warning: %+v", status.Checks)
@@ -260,7 +263,12 @@ func TestStartDoesNotBlockLifecycleStatusDuringLaunch(t *testing.T) {
 		_, err := manager.Start(context.Background(), "terraform")
 		startDone <- err
 	}()
-	<-launcherEntered
+	select {
+	case <-launcherEntered:
+	case <-time.After(250 * time.Millisecond):
+		close(releaseLauncher)
+		t.Fatalf("timed out waiting for launcher to start")
+	}
 
 	statusesDone := make(chan []ServerStatus, 1)
 	go func() {
@@ -272,6 +280,7 @@ func TestStartDoesNotBlockLifecycleStatusDuringLaunch(t *testing.T) {
 		if len(statuses) != 1 || statuses[0].State != "starting" {
 			t.Fatalf("expected starting status during launch, got %+v", statuses)
 		}
+		assertUniqueCheckNames(t, statuses[0])
 	case <-time.After(250 * time.Millisecond):
 		close(releaseLauncher)
 		t.Fatalf("List blocked behind Start launcher")
@@ -312,7 +321,12 @@ func TestConcurrentStopClaimsProcessOnce(t *testing.T) {
 		}
 		firstStopDone <- status
 	}()
-	<-handle.stopEntered
+	select {
+	case <-handle.stopEntered:
+	case <-time.After(250 * time.Millisecond):
+		close(handle.releaseStop)
+		t.Fatalf("timed out waiting for stop to enter ProcessHandle.Stop")
+	}
 
 	secondStatus, err := manager.Stop(context.Background(), "terraform")
 	if err != nil {
@@ -321,6 +335,7 @@ func TestConcurrentStopClaimsProcessOnce(t *testing.T) {
 	if secondStatus.State != "stopping" {
 		t.Fatalf("expected concurrent stop to report stopping, got %+v", secondStatus)
 	}
+	assertUniqueCheckNames(t, secondStatus)
 	if calls := handle.stopCalls.Load(); calls != 1 {
 		t.Fatalf("expected one ProcessHandle.Stop call, got %d", calls)
 	}
@@ -330,6 +345,39 @@ func TestConcurrentStopClaimsProcessOnce(t *testing.T) {
 	if firstStatus.State != "stopped" || firstStatus.Running {
 		t.Fatalf("expected first stop to complete, got %+v", firstStatus)
 	}
+	assertUniqueCheckNames(t, firstStatus)
+}
+
+func TestStopAfterProcessExitUsesDistinctStopCheck(t *testing.T) {
+	handle := newFakeProcess()
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
+			return handle, nil
+		}),
+	)
+
+	if _, err := manager.Start(context.Background(), "terraform"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	handle.exit(errors.New("boom"))
+
+	status, err := manager.Stop(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("Stop: %v", err)
+	}
+	if status.State != "exited" || status.LastExitReason != "boom" {
+		t.Fatalf("expected exited status from prior process exit, got %+v", status)
+	}
+	assertUniqueCheckNames(t, status)
 }
 
 func TestStartRejectsUnsupportedTransportWithoutLaunching(t *testing.T) {
@@ -405,6 +453,17 @@ func containsStatus(statuses []ServerStatus, id string) bool {
 		}
 	}
 	return false
+}
+
+func assertUniqueCheckNames(t *testing.T, status ServerStatus) {
+	t.Helper()
+	seen := map[string]struct{}{}
+	for _, check := range status.Checks {
+		if _, ok := seen[check.Name]; ok {
+			t.Fatalf("duplicate check name %q in %+v", check.Name, status.Checks)
+		}
+		seen[check.Name] = struct{}{}
+	}
 }
 
 func testExecutable(t *testing.T) string {

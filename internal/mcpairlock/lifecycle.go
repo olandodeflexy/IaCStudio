@@ -75,19 +75,19 @@ func (m *Manager) Start(ctx context.Context, id string) (ServerStatus, error) {
 	m.reapLocked(id, now)
 	if startedAt, ok := m.lifecycle.starting[id]; ok {
 		status = m.withStartingStatusLocked(status, startedAt)
-		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server launch is already in progress"})
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "warn", Message: "server launch is already in progress"})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
 	if record, ok := m.lifecycle.running[id]; ok {
 		status = m.withLifecycleStatusLocked(status, record)
-		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "pass", Message: "server is already running"})
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "pass", Message: "server is already running"})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
 	if record, ok := m.lifecycle.stopping[id]; ok {
 		status = m.withStoppingStatusLocked(status, record)
-		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server stop is in progress"})
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "warn", Message: "server stop is in progress"})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
@@ -101,14 +101,14 @@ func (m *Manager) Start(ctx context.Context, id string) (ServerStatus, error) {
 	if err != nil {
 		status.State = "launch_failed"
 		status.Summary = "Airlock could not start the MCP server process."
-		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "error", Message: redactOutput(err.Error())})
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "error", Message: redactOutput(err.Error())})
 		return status, nil
 	}
 	record := &processRecord{handle: handle, startedAt: now}
 	m.lifecycle.running[id] = record
 	delete(m.lifecycle.exits, id)
 	status = m.withLifecycleStatusLocked(status, record)
-	status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "pass", Message: "server process started with a sanitized environment"})
+	status.Checks = append(status.Checks, Check{Name: "start", Status: "pass", Message: "server process started with a sanitized environment"})
 	return status, nil
 }
 
@@ -126,20 +126,20 @@ func (m *Manager) Stop(ctx context.Context, id string) (ServerStatus, error) {
 	m.reapLocked(id, now)
 	if record, ok := m.lifecycle.stopping[id]; ok {
 		status = m.withStoppingStatusLocked(status, record)
-		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server stop is already in progress"})
+		status.Checks = append(status.Checks, Check{Name: "stop", Status: "warn", Message: "server stop is already in progress"})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
 	if startedAt, ok := m.lifecycle.starting[id]; ok {
 		status = m.withStartingStatusLocked(status, startedAt)
-		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server is still starting"})
+		status.Checks = append(status.Checks, Check{Name: "stop", Status: "warn", Message: "server is still starting"})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
 	record, ok := m.lifecycle.running[id]
 	if !ok {
 		status = m.withLifecycleStatusLocked(status, nil)
-		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server is not running"})
+		status.Checks = append(status.Checks, Check{Name: "stop", Status: "warn", Message: "server is not running"})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
@@ -155,7 +155,7 @@ func (m *Manager) Stop(ctx context.Context, id string) (ServerStatus, error) {
 		status = m.restoreAfterStopFailureLocked(status, id, record)
 		status.State = "stop_failed"
 		status.Summary = "Airlock could not stop the MCP server process before the timeout."
-		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "error", Message: redactOutput(err.Error())})
+		status.Checks = append(status.Checks, Check{Name: "stop", Status: "error", Message: redactOutput(err.Error())})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
@@ -168,7 +168,7 @@ func (m *Manager) Stop(ctx context.Context, id string) (ServerStatus, error) {
 	status.Summary = "MCP server process stopped."
 	status.LastExitAt = exit.at.Format(time.RFC3339)
 	status.LastExitReason = exit.reason
-	status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "pass", Message: "server process stopped"})
+	status.Checks = append(status.Checks, Check{Name: "stop", Status: "pass", Message: "server process stopped"})
 	m.lifecycle.mu.Unlock()
 	return status, nil
 }
