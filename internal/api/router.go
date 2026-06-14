@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -2841,20 +2842,25 @@ func InitAllowedOrigins(host string, port int) {
 
 	// Always allow localhost variants
 	for _, h := range []string{"localhost", "127.0.0.1"} {
-		origins["http://"+h+":"+serverPort] = true
+		origins[localHTTPOrigin(h, serverPort)] = true
 	}
 	// If binding a specific host, allow that too
 	if !isWildcardBind {
-		origins["http://"+host+":"+serverPort] = true
+		origins[localHTTPOrigin(host, serverPort)] = true
 	}
 	// Also allow the Vite dev server (port 5173) for development
 	for _, h := range []string{"localhost", "127.0.0.1"} {
-		origins["http://"+h+":5173"] = true
+		origins[localHTTPOrigin(h, "5173")] = true
 	}
 
 	allowedOrigins.mu.Lock()
 	allowedOrigins.list = origins
 	allowedOrigins.mu.Unlock()
+}
+
+func localHTTPOrigin(host, port string) string {
+	host = strings.TrimPrefix(strings.TrimSuffix(host, "]"), "[")
+	return "http://" + net.JoinHostPort(host, port)
 }
 
 // IsAllowedOrigin checks whether an origin is in the allowlist.

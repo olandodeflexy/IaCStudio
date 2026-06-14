@@ -120,6 +120,18 @@ func TestWildcardBindDoesNotAllowArbitrarySamePortOrigin(t *testing.T) {
 	}
 }
 
+func TestInitAllowedOriginsFormatsIPv6LoopbackOrigin(t *testing.T) {
+	InitAllowedOrigins("::1", 3000)
+	t.Cleanup(func() { InitAllowedOrigins("127.0.0.1", 3000) })
+
+	if !IsAllowedOrigin("http://[::1]:3000") {
+		t.Fatal("IPv6 loopback bind should allow bracketed browser origin")
+	}
+	if IsAllowedOrigin("http://::1:3000") {
+		t.Fatal("IPv6 origins should not use unbracketed host syntax")
+	}
+}
+
 func TestStateRoutesRejectTraversalProjectName(t *testing.T) {
 	root := t.TempDir()
 	srv := httptest.NewServer(fullRouterForTest(t, root))
