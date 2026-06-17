@@ -624,7 +624,7 @@ func writeFileAtomic(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temporary file: %w", err)
 	}
-	if err := os.Rename(tmpName, path); err != nil {
+	if err := replaceFileAtomic(tmpName, path); err != nil {
 		return fmt.Errorf("replace inventory file: %w", err)
 	}
 	keepTemp = false

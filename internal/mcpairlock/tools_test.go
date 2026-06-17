@@ -189,6 +189,25 @@ func TestSaveInventoryAtomicWriteFailurePreservesExistingInventory(t *testing.T)
 	}
 }
 
+func TestWriteFileAtomicReplacesExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "inventory.json")
+	if err := os.WriteFile(path, []byte("old\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile old: %v", err)
+	}
+
+	if err := writeFileAtomic(path, []byte("new\n")); err != nil {
+		t.Fatalf("writeFileAtomic: %v", err)
+	}
+
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+	if !bytes.Equal(got, []byte("new\n")) {
+		t.Fatalf("unexpected replacement contents: got %q", got)
+	}
+}
+
 func TestToolFirewallBlocksUnknownAndApprovalGatesAllowlistedMutation(t *testing.T) {
 	manager := NewManager(t.TempDir(), WithToolAllowlist(ToolAllowlist{
 		ServerTools: map[string][]string{"aws": []string{"create_bucket"}},
