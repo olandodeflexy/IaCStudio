@@ -79,6 +79,51 @@ func TestDiscoveredToolDecodesMCPCamelCaseSchema(t *testing.T) {
 	}
 }
 
+func TestDiscoverToolsPreservesPersistedAllowlist(t *testing.T) {
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "aws",
+			Name:            "AWS",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithToolDiscoverer(func(context.Context, ServerDefinition, time.Duration) DiscoveryProbeResult {
+			return DiscoveryProbeResult{Tools: []DiscoveredTool{{
+				Name:        "create_bucket",
+				Description: "Create an S3 bucket",
+				InputSchema: map[string]any{"type": "object"},
+			}}}
+		}),
+	)
+
+	if _, err := manager.SetToolAllowlist("aws", "", "create_bucket", true); err != nil {
+		t.Fatalf("SetToolAllowlist: %v", err)
+	}
+
+	inventory, err := manager.DiscoverTools(context.Background(), "aws")
+	if err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+	if len(inventory.Tools) != 1 {
+		t.Fatalf("expected one discovered tool, got %+v", inventory.Tools)
+	}
+	decision := inventory.Tools[0].Decision
+	if !decision.Allowlisted || decision.Status != "approval_required" {
+		t.Fatalf("expected persisted allowlist to survive discovery, got %+v", decision)
+	}
+
+	entry, err := manager.EvaluateTool("aws", "", "create_bucket")
+	if err != nil {
+		t.Fatalf("EvaluateTool: %v", err)
+	}
+	if !entry.Decision.Allowlisted || entry.Decision.Status != "approval_required" {
+		t.Fatalf("expected allowlist to remain persisted after discovery, got %+v", entry.Decision)
+	}
+}
+
 func TestToolFirewallBlocksUnknownAndApprovalGatesAllowlistedMutation(t *testing.T) {
 	manager := NewManager(t.TempDir(), WithToolAllowlist(ToolAllowlist{
 		ServerTools: map[string][]string{"aws": []string{"create_bucket"}},

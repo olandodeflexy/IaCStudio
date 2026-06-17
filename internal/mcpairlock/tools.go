@@ -152,14 +152,17 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 	}
 
 	now := time.Now().UTC()
-	previous, err := m.loadInventory()
+	m.inventoryMu.Lock()
+	defer m.inventoryMu.Unlock()
+	previous, err := m.loadInventoryUnlocked()
 	if err != nil {
 		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: err.Error()})
-		previous = persistedToolInventory{Servers: map[string]persistedServerTools{}}
+		return inventory, nil
 	}
 	inventory.DiscoveredAt = now.Format(time.RFC3339)
 	inventory.Tools = make([]ToolInventoryEntry, 0, len(result.Tools))
 	seen := map[string]persistedToolRecord{}
+	allowlist := m.mergedAllowlist(previous.Allowlist)
 	for _, tool := range result.Tools {
 		name := strings.TrimSpace(tool.Name)
 		if name == "" {
@@ -175,7 +178,7 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 				state = "changed"
 			}
 		}
-		decision := m.DecideTool(id, "", name, risk, state)
+		decision := decideToolWithAllowlist(id, "", name, risk, state, allowlist)
 		entry := ToolInventoryEntry{
 			ServerID:        id,
 			Name:            name,
@@ -206,8 +209,9 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 		DiscoveredAt: inventory.DiscoveredAt,
 		Tools:        seen,
 	}
-	if err := m.saveInventory(previous); err != nil {
+	if err := m.saveInventoryUnlocked(previous); err != nil {
 		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: err.Error()})
+		return inventory, nil
 	}
 	return inventory, nil
 }
@@ -222,6 +226,7 @@ func (m *Manager) Inventory(id string) (ToolInventory, error) {
 		return ToolInventory{ServerID: id, Checks: []Check{{Name: "inventory", Status: "warn", Message: err.Error()}}}, nil
 	}
 	server := snapshot.Servers[id]
+	allowlist := m.mergedAllowlist(snapshot.Allowlist)
 	inventory := ToolInventory{
 		ServerID:     id,
 		DiscoveredAt: server.DiscoveredAt,
@@ -240,7 +245,7 @@ func (m *Manager) Inventory(id string) (ToolInventory, error) {
 			LastSeenAt:      record.LastSeenAt,
 			SchemaState:     normalizedSchemaState(record.SchemaState),
 			Risk:            risk,
-			Decision:        m.DecideTool(id, "", name, risk, normalizedSchemaState(record.SchemaState)),
+			Decision:        decideToolWithAllowlist(id, "", name, risk, normalizedSchemaState(record.SchemaState), allowlist),
 		}
 		inventory.Tools = append(inventory.Tools, entry)
 	}
@@ -260,24 +265,11 @@ func (m *Manager) EvaluateTool(serverID, project, toolName string) (ToolInventor
 	if toolName == "" {
 		return ToolInventoryEntry{}, errors.New("tool_name is required")
 	}
-	inventory, err := m.Inventory(serverID)
+	snapshot, err := m.loadInventory()
 	if err != nil {
 		return ToolInventoryEntry{}, err
 	}
-	for _, entry := range inventory.Tools {
-		if entry.Name == toolName {
-			entry.Decision = m.DecideTool(serverID, project, toolName, entry.Risk, entry.SchemaState)
-			return entry, nil
-		}
-	}
-	risk := RiskUnknown
-	return ToolInventoryEntry{
-		ServerID:    serverID,
-		Name:        toolName,
-		SchemaState: "unknown",
-		Risk:        risk,
-		Decision:    m.DecideTool(serverID, project, toolName, risk, "unknown"),
-	}, nil
+	return m.evaluateToolFromSnapshot(snapshot, serverID, project, toolName), nil
 }
 
 // SetToolAllowlist updates the persisted server or project allowlist for one
@@ -290,7 +282,9 @@ func (m *Manager) SetToolAllowlist(serverID, project, toolName string, allowed b
 	if toolName == "" {
 		return ToolInventoryEntry{}, errors.New("tool_name is required")
 	}
-	snapshot, err := m.loadInventory()
+	m.inventoryMu.Lock()
+	defer m.inventoryMu.Unlock()
+	snapshot, err := m.loadInventoryUnlocked()
 	if err != nil {
 		return ToolInventoryEntry{}, err
 	}
@@ -300,19 +294,27 @@ func (m *Manager) SetToolAllowlist(serverID, project, toolName string, allowed b
 	} else {
 		removeAllowlistTool(&snapshot.Allowlist, serverID, project, toolName)
 	}
-	if err := m.saveInventory(snapshot); err != nil {
+	if err := m.saveInventoryUnlocked(snapshot); err != nil {
 		return ToolInventoryEntry{}, err
 	}
-	return m.EvaluateTool(serverID, project, toolName)
+	return m.evaluateToolFromSnapshot(snapshot, serverID, project, toolName), nil
 }
 
 // DecideTool applies Airlock's fail-closed firewall policy.
 func (m *Manager) DecideTool(serverID, project, toolName string, risk ToolRisk, schemaState string) ToolDecision {
+	allowlist := copyAllowlist(m.allowlist)
+	if snapshot, err := m.loadInventory(); err == nil {
+		mergeAllowlist(&allowlist, snapshot.Allowlist)
+	}
+	return decideToolWithAllowlist(serverID, project, toolName, risk, schemaState, allowlist)
+}
+
+func decideToolWithAllowlist(serverID, project, toolName string, risk ToolRisk, schemaState string, allowlist ToolAllowlist) ToolDecision {
 	if risk == "" {
 		risk = RiskUnknown
 	}
 	schemaState = normalizedSchemaState(schemaState)
-	allowlisted := m.isAllowlisted(serverID, project, toolName)
+	allowlisted := isToolAllowlisted(allowlist, serverID, project, toolName)
 	decision := ToolDecision{
 		Risk:            risk,
 		Allowlisted:     allowlisted,
@@ -363,6 +365,44 @@ func (m *Manager) DecideTool(serverID, project, toolName string, risk ToolRisk, 
 		}
 	}
 	return decision
+}
+
+func (m *Manager) mergedAllowlist(persisted ToolAllowlist) ToolAllowlist {
+	allowlist := copyAllowlist(m.allowlist)
+	mergeAllowlist(&allowlist, persisted)
+	return allowlist
+}
+
+func (m *Manager) evaluateToolFromSnapshot(snapshot persistedToolInventory, serverID, project, toolName string) ToolInventoryEntry {
+	allowlist := m.mergedAllowlist(snapshot.Allowlist)
+	for name, record := range snapshot.Servers[serverID].Tools {
+		if name != toolName {
+			continue
+		}
+		risk := record.Risk
+		if risk == "" {
+			risk = RiskUnknown
+		}
+		schemaState := normalizedSchemaState(record.SchemaState)
+		return ToolInventoryEntry{
+			ServerID:        serverID,
+			Name:            name,
+			Description:     record.Description,
+			InputSchemaHash: record.InputSchemaHash,
+			LastSeenAt:      record.LastSeenAt,
+			SchemaState:     schemaState,
+			Risk:            risk,
+			Decision:        decideToolWithAllowlist(serverID, project, toolName, risk, schemaState, allowlist),
+		}
+	}
+	risk := RiskUnknown
+	return ToolInventoryEntry{
+		ServerID:    serverID,
+		Name:        toolName,
+		SchemaState: "unknown",
+		Risk:        risk,
+		Decision:    decideToolWithAllowlist(serverID, project, toolName, risk, "unknown", allowlist),
+	}
 }
 
 // ClassifyTool assigns a conservative risk class from MCP metadata.
@@ -425,7 +465,7 @@ func defaultToolDiscoverer(ctx context.Context, definition ServerDefinition, tim
 
 	encoder := json.NewEncoder(stdin)
 	encoder.SetEscapeHTML(false)
-	_ = encoder.Encode(map[string]any{
+	if err := encoder.Encode(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      1,
 		"method":  "initialize",
@@ -434,10 +474,26 @@ func defaultToolDiscoverer(ctx context.Context, definition ServerDefinition, tim
 			"capabilities":    map[string]any{},
 			"clientInfo":      map[string]any{"name": "iac-studio-airlock", "version": "0"},
 		},
-	})
-	_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"})
-	_ = encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": map[string]any{}})
-	_ = stdin.Close()
+	}); err != nil {
+		cancel()
+		waitErr := <-doneErr
+		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.Join(fmt.Errorf("write initialize request: %w", err), waitErr)}
+	}
+	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
+		cancel()
+		waitErr := <-doneErr
+		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.Join(fmt.Errorf("write initialized notification: %w", err), waitErr)}
+	}
+	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": map[string]any{}}); err != nil {
+		cancel()
+		waitErr := <-doneErr
+		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.Join(fmt.Errorf("write tools/list request: %w", err), waitErr)}
+	}
+	if err := stdin.Close(); err != nil {
+		cancel()
+		waitErr := <-doneErr
+		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.Join(fmt.Errorf("close discovery stdin: %w", err), waitErr)}
+	}
 
 	scanner := bufio.NewScanner(stdout)
 	scanner.Buffer(make([]byte, 0, 64*1024), 5*1024*1024)
@@ -522,6 +578,10 @@ func (m *Manager) loadInventoryUnlocked() (persistedToolInventory, error) {
 func (m *Manager) saveInventory(snapshot persistedToolInventory) error {
 	m.inventoryMu.Lock()
 	defer m.inventoryMu.Unlock()
+	return m.saveInventoryUnlocked(snapshot)
+}
+
+func (m *Manager) saveInventoryUnlocked(snapshot persistedToolInventory) error {
 	if strings.TrimSpace(m.inventoryPath) == "" {
 		return nil
 	}
@@ -597,14 +657,10 @@ func containsAny(value string, needles ...string) bool {
 	return false
 }
 
-func (m *Manager) isAllowlisted(serverID, project, toolName string) bool {
+func isToolAllowlisted(allowlist ToolAllowlist, serverID, project, toolName string) bool {
 	serverID = strings.TrimSpace(serverID)
 	project = strings.TrimSpace(project)
 	toolName = strings.TrimSpace(toolName)
-	allowlist := copyAllowlist(m.allowlist)
-	if snapshot, err := m.loadInventory(); err == nil {
-		mergeAllowlist(&allowlist, snapshot.Allowlist)
-	}
 	if containsString(allowlist.ServerTools[serverID], toolName) {
 		return true
 	}
