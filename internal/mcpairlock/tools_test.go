@@ -128,6 +128,27 @@ func TestDiscoverToolsPreservesPersistedAllowlist(t *testing.T) {
 	}
 }
 
+func TestSetToolAllowlistCanRemoveMissingEntries(t *testing.T) {
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "aws",
+			Name:            "AWS",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+
+	if _, err := manager.SetToolAllowlist("aws", "", "missing_tool", false); err != nil {
+		t.Fatalf("remove missing server allowlist entry: %v", err)
+	}
+	if _, err := manager.SetToolAllowlist("aws", "demo", "missing_tool", false); err != nil {
+		t.Fatalf("remove missing project allowlist entry: %v", err)
+	}
+}
+
 func TestToolFirewallBlocksUnknownAndApprovalGatesAllowlistedMutation(t *testing.T) {
 	manager := NewManager(t.TempDir(), WithToolAllowlist(ToolAllowlist{
 		ServerTools: map[string][]string{"aws": []string{"create_bucket"}},

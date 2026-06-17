@@ -762,6 +762,9 @@ func containsString(values []string, target string) bool {
 }
 
 func removeString(values []string, target string) []string {
+	if len(values) == 0 {
+		return values
+	}
 	out := values[:0]
 	for _, value := range values {
 		if strings.TrimSpace(value) != target {
