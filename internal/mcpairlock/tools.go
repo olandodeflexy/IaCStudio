@@ -575,12 +575,6 @@ func (m *Manager) loadInventoryUnlocked() (persistedToolInventory, error) {
 	return snapshot, nil
 }
 
-func (m *Manager) saveInventory(snapshot persistedToolInventory) error {
-	m.inventoryMu.Lock()
-	defer m.inventoryMu.Unlock()
-	return m.saveInventoryUnlocked(snapshot)
-}
-
 func (m *Manager) saveInventoryUnlocked(snapshot persistedToolInventory) error {
 	if strings.TrimSpace(m.inventoryPath) == "" {
 		return nil
