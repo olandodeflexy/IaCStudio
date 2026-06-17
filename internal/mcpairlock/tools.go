@@ -101,6 +101,7 @@ type persistedToolRecord struct {
 	Description     string   `json:"description,omitempty"`
 	InputSchemaHash string   `json:"input_schema_hash"`
 	LastSeenAt      string   `json:"last_seen_at"`
+	SchemaState     string   `json:"schema_state,omitempty"`
 	Risk            ToolRisk `json:"risk"`
 }
 
@@ -174,7 +175,7 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 				state = "changed"
 			}
 		}
-		decision := m.DecideTool(id, "", name, risk)
+		decision := m.DecideTool(id, "", name, risk, state)
 		entry := ToolInventoryEntry{
 			ServerID:        id,
 			Name:            name,
@@ -190,6 +191,7 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 			Description:     entry.Description,
 			InputSchemaHash: entry.InputSchemaHash,
 			LastSeenAt:      entry.LastSeenAt,
+			SchemaState:     entry.SchemaState,
 			Risk:            entry.Risk,
 		}
 	}
@@ -236,9 +238,9 @@ func (m *Manager) Inventory(id string) (ToolInventory, error) {
 			Description:     record.Description,
 			InputSchemaHash: record.InputSchemaHash,
 			LastSeenAt:      record.LastSeenAt,
-			SchemaState:     "known",
+			SchemaState:     normalizedSchemaState(record.SchemaState),
 			Risk:            risk,
-			Decision:        m.DecideTool(id, "", name, risk),
+			Decision:        m.DecideTool(id, "", name, risk, normalizedSchemaState(record.SchemaState)),
 		}
 		inventory.Tools = append(inventory.Tools, entry)
 	}
@@ -264,7 +266,7 @@ func (m *Manager) EvaluateTool(serverID, project, toolName string) (ToolInventor
 	}
 	for _, entry := range inventory.Tools {
 		if entry.Name == toolName {
-			entry.Decision = m.DecideTool(serverID, project, toolName, entry.Risk)
+			entry.Decision = m.DecideTool(serverID, project, toolName, entry.Risk, entry.SchemaState)
 			return entry, nil
 		}
 	}
@@ -274,7 +276,7 @@ func (m *Manager) EvaluateTool(serverID, project, toolName string) (ToolInventor
 		Name:        toolName,
 		SchemaState: "unknown",
 		Risk:        risk,
-		Decision:    m.DecideTool(serverID, project, toolName, risk),
+		Decision:    m.DecideTool(serverID, project, toolName, risk, "unknown"),
 	}, nil
 }
 
@@ -305,15 +307,27 @@ func (m *Manager) SetToolAllowlist(serverID, project, toolName string, allowed b
 }
 
 // DecideTool applies Airlock's fail-closed firewall policy.
-func (m *Manager) DecideTool(serverID, project, toolName string, risk ToolRisk) ToolDecision {
+func (m *Manager) DecideTool(serverID, project, toolName string, risk ToolRisk, schemaState string) ToolDecision {
 	if risk == "" {
 		risk = RiskUnknown
 	}
+	schemaState = normalizedSchemaState(schemaState)
 	allowlisted := m.isAllowlisted(serverID, project, toolName)
 	decision := ToolDecision{
 		Risk:            risk,
 		Allowlisted:     allowlisted,
 		UntrustedOutput: true,
+	}
+	if schemaReviewRequired(schemaState) {
+		if !allowlisted {
+			decision.Status = "blocked"
+			decision.Reason = schemaState + " external MCP tool schemas are blocked until re-reviewed or explicitly allowlisted"
+			return decision
+		}
+		decision.Status = "approval_required"
+		decision.ApprovalRequired = true
+		decision.Reason = "allowlisted " + schemaState + " external MCP tool schemas still require explicit approval"
+		return decision
 	}
 	switch risk {
 	case RiskReadOnly:
@@ -321,13 +335,13 @@ func (m *Manager) DecideTool(serverID, project, toolName string, risk ToolRisk) 
 		decision.Allowed = true
 		decision.Reason = "read-only tools are allowed by default; output remains untrusted"
 	case RiskGenerateCode:
-		if allowlisted {
-			decision.Status = "allowed"
-			decision.Allowed = true
-			decision.Reason = "generate-code tool is explicitly allowlisted; output remains untrusted"
-		} else {
+		if !allowlisted {
 			decision.Status = "blocked"
 			decision.Reason = "generate-code tools require an explicit server or project allowlist"
+		} else {
+			decision.Status = "approval_required"
+			decision.ApprovalRequired = true
+			decision.Reason = "generate-code tools require explicit user approval before execution"
 		}
 	case RiskModifyWorkspace, RiskCloudMutation, RiskSecretSensitive, RiskDestructive:
 		if !allowlisted {
@@ -547,6 +561,19 @@ func schemaText(schema map[string]any) string {
 		return fmt.Sprintf("%v", schema)
 	}
 	return string(data)
+}
+
+func normalizedSchemaState(state string) string {
+	switch trimmed := strings.TrimSpace(state); trimmed {
+	case "new", "changed", "unknown":
+		return trimmed
+	default:
+		return "known"
+	}
+}
+
+func schemaReviewRequired(state string) bool {
+	return state == "new" || state == "changed"
 }
 
 func readOnlyAnnotation(annotations map[string]any) bool {

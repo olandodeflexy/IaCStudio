@@ -24,7 +24,7 @@ func TestDiscoverToolsPersistsInventoryAndDetectsSchemaChanges(t *testing.T) {
 		WithToolDiscoverer(func(context.Context, ServerDefinition, time.Duration) DiscoveryProbeResult {
 			calls++
 			schema := map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}}}
-			if calls == 2 {
+			if calls >= 2 {
 				schema = map[string]any{"type": "object", "properties": map[string]any{"query": map[string]any{"type": "string"}, "limit": map[string]any{"type": "integer"}}}
 			}
 			return DiscoveryProbeResult{Tools: []DiscoveredTool{{
@@ -40,7 +40,7 @@ func TestDiscoverToolsPersistsInventoryAndDetectsSchemaChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverTools first: %v", err)
 	}
-	if len(first.Tools) != 1 || first.Tools[0].SchemaState != "new" || first.Tools[0].Risk != RiskReadOnly || !first.Tools[0].Decision.Allowed {
+	if len(first.Tools) != 1 || first.Tools[0].SchemaState != "new" || first.Tools[0].Risk != RiskReadOnly || first.Tools[0].Decision.Status != "blocked" {
 		t.Fatalf("unexpected first discovery: %+v", first)
 	}
 
@@ -48,7 +48,7 @@ func TestDiscoverToolsPersistsInventoryAndDetectsSchemaChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DiscoverTools second: %v", err)
 	}
-	if len(second.Tools) != 1 || second.Tools[0].SchemaState != "changed" {
+	if len(second.Tools) != 1 || second.Tools[0].SchemaState != "changed" || second.Tools[0].Decision.Status != "blocked" {
 		t.Fatalf("expected changed schema state, got %+v", second)
 	}
 
@@ -56,8 +56,16 @@ func TestDiscoverToolsPersistsInventoryAndDetectsSchemaChanges(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inventory: %v", err)
 	}
-	if len(stored.Tools) != 1 || stored.Tools[0].SchemaState != "known" || stored.Tools[0].InputSchemaHash != second.Tools[0].InputSchemaHash {
+	if len(stored.Tools) != 1 || stored.Tools[0].SchemaState != "changed" || stored.Tools[0].Decision.Status != "blocked" || stored.Tools[0].InputSchemaHash != second.Tools[0].InputSchemaHash {
 		t.Fatalf("inventory was not persisted: %+v", stored)
+	}
+
+	third, err := manager.DiscoverTools(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("DiscoverTools third: %v", err)
+	}
+	if len(third.Tools) != 1 || third.Tools[0].SchemaState != "known" || !third.Tools[0].Decision.Allowed {
+		t.Fatalf("expected stable schema to become known and allowed, got %+v", third)
 	}
 }
 
@@ -79,24 +87,34 @@ func TestToolFirewallBlocksUnknownAndApprovalGatesAllowlistedMutation(t *testing
 		},
 	}))
 
-	unknown := manager.DecideTool("aws", "", "mystery_tool", RiskUnknown)
+	unknown := manager.DecideTool("aws", "", "mystery_tool", RiskUnknown, "unknown")
 	if unknown.Status != "blocked" || unknown.Allowed || unknown.ApprovalRequired {
 		t.Fatalf("unknown tools must fail closed, got %+v", unknown)
 	}
 
-	projectUnknown := manager.DecideTool("aws", "demo", "mystery_tool", RiskUnknown)
+	projectUnknown := manager.DecideTool("aws", "demo", "mystery_tool", RiskUnknown, "unknown")
 	if projectUnknown.Status != "approval_required" || !projectUnknown.ApprovalRequired || !projectUnknown.Allowlisted {
 		t.Fatalf("project allowlisted unknown tool should require approval, got %+v", projectUnknown)
 	}
 
-	mutation := manager.DecideTool("aws", "", "create_bucket", RiskCloudMutation)
+	mutation := manager.DecideTool("aws", "", "create_bucket", RiskCloudMutation, "known")
 	if mutation.Status != "approval_required" || !mutation.ApprovalRequired || mutation.Allowed {
 		t.Fatalf("allowlisted cloud mutation should require approval before execution, got %+v", mutation)
 	}
 
-	readOnly := manager.DecideTool("aws", "", "list_buckets", RiskReadOnly)
+	readOnly := manager.DecideTool("aws", "", "list_buckets", RiskReadOnly, "known")
 	if readOnly.Status != "allowed" || !readOnly.Allowed || readOnly.ApprovalRequired {
 		t.Fatalf("read-only tools should be allowed by default, got %+v", readOnly)
+	}
+
+	generateCode := manager.DecideTool("aws", "", "create_bucket", RiskGenerateCode, "known")
+	if generateCode.Status != "approval_required" || !generateCode.ApprovalRequired || generateCode.Allowed {
+		t.Fatalf("allowlisted generate-code tools should require approval, got %+v", generateCode)
+	}
+
+	changedReadOnly := manager.DecideTool("aws", "demo", "mystery_tool", RiskReadOnly, "changed")
+	if changedReadOnly.Status != "approval_required" || !changedReadOnly.ApprovalRequired || !changedReadOnly.Allowlisted {
+		t.Fatalf("allowlisted changed schemas should still require approval, got %+v", changedReadOnly)
 	}
 }
 

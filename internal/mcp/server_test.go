@@ -274,6 +274,56 @@ func TestMCPAirlockCallRefusesBlockedExternalTool(t *testing.T) {
 	}
 }
 
+func TestMCPAirlockCallRefusesNewReadOnlyToolUntilRediscovered(t *testing.T) {
+	server := newTestServer(t)
+	command, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mcpAirlock = mcpairlock.NewManager(server.projectsDir,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         command,
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		mcpairlock.WithToolDiscoverer(func(context.Context, mcpairlock.ServerDefinition, time.Duration) mcpairlock.DiscoveryProbeResult {
+			return mcpairlock.DiscoveryProbeResult{Tools: []mcpairlock.DiscoveredTool{{
+				Name:        "list_modules",
+				Description: "List Terraform registry modules.",
+				InputSchema: map[string]any{"type": "object"},
+				Annotations: map[string]any{"readOnlyHint": true},
+			}}}
+		}),
+	)
+	if _, err := server.mcpAirlock.DiscoverTools(context.Background(), "terraform"); err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+
+	result := callTool(t, server, "call_mcp_airlock_tool", map[string]any{
+		"server_id": "terraform",
+		"tool_name": "list_modules",
+	})
+
+	if !result.IsError {
+		t.Fatalf("expected new read-only external tool call to be blocked pending schema review: %+v", result)
+	}
+	var payload struct {
+		Status   string `json:"status"`
+		Decision struct {
+			Status string `json:"status"`
+			Reason string `json:"reason"`
+		} `json:"decision"`
+	}
+	mustRemarshal(t, result.StructuredContent, &payload)
+	if payload.Status != "blocked" || payload.Decision.Status != "blocked" || !strings.Contains(payload.Decision.Reason, "new external MCP tool schemas") {
+		t.Fatalf("unexpected schema-review block payload: %+v", payload)
+	}
+}
+
 func TestSanitizeExecutionResultRedactsCredentialValues(t *testing.T) {
 	result := sanitizeExecutionResult(&runner.ExecutionResult{
 		ID:       "plan-1",
