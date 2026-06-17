@@ -465,34 +465,10 @@ func defaultToolDiscoverer(ctx context.Context, definition ServerDefinition, tim
 
 	encoder := json.NewEncoder(stdin)
 	encoder.SetEscapeHTML(false)
-	if err := encoder.Encode(map[string]any{
-		"jsonrpc": "2.0",
-		"id":      1,
-		"method":  "initialize",
-		"params": map[string]any{
-			"protocolVersion": "2025-06-18",
-			"capabilities":    map[string]any{},
-			"clientInfo":      map[string]any{"name": "iac-studio-airlock", "version": "0"},
-		},
-	}); err != nil {
+	if err := writeToolDiscoveryRequests(encoder, stdin); err != nil {
 		cancel()
 		waitErr := <-doneErr
-		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.Join(fmt.Errorf("write initialize request: %w", err), waitErr)}
-	}
-	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
-		cancel()
-		waitErr := <-doneErr
-		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.Join(fmt.Errorf("write initialized notification: %w", err), waitErr)}
-	}
-	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": map[string]any{}}); err != nil {
-		cancel()
-		waitErr := <-doneErr
-		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.Join(fmt.Errorf("write tools/list request: %w", err), waitErr)}
-	}
-	if err := stdin.Close(); err != nil {
-		cancel()
-		waitErr := <-doneErr
-		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.Join(fmt.Errorf("close discovery stdin: %w", err), waitErr)}
+		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.Join(err, waitErr)}
 	}
 
 	scanner := bufio.NewScanner(stdout)
@@ -536,6 +512,31 @@ func defaultToolDiscoverer(ctx context.Context, definition ServerDefinition, tim
 		return DiscoveryProbeResult{Output: stderrBuf.String(), Err: err}
 	}
 	return DiscoveryProbeResult{Output: stderrBuf.String(), Err: errors.New("tools/list response not received")}
+}
+
+func writeToolDiscoveryRequests(encoder *json.Encoder, stdin io.Closer) error {
+	if err := encoder.Encode(map[string]any{
+		"jsonrpc": "2.0",
+		"id":      1,
+		"method":  "initialize",
+		"params": map[string]any{
+			"protocolVersion": "2025-06-18",
+			"capabilities":    map[string]any{},
+			"clientInfo":      map[string]any{"name": "iac-studio-airlock", "version": "0"},
+		},
+	}); err != nil {
+		return fmt.Errorf("write initialize request: %w", err)
+	}
+	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "method": "notifications/initialized"}); err != nil {
+		return fmt.Errorf("write initialized notification: %w", err)
+	}
+	if err := encoder.Encode(map[string]any{"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": map[string]any{}}); err != nil {
+		return fmt.Errorf("write tools/list request: %w", err)
+	}
+	if err := stdin.Close(); err != nil {
+		return fmt.Errorf("close discovery stdin: %w", err)
+	}
+	return nil
 }
 
 func (m *Manager) loadInventory() (persistedToolInventory, error) {

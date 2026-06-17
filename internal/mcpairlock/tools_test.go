@@ -1,9 +1,11 @@
 package mcpairlock
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -212,4 +214,56 @@ func TestDiscoverToolsUnknownServerFailsClosed(t *testing.T) {
 	if !errors.Is(err, ErrUnknownServer) {
 		t.Fatalf("expected ErrUnknownServer, got %v", err)
 	}
+}
+
+func TestWriteToolDiscoveryRequestsReturnsEncodeError(t *testing.T) {
+	errEncode := errors.New("encode failed")
+
+	err := writeToolDiscoveryRequests(json.NewEncoder(failingWriter{err: errEncode}), noopCloser{})
+
+	if !errors.Is(err, errEncode) {
+		t.Fatalf("expected wrapped encode error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "write initialize request") {
+		t.Fatalf("expected write context in error, got %v", err)
+	}
+}
+
+func TestWriteToolDiscoveryRequestsReturnsCloseError(t *testing.T) {
+	errClose := errors.New("close failed")
+	var buf bytes.Buffer
+
+	err := writeToolDiscoveryRequests(json.NewEncoder(&buf), errorCloser{err: errClose})
+
+	if !errors.Is(err, errClose) {
+		t.Fatalf("expected wrapped close error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "close discovery stdin") {
+		t.Fatalf("expected close context in error, got %v", err)
+	}
+	if !strings.Contains(buf.String(), `"method":"tools/list"`) {
+		t.Fatalf("expected tools/list request to be written before close, got %q", buf.String())
+	}
+}
+
+type failingWriter struct {
+	err error
+}
+
+func (w failingWriter) Write([]byte) (int, error) {
+	return 0, w.err
+}
+
+type noopCloser struct{}
+
+func (noopCloser) Close() error {
+	return nil
+}
+
+type errorCloser struct {
+	err error
+}
+
+func (c errorCloser) Close() error {
+	return c.err
 }
