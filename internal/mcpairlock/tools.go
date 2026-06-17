@@ -130,6 +130,7 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 	status := m.passiveStatus(definition)
 	inventory := ToolInventory{
 		ServerID: id,
+		Tools:    []ToolInventoryEntry{},
 		Checks:   append([]Check{}, status.Checks...),
 	}
 	if status.State != "available" {
@@ -223,7 +224,11 @@ func (m *Manager) Inventory(id string) (ToolInventory, error) {
 	}
 	snapshot, err := m.loadInventory()
 	if err != nil {
-		return ToolInventory{ServerID: id, Checks: []Check{{Name: "inventory", Status: "warn", Message: err.Error()}}}, nil
+		return ToolInventory{
+			ServerID: id,
+			Tools:    []ToolInventoryEntry{},
+			Checks:   []Check{{Name: "inventory", Status: "warn", Message: err.Error()}},
+		}, nil
 	}
 	server := snapshot.Servers[id]
 	allowlist := m.mergedAllowlist(snapshot.Allowlist)
@@ -231,6 +236,7 @@ func (m *Manager) Inventory(id string) (ToolInventory, error) {
 		ServerID:     id,
 		DiscoveredAt: server.DiscoveredAt,
 		Tools:        make([]ToolInventoryEntry, 0, len(server.Tools)),
+		Checks:       []Check{},
 	}
 	for name, record := range server.Tools {
 		risk := record.Risk

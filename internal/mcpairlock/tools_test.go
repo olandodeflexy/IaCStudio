@@ -5,6 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -213,6 +215,79 @@ func TestDiscoverToolsUnknownServerFailsClosed(t *testing.T) {
 
 	if !errors.Is(err, ErrUnknownServer) {
 		t.Fatalf("expected ErrUnknownServer, got %v", err)
+	}
+}
+
+func TestDiscoverToolsReturnsEmptySlicesOnEarlyExit(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root,
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithToolDiscoverer(func(context.Context, ServerDefinition, time.Duration) DiscoveryProbeResult {
+			return DiscoveryProbeResult{TimedOut: true}
+		}),
+	)
+
+	inventory, err := manager.DiscoverTools(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+	if inventory.Tools == nil {
+		t.Fatal("expected Tools to be an empty slice")
+	}
+	if inventory.Checks == nil {
+		t.Fatal("expected Checks to be an empty or populated slice")
+	}
+}
+
+func TestInventoryReturnsEmptySlicesWhenNothingDiscoveredOrLoadFails(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root,
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+
+	emptyInventory, err := manager.Inventory("terraform")
+	if err != nil {
+		t.Fatalf("Inventory empty: %v", err)
+	}
+	if emptyInventory.Tools == nil {
+		t.Fatal("expected empty inventory Tools to be []")
+	}
+	if emptyInventory.Checks == nil {
+		t.Fatal("expected empty inventory Checks to be []")
+	}
+
+	if err := os.MkdirAll(filepath.Join(root, ".iac-studio"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".iac-studio", toolInventoryName), []byte("{"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	invalidInventory, err := manager.Inventory("terraform")
+	if err != nil {
+		t.Fatalf("Inventory invalid: %v", err)
+	}
+	if invalidInventory.Tools == nil {
+		t.Fatal("expected invalid inventory Tools to be []")
+	}
+	if len(invalidInventory.Checks) != 1 {
+		t.Fatalf("expected one warning check, got %+v", invalidInventory.Checks)
 	}
 }
 

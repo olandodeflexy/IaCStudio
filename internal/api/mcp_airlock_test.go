@@ -3,9 +3,11 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -229,6 +231,147 @@ func TestMCPAirlockToolRoutesDiscoverAndEvaluateFirewall(t *testing.T) {
 	}
 	if allowed.Decision.Status != "approval_required" || !allowed.Decision.Allowlisted || !allowed.Decision.ApprovalRequired {
 		t.Fatalf("expected allowlisted mutation to require approval, got %+v", allowed)
+	}
+}
+
+func TestMCPAirlockToolRoutesReturnArrayJSONForEmptyInventory(t *testing.T) {
+	root := t.TempDir()
+	manager := mcpairlock.NewManager(root,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         apiTestExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/mcp-airlock/servers/terraform/tools")
+	if err != nil {
+		t.Fatalf("GET inventory: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var payload struct {
+		Tools  []any `json:"tools"`
+		Checks []any `json:"checks"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&payload); err != nil {
+		t.Fatalf("decode inventory: %v", err)
+	}
+	if payload.Tools == nil {
+		t.Fatal("expected tools to decode from [] rather than null")
+	}
+	if payload.Checks == nil {
+		t.Fatal("expected checks to decode from [] rather than null")
+	}
+}
+
+func TestMCPAirlockToolRoutesSanitizeInternalErrors(t *testing.T) {
+	root := t.TempDir()
+	manager := mcpairlock.NewManager(root,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         apiTestExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+	if err := os.MkdirAll(filepath.Join(root, ".iac-studio"), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".iac-studio", "mcp-airlock-tools.json"), []byte("{"), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/api/mcp-airlock/servers/terraform/tools/evaluate",
+		"application/json",
+		strings.NewReader(`{"tool_name":"list_modules"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST evaluate: %v", err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("ReadAll evaluate body: %v", readErr)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", resp.StatusCode)
+	}
+	if got := string(body); !strings.Contains(got, "mcp airlock tool evaluation failed") || strings.Contains(got, ".iac-studio") {
+		t.Fatalf("expected sanitized evaluate error, got %q", got)
+	}
+
+	resp, err = http.Post(
+		srv.URL+"/api/mcp-airlock/servers/terraform/tools/allowlist",
+		"application/json",
+		strings.NewReader(`{"tool_name":"list_modules","allowed":true}`),
+	)
+	if err != nil {
+		t.Fatalf("POST allowlist: %v", err)
+	}
+	body, readErr = io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("ReadAll allowlist body: %v", readErr)
+	}
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", resp.StatusCode)
+	}
+	if got := string(body); !strings.Contains(got, "mcp airlock allowlist update failed") || strings.Contains(got, ".iac-studio") {
+		t.Fatalf("expected sanitized allowlist error, got %q", got)
+	}
+}
+
+func TestMCPAirlockToolRoutesValidateToolName(t *testing.T) {
+	root := t.TempDir()
+	manager := mcpairlock.NewManager(root,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         apiTestExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
+	defer srv.Close()
+
+	for _, path := range []string{
+		"/api/mcp-airlock/servers/terraform/tools/evaluate",
+		"/api/mcp-airlock/servers/terraform/tools/allowlist",
+	} {
+		resp, err := http.Post(srv.URL+path, "application/json", strings.NewReader(`{"tool_name":"   ","allowed":true}`))
+		if err != nil {
+			t.Fatalf("POST %s: %v", path, err)
+		}
+		body, readErr := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if readErr != nil {
+			t.Fatalf("ReadAll %s body: %v", path, readErr)
+		}
+		if resp.StatusCode != http.StatusBadRequest {
+			t.Fatalf("expected 400 for %s, got %d", path, resp.StatusCode)
+		}
+		if got := string(body); !strings.Contains(got, "tool_name is required") {
+			t.Fatalf("expected validation error for %s, got %q", path, got)
+		}
 	}
 }
 

@@ -1966,13 +1966,18 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		req.ToolName = strings.TrimSpace(req.ToolName)
+		if req.ToolName == "" {
+			http.Error(w, "tool_name is required", http.StatusBadRequest)
+			return
+		}
 		entry, err := mcpAirlock.EvaluateTool(r.PathValue("id"), req.Project, req.ToolName)
 		if err != nil {
 			if errors.Is(err, mcpairlock.ErrUnknownServer) {
 				http.Error(w, "mcp airlock server not found", http.StatusNotFound)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "mcp airlock tool evaluation failed", http.StatusInternalServerError)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(entry)
@@ -1989,13 +1994,18 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			http.Error(w, "invalid request", http.StatusBadRequest)
 			return
 		}
+		req.ToolName = strings.TrimSpace(req.ToolName)
+		if req.ToolName == "" {
+			http.Error(w, "tool_name is required", http.StatusBadRequest)
+			return
+		}
 		entry, err := mcpAirlock.SetToolAllowlist(r.PathValue("id"), req.Project, req.ToolName, req.Allowed)
 		if err != nil {
 			if errors.Is(err, mcpairlock.ErrUnknownServer) {
 				http.Error(w, "mcp airlock server not found", http.StatusNotFound)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			http.Error(w, "mcp airlock allowlist update failed", http.StatusInternalServerError)
 			return
 		}
 		_ = json.NewEncoder(w).Encode(entry)
