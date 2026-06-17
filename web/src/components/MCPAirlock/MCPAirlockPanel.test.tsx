@@ -51,6 +51,8 @@ describe('MCPAirlockPanel', () => {
       checkMCPAirlockServer: vi.fn(async () => checked),
       startMCPAirlockServer: vi.fn(async () => checked),
       stopMCPAirlockServer: vi.fn(async () => checked),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
     };
 
     render(<MCPAirlockPanel client={client} />);
@@ -94,6 +96,8 @@ describe('MCPAirlockPanel', () => {
       checkMCPAirlockServer: vi.fn(async () => initial),
       startMCPAirlockServer: vi.fn(async () => running),
       stopMCPAirlockServer: vi.fn(async () => stopped),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
     };
 
     render(<MCPAirlockPanel client={client} />);
@@ -111,5 +115,77 @@ describe('MCPAirlockPanel', () => {
       expect(client.stopMCPAirlockServer).toHaveBeenCalledWith('terraform-official');
     });
     expect(await screen.findByText('MCP server process stopped.')).toBeInTheDocument();
+  });
+
+  it('discovers tools and shows firewall decisions', async () => {
+    const initial = server({
+      command_available: true,
+      state: 'available',
+      summary: 'Command is available.',
+    });
+    const inventory = {
+      server_id: 'terraform-official',
+      discovered_at: '2026-06-13T10:00:00Z',
+      checks: [{ name: 'tool_discovery', status: 'pass' as const, message: 'discovered 2 external MCP tools' }],
+      tools: [
+        {
+          server_id: 'terraform-official',
+          name: 'list_modules',
+          description: 'List registry modules',
+          input_schema_hash: 'sha256:abc',
+          last_seen_at: '2026-06-13T10:00:00Z',
+          schema_state: 'new' as const,
+          risk: 'read_only' as const,
+          decision: {
+            status: 'allowed' as const,
+            allowed: true,
+            approval_required: false,
+            risk: 'read_only' as const,
+            reason: 'read-only',
+            allowlisted: false,
+            untrusted_output: true,
+          },
+        },
+        {
+          server_id: 'terraform-official',
+          name: 'apply_workspace',
+          description: 'Apply a Terraform workspace',
+          input_schema_hash: 'sha256:def',
+          last_seen_at: '2026-06-13T10:00:00Z',
+          schema_state: 'new' as const,
+          risk: 'cloud_mutation' as const,
+          decision: {
+            status: 'blocked' as const,
+            allowed: false,
+            approval_required: false,
+            risk: 'cloud_mutation' as const,
+            reason: 'requires allowlist',
+            allowlisted: false,
+            untrusted_output: true,
+          },
+        },
+      ],
+    };
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      startMCPAirlockServer: vi.fn(async () => initial),
+      stopMCPAirlockServer: vi.fn(async () => initial),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => inventory),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'Tools' }));
+
+    await waitFor(() => {
+      expect(client.discoverMCPAirlockTools).toHaveBeenCalledWith('terraform-official');
+    });
+    expect(await screen.findByText('Tool Firewall')).toBeInTheDocument();
+    expect(screen.getByText('list_modules')).toBeInTheDocument();
+    expect(screen.getByText('apply_workspace')).toBeInTheDocument();
+    expect(screen.getByText('cloud mutation')).toBeInTheDocument();
+    expect(screen.getByText('blocked')).toBeInTheDocument();
   });
 });

@@ -193,6 +193,116 @@ func (s *Server) handleCheckMCPAirlockServer(ctx context.Context, raw json.RawMe
 	}
 }
 
+func (s *Server) handleDiscoverMCPAirlockTools(ctx context.Context, raw json.RawMessage) toolResponse {
+	var args struct {
+		ServerID string `json:"server_id"`
+	}
+	if err := decode(raw, &args); err != nil {
+		return errResponse("discover_mcp_airlock_tools", err, AuditDecision{Tool: "discover_mcp_airlock_tools"})
+	}
+	if err := requireNonEmpty("server_id", args.ServerID); err != nil {
+		return errResponse("discover_mcp_airlock_tools", err, AuditDecision{Tool: "discover_mcp_airlock_tools"})
+	}
+	inventory, err := s.mcpAirlock.DiscoverTools(ctx, args.ServerID)
+	if err != nil {
+		if errors.Is(err, mcpairlock.ErrUnknownServer) {
+			return errResponse("discover_mcp_airlock_tools", err, AuditDecision{Tool: "discover_mcp_airlock_tools", Decision: "blocked"})
+		}
+		return errResponse("discover_mcp_airlock_tools", err, AuditDecision{Tool: "discover_mcp_airlock_tools"})
+	}
+	return toolResponse{
+		Result: structuredResult(map[string]any{
+			"inventory": inventory,
+			"scope":     "External tool output is inventoried as untrusted data. Unknown or risky tools are blocked or approval-gated before invocation.",
+		}),
+		Audit: AuditDecision{Tool: "discover_mcp_airlock_tools", Decision: "allowed"},
+	}
+}
+
+func (s *Server) handleEvaluateMCPAirlockTool(_ context.Context, raw json.RawMessage) toolResponse {
+	var args struct {
+		ServerID string `json:"server_id"`
+		ToolName string `json:"tool_name"`
+		Project  string `json:"project,omitempty"`
+	}
+	if err := decode(raw, &args); err != nil {
+		return errResponse("evaluate_mcp_airlock_tool", err, AuditDecision{Tool: "evaluate_mcp_airlock_tool"})
+	}
+	if err := firstErr(requireNonEmpty("server_id", args.ServerID), requireNonEmpty("tool_name", args.ToolName)); err != nil {
+		return errResponse("evaluate_mcp_airlock_tool", err, AuditDecision{Tool: "evaluate_mcp_airlock_tool"})
+	}
+	entry, err := s.mcpAirlock.EvaluateTool(args.ServerID, args.Project, args.ToolName)
+	if err != nil {
+		if errors.Is(err, mcpairlock.ErrUnknownServer) {
+			return errResponse("evaluate_mcp_airlock_tool", err, AuditDecision{Tool: "evaluate_mcp_airlock_tool", Project: args.Project, Decision: "blocked"})
+		}
+		return errResponse("evaluate_mcp_airlock_tool", err, AuditDecision{Tool: "evaluate_mcp_airlock_tool", Project: args.Project})
+	}
+	return toolResponse{
+		Result: structuredResult(map[string]any{"tool": entry}),
+		Audit:  AuditDecision{Tool: "evaluate_mcp_airlock_tool", Project: args.Project, Decision: "allowed"},
+	}
+}
+
+func (s *Server) handleCallMCPAirlockTool(_ context.Context, raw json.RawMessage) toolResponse {
+	var args struct {
+		ServerID      string `json:"server_id"`
+		ToolName      string `json:"tool_name"`
+		Project       string `json:"project,omitempty"`
+		ArgumentsJSON string `json:"arguments_json,omitempty"`
+		ApprovalToken string `json:"approval_token,omitempty"`
+	}
+	if err := decode(raw, &args); err != nil {
+		return errResponse("call_mcp_airlock_tool", err, AuditDecision{Tool: "call_mcp_airlock_tool"})
+	}
+	if err := firstErr(requireNonEmpty("server_id", args.ServerID), requireNonEmpty("tool_name", args.ToolName)); err != nil {
+		return errResponse("call_mcp_airlock_tool", err, AuditDecision{Tool: "call_mcp_airlock_tool"})
+	}
+	entry, err := s.mcpAirlock.EvaluateTool(args.ServerID, args.Project, args.ToolName)
+	if err != nil {
+		return errResponse("call_mcp_airlock_tool", err, AuditDecision{Tool: "call_mcp_airlock_tool", Project: args.Project, Decision: "blocked"})
+	}
+	audit := AuditDecision{
+		Tool:             "call_mcp_airlock_tool",
+		Project:          args.Project,
+		ApprovalRequired: entry.Decision.ApprovalRequired,
+		Decision:         "blocked",
+	}
+	if entry.Decision.Status == "blocked" {
+		audit.Error = entry.Decision.Reason
+		return toolResponse{
+			Result: errorResult("external MCP tool blocked by Airlock firewall", map[string]any{
+				"status":   "blocked",
+				"error":    "mcp_airlock_tool_blocked",
+				"server":   args.ServerID,
+				"tool":     entry,
+				"decision": entry.Decision,
+			}),
+			Audit: audit,
+		}
+	}
+	if entry.Decision.ApprovalRequired && !s.approved(args.ApprovalToken) {
+		audit.Decision = "approval_required"
+		return toolResponse{
+			Result: approvalRequiredResult("call_mcp_airlock_tool", entry.Decision.Reason),
+			Audit:  audit,
+		}
+	}
+	if entry.Decision.ApprovalRequired {
+		audit.Approved = true
+	}
+	return toolResponse{
+		Result: structuredResult(map[string]any{
+			"status":    "firewall_allowed",
+			"server":    args.ServerID,
+			"tool":      entry,
+			"arguments": "withheld",
+			"next_step": "External execution is intentionally deferred until the Cloud Connections credential broker is active.",
+		}),
+		Audit: AuditDecision{Tool: "call_mcp_airlock_tool", Project: args.Project, ApprovalRequired: entry.Decision.ApprovalRequired, Approved: audit.Approved, Decision: "allowed"},
+	}
+}
+
 func (s *Server) handleGeneratePlan(ctx context.Context, raw json.RawMessage) toolResponse {
 	var args projectArgs
 	if err := decode(raw, &args); err != nil {

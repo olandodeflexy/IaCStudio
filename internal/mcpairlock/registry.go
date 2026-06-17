@@ -11,6 +11,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -84,29 +85,40 @@ type ProbeResult struct {
 // with a constrained environment and timeout.
 type ProbeFunc func(ctx context.Context, command string, args []string, timeout time.Duration) ProbeResult
 
+// ToolDiscoveryFunc discovers external MCP tools without forwarding cloud
+// credentials. Production speaks a bounded tools/list flow over stdio.
+type ToolDiscoveryFunc func(ctx context.Context, definition ServerDefinition, timeout time.Duration) DiscoveryProbeResult
+
 // Option configures a Manager.
 type Option func(*Manager)
 
 // Manager owns trusted MCP Airlock server definitions and read-only checks.
 type Manager struct {
-	definitions []ServerDefinition
-	timeout     time.Duration
-	probe       ProbeFunc
-	launcher    LauncherFunc
-	lifecycle   *lifecycleStore
+	definitions   []ServerDefinition
+	projectsDir   string
+	inventoryPath string
+	allowlist     ToolAllowlist
+	inventoryMu   sync.Mutex
+	timeout       time.Duration
+	probe         ProbeFunc
+	discoverer    ToolDiscoveryFunc
+	launcher      LauncherFunc
+	lifecycle     *lifecycleStore
 }
 
 // NewManager creates an Airlock registry. projectsDir is accepted for future
 // per-project allowlists, but the first slice only serves built-in trusted
 // definitions and optional process environment command overrides.
 func NewManager(projectsDir string, opts ...Option) *Manager {
-	_ = projectsDir
 	m := &Manager{
-		definitions: builtInDefinitions(),
-		timeout:     defaultHealthTimeout,
-		probe:       defaultProbe,
-		launcher:    defaultLauncher,
-		lifecycle:   newLifecycleStore(),
+		definitions:   builtInDefinitions(),
+		projectsDir:   projectsDir,
+		inventoryPath: inventoryPath(projectsDir),
+		timeout:       defaultHealthTimeout,
+		probe:         defaultProbe,
+		discoverer:    defaultToolDiscoverer,
+		launcher:      defaultLauncher,
+		lifecycle:     newLifecycleStore(),
 	}
 	for _, opt := range opts {
 		opt(m)

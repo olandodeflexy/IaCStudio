@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -120,6 +121,114 @@ func TestMCPAirlockStartStopRoutesUseLifecycle(t *testing.T) {
 	}
 	if stopped.Running || stopped.State != "stopped" || !handle.stopped {
 		t.Fatalf("expected stopped response, got response=%+v stopped=%v", stopped, handle.stopped)
+	}
+}
+
+func TestMCPAirlockToolRoutesDiscoverAndEvaluateFirewall(t *testing.T) {
+	root := t.TempDir()
+	manager := mcpairlock.NewManager(root,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         apiTestExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		mcpairlock.WithToolDiscoverer(func(context.Context, mcpairlock.ServerDefinition, time.Duration) mcpairlock.DiscoveryProbeResult {
+			return mcpairlock.DiscoveryProbeResult{Tools: []mcpairlock.DiscoveredTool{
+				{
+					Name:        "list_modules",
+					Description: "List Terraform registry modules.",
+					InputSchema: map[string]any{"type": "object"},
+					Annotations: map[string]any{"readOnlyHint": true},
+				},
+				{
+					Name:        "apply_workspace",
+					Description: "Apply a Terraform workspace.",
+					InputSchema: map[string]any{"type": "object"},
+				},
+			}}
+		}),
+	)
+	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/mcp-airlock/servers/terraform/tools/discover", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST discover: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var inventory struct {
+		Tools []struct {
+			Name     string `json:"name"`
+			Risk     string `json:"risk"`
+			Decision struct {
+				Status  string `json:"status"`
+				Allowed bool   `json:"allowed"`
+			} `json:"decision"`
+		} `json:"tools"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&inventory); err != nil {
+		t.Fatalf("decode inventory: %v", err)
+	}
+	if len(inventory.Tools) != 2 {
+		t.Fatalf("expected 2 tools, got %+v", inventory)
+	}
+
+	resp, err = http.Post(
+		srv.URL+"/api/mcp-airlock/servers/terraform/tools/evaluate",
+		"application/json",
+		strings.NewReader(`{"tool_name":"apply_workspace"}`),
+	)
+	if err != nil {
+		t.Fatalf("POST evaluate: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var evaluated struct {
+		Risk     string `json:"risk"`
+		Decision struct {
+			Status string `json:"status"`
+		} `json:"decision"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&evaluated); err != nil {
+		t.Fatalf("decode evaluation: %v", err)
+	}
+	if evaluated.Risk != "cloud_mutation" || evaluated.Decision.Status != "blocked" {
+		t.Fatalf("expected blocked cloud mutation, got %+v", evaluated)
+	}
+
+	resp, err = http.Post(
+		srv.URL+"/api/mcp-airlock/servers/terraform/tools/allowlist",
+		"application/json",
+		strings.NewReader(`{"tool_name":"apply_workspace","project":"demo","allowed":true}`),
+	)
+	if err != nil {
+		t.Fatalf("POST allowlist: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	var allowed struct {
+		Decision struct {
+			Status           string `json:"status"`
+			Allowlisted      bool   `json:"allowlisted"`
+			ApprovalRequired bool   `json:"approval_required"`
+		} `json:"decision"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&allowed); err != nil {
+		t.Fatalf("decode allowlist response: %v", err)
+	}
+	if allowed.Decision.Status != "approval_required" || !allowed.Decision.Allowlisted || !allowed.Decision.ApprovalRequired {
+		t.Fatalf("expected allowlisted mutation to require approval, got %+v", allowed)
 	}
 }
 

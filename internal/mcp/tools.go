@@ -16,6 +16,21 @@ func (s *Server) buildTools() ([]Tool, map[string]toolHandler) {
 		readTool("check_mcp_airlock_server", "Check MCP Airlock Server", "Run a bounded local health check for one trusted external MCP server using a sanitized environment.", objectSchema(map[string]any{
 			"server_id": stringProp("Trusted Airlock server ID."),
 		}, []string{"server_id"})),
+		readTool("discover_mcp_airlock_tools", "Discover MCP Airlock Tools", "Run a bounded tools/list probe against one trusted external MCP server and persist schema fingerprints for firewall review.", objectSchema(map[string]any{
+			"server_id": stringProp("Trusted Airlock server ID."),
+		}, []string{"server_id"})),
+		readTool("evaluate_mcp_airlock_tool", "Evaluate MCP Airlock Tool", "Evaluate the fail-closed Airlock firewall decision for one discovered external MCP tool.", objectSchema(map[string]any{
+			"server_id": stringProp("Trusted Airlock server ID."),
+			"tool_name": stringProp("External MCP tool name."),
+			"project":   stringProp("Optional IaC Studio project for project-scoped allowlist checks."),
+		}, []string{"server_id", "tool_name"})),
+		proposalTool("call_mcp_airlock_tool", "Call MCP Airlock Tool", "Ask Airlock to route an external MCP tool call. Blocked or unapproved tools are refused before any external server is invoked.", objectSchema(map[string]any{
+			"server_id":      stringProp("Trusted Airlock server ID."),
+			"tool_name":      stringProp("External MCP tool name."),
+			"project":        stringProp("Optional IaC Studio project for project-scoped allowlist checks."),
+			"arguments_json": stringProp("JSON-encoded external tool arguments. Not forwarded unless the firewall permits execution."),
+			"approval_token": stringProp("Configured local approval token required for approval-gated tools."),
+		}, []string{"server_id", "tool_name"})),
 		readTool("generate_plan", "Generate Plan", "Run a local plan/preview command through the IaC Studio safe runner. This reads provider state and may write local plan artifacts, but does not apply changes.", objectSchema(projectExecutionProps(), []string{"project"})),
 		readTool("classify_plan", "Classify Plan", "Classify Terraform/OpenTofu plan JSON into safe, risky, destructive, and unknown changes.", objectSchema(map[string]any{
 			"plan_json": stringProp("Raw terraform show -json output. Use this for direct classification."),
@@ -76,6 +91,9 @@ func (s *Server) buildTools() ([]Tool, map[string]toolHandler) {
 		"inspect_connection_scope":   s.handleInspectConnectionScope,
 		"list_mcp_airlock_servers":   s.handleListMCPAirlockServers,
 		"check_mcp_airlock_server":   s.handleCheckMCPAirlockServer,
+		"discover_mcp_airlock_tools": s.handleDiscoverMCPAirlockTools,
+		"evaluate_mcp_airlock_tool":  s.handleEvaluateMCPAirlockTool,
+		"call_mcp_airlock_tool":      s.handleCallMCPAirlockTool,
 		"generate_plan":              s.handleGeneratePlan,
 		"classify_plan":              s.handleClassifyPlan,
 		"run_policy_check":           s.handleRunPolicyCheck,
