@@ -149,6 +149,46 @@ func TestSetToolAllowlistCanRemoveMissingEntries(t *testing.T) {
 	}
 }
 
+func TestSaveInventoryAtomicWriteFailurePreservesExistingInventory(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root)
+	inventoryDir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(inventoryDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	original := []byte("{\"servers\":{}}\n")
+	if err := os.WriteFile(manager.inventoryPath, original, 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	if err := os.Chmod(inventoryDir, 0o500); err != nil {
+		t.Fatalf("Chmod read-only: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(inventoryDir, 0o700)
+	})
+
+	err := manager.saveInventoryUnlocked(persistedToolInventory{
+		Servers: map[string]persistedServerTools{
+			"aws": {
+				Tools: map[string]persistedToolRecord{
+					"create_bucket": {Description: "Create an S3 bucket"},
+				},
+			},
+		},
+	})
+	if err == nil {
+		t.Skip("directory permissions did not block inventory replacement on this platform")
+	}
+
+	got, readErr := os.ReadFile(manager.inventoryPath)
+	if readErr != nil {
+		t.Fatalf("ReadFile existing inventory: %v", readErr)
+	}
+	if !bytes.Equal(got, original) {
+		t.Fatalf("existing inventory changed after failed write: got %q want %q", got, original)
+	}
+}
+
 func TestToolFirewallBlocksUnknownAndApprovalGatesAllowlistedMutation(t *testing.T) {
 	manager := NewManager(t.TempDir(), WithToolAllowlist(ToolAllowlist{
 		ServerTools: map[string][]string{"aws": []string{"create_bucket"}},

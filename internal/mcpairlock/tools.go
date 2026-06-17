@@ -593,9 +593,41 @@ func (m *Manager) saveInventoryUnlocked(snapshot persistedToolInventory) error {
 	if err := os.MkdirAll(filepath.Dir(m.inventoryPath), 0o755); err != nil {
 		return fmt.Errorf("create Airlock inventory directory: %w", err)
 	}
-	if err := os.WriteFile(m.inventoryPath, append(data, '\n'), 0o600); err != nil {
+	if err := writeFileAtomic(m.inventoryPath, append(data, '\n')); err != nil {
 		return fmt.Errorf("write Airlock tool inventory: %w", err)
 	}
+	return nil
+}
+
+func writeFileAtomic(path string, data []byte) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temporary file: %w", err)
+	}
+	tmpName := tmp.Name()
+	keepTemp := true
+	defer func() {
+		if keepTemp {
+			_ = os.Remove(tmpName)
+		}
+	}()
+
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write temporary file: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("sync temporary file: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("close temporary file: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("replace inventory file: %w", err)
+	}
+	keepTemp = false
 	return nil
 }
 
