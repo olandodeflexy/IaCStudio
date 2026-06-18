@@ -153,64 +153,63 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 	}
 
 	now := time.Now().UTC()
-	m.inventoryMu.Lock()
-	defer m.inventoryMu.Unlock()
-	previous, err := m.loadInventoryUnlocked()
-	if err != nil {
-		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(err)})
-		previous = persistedToolInventory{Servers: map[string]persistedServerTools{}}
-	}
 	inventory.DiscoveredAt = now.Format(time.RFC3339)
-	inventory.Tools = make([]ToolInventoryEntry, 0, len(result.Tools))
-	seen := map[string]persistedToolRecord{}
-	allowlist := m.mergedAllowlist(previous.Allowlist)
-	for _, tool := range result.Tools {
-		name := strings.TrimSpace(tool.Name)
-		if name == "" {
-			continue
+	if err := m.updateInventory(func(previous *persistedToolInventory, loadErr error) error {
+		if loadErr != nil {
+			inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(loadErr)})
+			*previous = persistedToolInventory{Servers: map[string]persistedServerTools{}}
 		}
-		hash := schemaHash(tool.InputSchema)
-		risk := ClassifyTool(tool)
-		prior, hadPrior := previous.Servers[id].Tools[name]
-		state := "new"
-		if hadPrior {
-			state = "known"
-			if prior.InputSchemaHash != hash {
-				state = "changed"
+		inventory.Tools = make([]ToolInventoryEntry, 0, len(result.Tools))
+		seen := map[string]persistedToolRecord{}
+		allowlist := m.mergedAllowlist(previous.Allowlist)
+		for _, tool := range result.Tools {
+			name := strings.TrimSpace(tool.Name)
+			if name == "" {
+				continue
+			}
+			hash := schemaHash(tool.InputSchema)
+			risk := ClassifyTool(tool)
+			prior, hadPrior := previous.Servers[id].Tools[name]
+			state := "new"
+			if hadPrior {
+				state = "known"
+				if prior.InputSchemaHash != hash {
+					state = "changed"
+				}
+			}
+			decision := decideToolWithAllowlist(id, "", name, risk, state, allowlist)
+			entry := ToolInventoryEntry{
+				ServerID:        id,
+				Name:            name,
+				Description:     strings.TrimSpace(tool.Description),
+				InputSchemaHash: hash,
+				LastSeenAt:      inventory.DiscoveredAt,
+				SchemaState:     state,
+				Risk:            risk,
+				Decision:        decision,
+			}
+			inventory.Tools = append(inventory.Tools, entry)
+			seen[name] = persistedToolRecord{
+				Description:     entry.Description,
+				InputSchemaHash: entry.InputSchemaHash,
+				LastSeenAt:      entry.LastSeenAt,
+				SchemaState:     entry.SchemaState,
+				Risk:            entry.Risk,
 			}
 		}
-		decision := decideToolWithAllowlist(id, "", name, risk, state, allowlist)
-		entry := ToolInventoryEntry{
-			ServerID:        id,
-			Name:            name,
-			Description:     strings.TrimSpace(tool.Description),
-			InputSchemaHash: hash,
-			LastSeenAt:      inventory.DiscoveredAt,
-			SchemaState:     state,
-			Risk:            risk,
-			Decision:        decision,
+		sortToolEntries(inventory.Tools)
+		if len(inventory.Tools) == 0 {
+			inventory.Checks = append(inventory.Checks, Check{Name: "tool_discovery", Status: "warn", Message: "tools/list returned no tools"})
+		} else {
+			inventory.Checks = append(inventory.Checks, Check{Name: "tool_discovery", Status: "pass", Message: fmt.Sprintf("discovered %d external MCP tools", len(inventory.Tools))})
 		}
-		inventory.Tools = append(inventory.Tools, entry)
-		seen[name] = persistedToolRecord{
-			Description:     entry.Description,
-			InputSchemaHash: entry.InputSchemaHash,
-			LastSeenAt:      entry.LastSeenAt,
-			SchemaState:     entry.SchemaState,
-			Risk:            entry.Risk,
-		}
-	}
-	sortToolEntries(inventory.Tools)
-	if len(inventory.Tools) == 0 {
-		inventory.Checks = append(inventory.Checks, Check{Name: "tool_discovery", Status: "warn", Message: "tools/list returned no tools"})
-	} else {
-		inventory.Checks = append(inventory.Checks, Check{Name: "tool_discovery", Status: "pass", Message: fmt.Sprintf("discovered %d external MCP tools", len(inventory.Tools))})
-	}
 
-	previous.Servers[id] = persistedServerTools{
-		DiscoveredAt: inventory.DiscoveredAt,
-		Tools:        seen,
-	}
-	if err := m.saveInventoryUnlocked(previous); err != nil {
+		previous.Servers[id] = persistedServerTools{
+			DiscoveredAt: inventory.DiscoveredAt,
+			Tools:        seen,
+		}
+		return nil
+	}); err != nil {
 		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(err)})
 		return inventory, nil
 	}
@@ -288,19 +287,20 @@ func (m *Manager) SetToolAllowlist(serverID, project, toolName string, allowed b
 	if toolName == "" {
 		return ToolInventoryEntry{}, errors.New("tool_name is required")
 	}
-	m.inventoryMu.Lock()
-	defer m.inventoryMu.Unlock()
-	snapshot, err := m.loadInventoryUnlocked()
-	if err != nil {
-		return ToolInventoryEntry{}, m.publicInventoryError(err)
-	}
-	ensureAllowlist(&snapshot.Allowlist)
-	if allowed {
-		addAllowlistTool(&snapshot.Allowlist, serverID, project, toolName)
-	} else {
-		removeAllowlistTool(&snapshot.Allowlist, serverID, project, toolName)
-	}
-	if err := m.saveInventoryUnlocked(snapshot); err != nil {
+	var snapshot persistedToolInventory
+	if err := m.updateInventory(func(next *persistedToolInventory, loadErr error) error {
+		if loadErr != nil {
+			return loadErr
+		}
+		ensureAllowlist(&next.Allowlist)
+		if allowed {
+			addAllowlistTool(&next.Allowlist, serverID, project, toolName)
+		} else {
+			removeAllowlistTool(&next.Allowlist, serverID, project, toolName)
+		}
+		snapshot = *next
+		return nil
+	}); err != nil {
 		return ToolInventoryEntry{}, m.publicInventoryError(err)
 	}
 	return m.evaluateToolFromSnapshot(snapshot, serverID, project, toolName), nil
@@ -549,6 +549,22 @@ func (m *Manager) loadInventory() (persistedToolInventory, error) {
 	m.inventoryMu.Lock()
 	defer m.inventoryMu.Unlock()
 	return m.loadInventoryUnlocked()
+}
+
+// updateInventory holds one lock across load, mutation, and save so overlapping
+// discovery and allowlist updates cannot drop each other's persisted changes.
+func (m *Manager) updateInventory(update func(*persistedToolInventory, error) error) error {
+	m.inventoryMu.Lock()
+	defer m.inventoryMu.Unlock()
+
+	snapshot, loadErr := m.loadInventoryUnlocked()
+	if err := update(&snapshot, loadErr); err != nil {
+		return err
+	}
+	if err := m.saveInventoryUnlocked(snapshot); err != nil {
+		return err
+	}
+	return nil
 }
 
 func (m *Manager) loadInventoryUnlocked() (persistedToolInventory, error) {

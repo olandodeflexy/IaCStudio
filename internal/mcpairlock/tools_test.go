@@ -128,6 +128,54 @@ func TestDiscoverToolsPreservesPersistedAllowlist(t *testing.T) {
 	}
 }
 
+func TestDiscoverToolsDoesNotDropConcurrentAllowlistUpdate(t *testing.T) {
+	discoveryStarted := make(chan struct{})
+	releaseDiscovery := make(chan struct{})
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "aws",
+			Name:            "AWS",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithToolDiscoverer(func(context.Context, ServerDefinition, time.Duration) DiscoveryProbeResult {
+			close(discoveryStarted)
+			<-releaseDiscovery
+			return DiscoveryProbeResult{Tools: []DiscoveredTool{{
+				Name:        "create_bucket",
+				Description: "Create an S3 bucket",
+				InputSchema: map[string]any{"type": "object"},
+			}}}
+		}),
+	)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := manager.DiscoverTools(context.Background(), "aws")
+		errCh <- err
+	}()
+
+	<-discoveryStarted
+	if _, err := manager.SetToolAllowlist("aws", "demo", "create_bucket", true); err != nil {
+		t.Fatalf("SetToolAllowlist during discovery: %v", err)
+	}
+	close(releaseDiscovery)
+	if err := <-errCh; err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+
+	entry, err := manager.EvaluateTool("aws", "demo", "create_bucket")
+	if err != nil {
+		t.Fatalf("EvaluateTool: %v", err)
+	}
+	if !entry.Decision.Allowlisted || entry.Decision.Status != "approval_required" {
+		t.Fatalf("expected concurrent allowlist update to survive discovery, got %+v", entry.Decision)
+	}
+}
+
 func TestDiscoverToolsRecoversFromCorruptInventory(t *testing.T) {
 	root := t.TempDir()
 	manager := NewManager(root,
