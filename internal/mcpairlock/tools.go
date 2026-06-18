@@ -708,15 +708,15 @@ func schemaText(schema map[string]any) string {
 
 func normalizedSchemaState(state string) string {
 	switch trimmed := strings.TrimSpace(state); trimmed {
-	case "new", "changed", "unknown":
+	case "known", "new", "changed", "unknown":
 		return trimmed
 	default:
-		return "known"
+		return "unknown"
 	}
 }
 
 func schemaReviewRequired(state string) bool {
-	return state == "new" || state == "changed"
+	return normalizedSchemaState(state) != "known"
 }
 
 func readOnlyAnnotation(annotations map[string]any) bool {

@@ -50,6 +50,10 @@ function decisionClass(status: string) {
   return 'text-destructive';
 }
 
+function canDiscoverTools(state: string) {
+  return state === 'available' || state === 'ready' || state === 'running';
+}
+
 export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
   const [servers, setServers] = useState<MCPAirlockServerStatus[]>([]);
   const [toolsByServer, setToolsByServer] = useState<Record<string, MCPAirlockToolInventory>>({});
@@ -183,7 +187,7 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
                 const discovering = discoveringId === status.server.id;
                 const startDisabled = busy || status.running || !status.command_available;
                 const stopDisabled = busy || !status.running;
-                const discoverDisabled = discovering || status.state !== 'available';
+                const discoverDisabled = discovering || !canDiscoverTools(status.state);
                 return (
               <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">

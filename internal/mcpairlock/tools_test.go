@@ -245,6 +245,52 @@ func TestSetToolAllowlistCanRemoveMissingEntries(t *testing.T) {
 	}
 }
 
+func TestInventoryMissingSchemaStateFailsClosed(t *testing.T) {
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "aws",
+			Name:            "AWS",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+	if err := manager.saveInventoryUnlocked(persistedToolInventory{
+		Servers: map[string]persistedServerTools{
+			"aws": {
+				DiscoveredAt: time.Now().UTC().Format(time.RFC3339),
+				Tools: map[string]persistedToolRecord{
+					"list_buckets": {
+						Description:     "List S3 buckets.",
+						InputSchemaHash: "sha256:legacy",
+						LastSeenAt:      time.Now().UTC().Format(time.RFC3339),
+						Risk:            RiskReadOnly,
+					},
+				},
+			},
+		},
+	}); err != nil {
+		t.Fatalf("saveInventoryUnlocked: %v", err)
+	}
+
+	inventory, err := manager.Inventory("aws")
+	if err != nil {
+		t.Fatalf("Inventory: %v", err)
+	}
+	if len(inventory.Tools) != 1 {
+		t.Fatalf("expected one tool, got %+v", inventory.Tools)
+	}
+	tool := inventory.Tools[0]
+	if tool.SchemaState != "unknown" {
+		t.Fatalf("expected missing schema state to normalize to unknown, got %+v", tool)
+	}
+	if tool.Decision.Status != "blocked" || tool.Decision.Allowed {
+		t.Fatalf("missing schema state should fail closed, got %+v", tool.Decision)
+	}
+}
+
 func TestSaveInventoryAtomicWriteFailurePreservesExistingInventory(t *testing.T) {
 	root := t.TempDir()
 	manager := NewManager(root)
@@ -340,6 +386,16 @@ func TestToolFirewallBlocksUnknownAndApprovalGatesAllowlistedMutation(t *testing
 	changedReadOnly := manager.DecideTool("aws", "demo", "mystery_tool", RiskReadOnly, "changed")
 	if changedReadOnly.Status != "approval_required" || !changedReadOnly.ApprovalRequired || !changedReadOnly.Allowlisted {
 		t.Fatalf("allowlisted changed schemas should still require approval, got %+v", changedReadOnly)
+	}
+
+	missingStateReadOnly := manager.DecideTool("aws", "", "list_buckets", RiskReadOnly, "")
+	if missingStateReadOnly.Status != "blocked" || missingStateReadOnly.Allowed {
+		t.Fatalf("missing schema state should fail closed, got %+v", missingStateReadOnly)
+	}
+
+	invalidStateReadOnly := manager.DecideTool("aws", "", "list_buckets", RiskReadOnly, "unexpected")
+	if invalidStateReadOnly.Status != "blocked" || invalidStateReadOnly.Allowed {
+		t.Fatalf("invalid schema state should fail closed, got %+v", invalidStateReadOnly)
 	}
 }
 

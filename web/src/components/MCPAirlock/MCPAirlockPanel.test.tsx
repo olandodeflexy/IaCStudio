@@ -189,12 +189,8 @@ describe('MCPAirlockPanel', () => {
     expect(screen.getByText('blocked')).toBeInTheDocument();
   });
 
-  it('disables tool discovery until the server is available', async () => {
-    const initial = server({
-      command_available: true,
-      state: 'ready',
-      summary: 'Health check completed without exposing cloud credentials.',
-    });
+  it('disables tool discovery when the server is unavailable', async () => {
+    const initial = server();
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
@@ -212,5 +208,33 @@ describe('MCPAirlockPanel', () => {
     fireEvent.click(toolsButton);
 
     expect(client.discoverMCPAirlockTools).not.toHaveBeenCalled();
+  });
+
+  it('allows tool discovery after a successful health check', async () => {
+    const initial = server({
+      ready: true,
+      command_available: true,
+      state: 'ready',
+      summary: 'Health check completed without exposing cloud credentials.',
+    });
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      startMCPAirlockServer: vi.fn(async () => initial),
+      stopMCPAirlockServer: vi.fn(async () => initial),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+
+    const toolsButton = await screen.findByRole('button', { name: 'Tools' });
+    expect(toolsButton).toBeEnabled();
+
+    fireEvent.click(toolsButton);
+
+    await waitFor(() => {
+      expect(client.discoverMCPAirlockTools).toHaveBeenCalledWith('terraform-official');
+    });
   });
 });
