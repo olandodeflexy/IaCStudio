@@ -179,6 +179,51 @@ func TestDiscoverToolsRecoversFromCorruptInventory(t *testing.T) {
 	}
 }
 
+func TestDiscoverToolsInventoryWarningsDoNotExposeInventoryPath(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root,
+		WithDefinitions([]ServerDefinition{{
+			ID:              "aws",
+			Name:            "AWS",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithToolDiscoverer(func(context.Context, ServerDefinition, time.Duration) DiscoveryProbeResult {
+			return DiscoveryProbeResult{Tools: []DiscoveredTool{{
+				Name:        "list_buckets",
+				Description: "List S3 buckets.",
+				InputSchema: map[string]any{"type": "object"},
+				Annotations: map[string]any{"readOnlyHint": true},
+			}}}
+		}),
+	)
+	inventoryDir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(inventoryDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manager.inventoryPath = inventoryDir
+
+	inventory, err := manager.DiscoverTools(context.Background(), "aws")
+	if err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+	if len(inventory.Tools) != 1 {
+		t.Fatalf("expected discovery to continue, got %+v", inventory.Tools)
+	}
+	messages := checkMessages(inventory.Checks, "inventory")
+	if len(messages) == 0 {
+		t.Fatalf("expected inventory warning checks, got %+v", inventory.Checks)
+	}
+	for _, message := range messages {
+		if strings.Contains(message, root) || strings.Contains(message, manager.inventoryPath) {
+			t.Fatalf("inventory warning leaked path %q in %q", root, message)
+		}
+	}
+}
+
 func TestSetToolAllowlistCanRemoveMissingEntries(t *testing.T) {
 	manager := NewManager(t.TempDir(),
 		WithDefinitions([]ServerDefinition{{
@@ -422,6 +467,51 @@ func TestInventoryReturnsEmptySlicesWhenNothingDiscoveredOrLoadFails(t *testing.
 	}
 }
 
+func TestInventoryWarningDoesNotExposeInventoryPath(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root,
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+	inventoryDir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(inventoryDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manager.inventoryPath = inventoryDir
+
+	inventory, err := manager.Inventory("terraform")
+	if err != nil {
+		t.Fatalf("Inventory: %v", err)
+	}
+	messages := checkMessages(inventory.Checks, "inventory")
+	if len(messages) == 0 {
+		t.Fatalf("expected inventory warning checks, got %+v", inventory.Checks)
+	}
+	for _, message := range messages {
+		if strings.Contains(message, root) || strings.Contains(message, manager.inventoryPath) {
+			t.Fatalf("inventory warning leaked path %q in %q", root, message)
+		}
+	}
+}
+
+func TestSchemaReviewReasonMatchesRediscoveryFlow(t *testing.T) {
+	decision := decideToolWithAllowlist("aws", "", "list_buckets", RiskReadOnly, "new", ToolAllowlist{})
+
+	if strings.Contains(decision.Reason, "re-reviewed") {
+		t.Fatalf("schema review reason mentions unavailable review flow: %q", decision.Reason)
+	}
+	if !strings.Contains(decision.Reason, "later discovery confirms the same schema") {
+		t.Fatalf("schema review reason does not explain stable rediscovery flow: %q", decision.Reason)
+	}
+}
+
 func TestWriteToolDiscoveryRequestsReturnsEncodeError(t *testing.T) {
 	errEncode := errors.New("encode failed")
 
@@ -459,6 +549,16 @@ func hasCheck(checks []Check, name, status string) bool {
 		}
 	}
 	return false
+}
+
+func checkMessages(checks []Check, name string) []string {
+	messages := []string{}
+	for _, check := range checks {
+		if check.Name == name {
+			messages = append(messages, check.Message)
+		}
+	}
+	return messages
 }
 
 type failingWriter struct {

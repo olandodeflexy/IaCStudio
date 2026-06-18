@@ -157,7 +157,7 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 	defer m.inventoryMu.Unlock()
 	previous, err := m.loadInventoryUnlocked()
 	if err != nil {
-		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: err.Error()})
+		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(err)})
 		previous = persistedToolInventory{Servers: map[string]persistedServerTools{}}
 	}
 	inventory.DiscoveredAt = now.Format(time.RFC3339)
@@ -211,7 +211,7 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 		Tools:        seen,
 	}
 	if err := m.saveInventoryUnlocked(previous); err != nil {
-		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: err.Error()})
+		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(err)})
 		return inventory, nil
 	}
 	return inventory, nil
@@ -227,7 +227,7 @@ func (m *Manager) Inventory(id string) (ToolInventory, error) {
 		return ToolInventory{
 			ServerID: id,
 			Tools:    []ToolInventoryEntry{},
-			Checks:   []Check{{Name: "inventory", Status: "warn", Message: err.Error()}},
+			Checks:   []Check{{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(err)}},
 		}, nil
 	}
 	server := snapshot.Servers[id]
@@ -329,12 +329,12 @@ func decideToolWithAllowlist(serverID, project, toolName string, risk ToolRisk, 
 	if schemaReviewRequired(schemaState) {
 		if !allowlisted {
 			decision.Status = "blocked"
-			decision.Reason = schemaState + " external MCP tool schemas are blocked until re-reviewed or explicitly allowlisted"
+			decision.Reason = schemaState + " external MCP tool schemas are blocked until a later discovery confirms the same schema, or until explicitly allowlisted"
 			return decision
 		}
 		decision.Status = "approval_required"
 		decision.ApprovalRequired = true
-		decision.Reason = "allowlisted " + schemaState + " external MCP tool schemas still require explicit approval"
+		decision.Reason = "allowlisted " + schemaState + " external MCP tool schemas require explicit user approval before execution"
 		return decision
 	}
 	switch risk {
@@ -580,6 +580,56 @@ func (m *Manager) loadInventoryUnlocked() (persistedToolInventory, error) {
 		}
 	}
 	return snapshot, nil
+}
+
+func (m *Manager) publicInventoryWarning(err error) string {
+	if err == nil {
+		return "Airlock tool inventory warning"
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return "Airlock tool inventory filesystem access failed: " + publicInventoryErrorDetail(pathErr.Err)
+	}
+	var linkErr *os.LinkError
+	if errors.As(err, &linkErr) {
+		return "Airlock tool inventory replacement failed: " + publicInventoryErrorDetail(linkErr.Err)
+	}
+	message := redactOutput(err.Error())
+	message = redactInventoryLocation(message, m.inventoryPath)
+	if message == "" {
+		return "Airlock tool inventory warning"
+	}
+	return message
+}
+
+func publicInventoryErrorDetail(err error) string {
+	if err == nil {
+		return "filesystem operation failed"
+	}
+	message := redactOutput(err.Error())
+	if message == "" {
+		return "filesystem operation failed"
+	}
+	return message
+}
+
+func redactInventoryLocation(message, path string) string {
+	path = strings.TrimSpace(path)
+	if message == "" || path == "" {
+		return message
+	}
+	candidates := []string{path, filepath.Clean(path)}
+	dir := filepath.Dir(path)
+	if dir != "." {
+		candidates = append(candidates, dir, filepath.Clean(dir))
+	}
+	for _, candidate := range candidates {
+		if candidate == "" || candidate == "." {
+			continue
+		}
+		message = strings.ReplaceAll(message, candidate, "[airlock-inventory]")
+	}
+	return message
 }
 
 func (m *Manager) saveInventoryUnlocked(snapshot persistedToolInventory) error {
