@@ -158,7 +158,7 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 	previous, err := m.loadInventoryUnlocked()
 	if err != nil {
 		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: err.Error()})
-		return inventory, nil
+		previous = persistedToolInventory{Servers: map[string]persistedServerTools{}}
 	}
 	inventory.DiscoveredAt = now.Format(time.RFC3339)
 	inventory.Tools = make([]ToolInventoryEntry, 0, len(result.Tools))

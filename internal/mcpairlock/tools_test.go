@@ -128,6 +128,57 @@ func TestDiscoverToolsPreservesPersistedAllowlist(t *testing.T) {
 	}
 }
 
+func TestDiscoverToolsRecoversFromCorruptInventory(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root,
+		WithDefinitions([]ServerDefinition{{
+			ID:              "aws",
+			Name:            "AWS",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithToolDiscoverer(func(context.Context, ServerDefinition, time.Duration) DiscoveryProbeResult {
+			return DiscoveryProbeResult{Tools: []DiscoveredTool{{
+				Name:        "list_buckets",
+				Description: "List S3 buckets.",
+				InputSchema: map[string]any{"type": "object"},
+				Annotations: map[string]any{"readOnlyHint": true},
+			}}}
+		}),
+	)
+	if err := os.MkdirAll(filepath.Dir(manager.inventoryPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(manager.inventoryPath, []byte("{"), 0o600); err != nil {
+		t.Fatalf("WriteFile corrupt inventory: %v", err)
+	}
+
+	inventory, err := manager.DiscoverTools(context.Background(), "aws")
+	if err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+	if len(inventory.Tools) != 1 {
+		t.Fatalf("expected discovered tool despite corrupt inventory, got %+v", inventory.Tools)
+	}
+	if inventory.Tools[0].Name != "list_buckets" || inventory.Tools[0].SchemaState != "new" || inventory.Tools[0].Decision.Status != "blocked" {
+		t.Fatalf("expected fail-closed fresh discovery, got %+v", inventory.Tools[0])
+	}
+	if !hasCheck(inventory.Checks, "inventory", "warn") {
+		t.Fatalf("expected inventory warning check, got %+v", inventory.Checks)
+	}
+
+	stored, err := manager.Inventory("aws")
+	if err != nil {
+		t.Fatalf("Inventory after recovery: %v", err)
+	}
+	if len(stored.Tools) != 1 || stored.Tools[0].Name != "list_buckets" {
+		t.Fatalf("expected recovered inventory to be persisted, got %+v", stored.Tools)
+	}
+}
+
 func TestSetToolAllowlistCanRemoveMissingEntries(t *testing.T) {
 	manager := NewManager(t.TempDir(),
 		WithDefinitions([]ServerDefinition{{
@@ -399,6 +450,15 @@ func TestWriteToolDiscoveryRequestsReturnsCloseError(t *testing.T) {
 	if !strings.Contains(buf.String(), `"method":"tools/list"`) {
 		t.Fatalf("expected tools/list request to be written before close, got %q", buf.String())
 	}
+}
+
+func hasCheck(checks []Check, name, status string) bool {
+	for _, check := range checks {
+		if check.Name == name && check.Status == status {
+			return true
+		}
+	}
+	return false
 }
 
 type failingWriter struct {
