@@ -273,7 +273,7 @@ func (m *Manager) EvaluateTool(serverID, project, toolName string) (ToolInventor
 	}
 	snapshot, err := m.loadInventory()
 	if err != nil {
-		return ToolInventoryEntry{}, err
+		return ToolInventoryEntry{}, m.publicInventoryError(err)
 	}
 	return m.evaluateToolFromSnapshot(snapshot, serverID, project, toolName), nil
 }
@@ -292,7 +292,7 @@ func (m *Manager) SetToolAllowlist(serverID, project, toolName string, allowed b
 	defer m.inventoryMu.Unlock()
 	snapshot, err := m.loadInventoryUnlocked()
 	if err != nil {
-		return ToolInventoryEntry{}, err
+		return ToolInventoryEntry{}, m.publicInventoryError(err)
 	}
 	ensureAllowlist(&snapshot.Allowlist)
 	if allowed {
@@ -301,7 +301,7 @@ func (m *Manager) SetToolAllowlist(serverID, project, toolName string, allowed b
 		removeAllowlistTool(&snapshot.Allowlist, serverID, project, toolName)
 	}
 	if err := m.saveInventoryUnlocked(snapshot); err != nil {
-		return ToolInventoryEntry{}, err
+		return ToolInventoryEntry{}, m.publicInventoryError(err)
 	}
 	return m.evaluateToolFromSnapshot(snapshot, serverID, project, toolName), nil
 }
@@ -600,6 +600,10 @@ func (m *Manager) publicInventoryWarning(err error) string {
 		return "Airlock tool inventory warning"
 	}
 	return message
+}
+
+func (m *Manager) publicInventoryError(err error) error {
+	return errors.New(m.publicInventoryWarning(err))
 }
 
 func publicInventoryErrorDetail(err error) string {

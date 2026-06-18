@@ -224,6 +224,83 @@ func TestDiscoverToolsInventoryWarningsDoNotExposeInventoryPath(t *testing.T) {
 	}
 }
 
+func TestEvaluateToolErrorDoesNotExposeInventoryPath(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root,
+		WithDefinitions([]ServerDefinition{{
+			ID:              "aws",
+			Name:            "AWS",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+	inventoryDir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(inventoryDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manager.inventoryPath = inventoryDir
+
+	_, err := manager.EvaluateTool("aws", "", "list_buckets")
+	if err == nil {
+		t.Fatal("expected inventory load error")
+	}
+	assertInventoryErrorSanitized(t, err, root, manager.inventoryPath)
+	if !strings.Contains(err.Error(), "Airlock tool inventory filesystem access failed") {
+		t.Fatalf("expected public inventory filesystem error, got %q", err.Error())
+	}
+}
+
+func TestSetToolAllowlistLoadErrorDoesNotExposeInventoryPath(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root,
+		WithDefinitions([]ServerDefinition{{
+			ID:              "aws",
+			Name:            "AWS",
+			Command:         testExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+	inventoryDir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(inventoryDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	manager.inventoryPath = inventoryDir
+
+	_, err := manager.SetToolAllowlist("aws", "", "list_buckets", true)
+	if err == nil {
+		t.Fatal("expected inventory load error")
+	}
+	assertInventoryErrorSanitized(t, err, root, manager.inventoryPath)
+	if !strings.Contains(err.Error(), "Airlock tool inventory filesystem access failed") {
+		t.Fatalf("expected public inventory filesystem error, got %q", err.Error())
+	}
+}
+
+func TestPublicInventoryErrorDoesNotExposeSavePaths(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root)
+	manager.inventoryPath = filepath.Join(root, ".iac-studio", toolInventoryName)
+	rawErr := &os.LinkError{
+		Op:  "rename",
+		Old: manager.inventoryPath + ".tmp-123",
+		New: manager.inventoryPath,
+		Err: errors.New("permission denied"),
+	}
+
+	err := manager.publicInventoryError(rawErr)
+
+	assertInventoryErrorSanitized(t, err, root, manager.inventoryPath)
+	if !strings.Contains(err.Error(), "Airlock tool inventory replacement failed") {
+		t.Fatalf("expected public inventory replacement error, got %q", err.Error())
+	}
+}
+
 func TestSetToolAllowlistCanRemoveMissingEntries(t *testing.T) {
 	manager := NewManager(t.TempDir(),
 		WithDefinitions([]ServerDefinition{{
@@ -615,6 +692,19 @@ func checkMessages(checks []Check, name string) []string {
 		}
 	}
 	return messages
+}
+
+func assertInventoryErrorSanitized(t *testing.T, err error, sensitive ...string) {
+	t.Helper()
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	message := err.Error()
+	for _, value := range sensitive {
+		if value != "" && strings.Contains(message, value) {
+			t.Fatalf("inventory error leaked %q in %q", value, message)
+		}
+	}
 }
 
 type failingWriter struct {
