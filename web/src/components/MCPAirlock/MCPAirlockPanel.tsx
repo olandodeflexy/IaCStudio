@@ -187,7 +187,7 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
                 const discovering = discoveringId === status.server.id;
                 const startDisabled = busy || status.running || !status.command_available;
                 const stopDisabled = busy || !status.running;
-                const discoverDisabled = discovering || !canDiscoverTools(status.state);
+                const discoverDisabled = busy || discovering || !canDiscoverTools(status.state);
                 return (
               <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">

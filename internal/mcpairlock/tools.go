@@ -682,7 +682,17 @@ func writeFileAtomic(path string, data []byte) error {
 		return fmt.Errorf("replace inventory file: %w", err)
 	}
 	keepTemp = false
+	syncDirBestEffort(dir)
 	return nil
+}
+
+func syncDirBestEffort(dir string) {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer func() { _ = handle.Close() }()
+	_ = handle.Sync()
 }
 
 func inventoryPath(projectsDir string) string {
