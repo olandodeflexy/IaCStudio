@@ -1,11 +1,16 @@
 package cloudconnections
 
 import (
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -18,6 +23,13 @@ const (
 	ProviderAWS   = "aws"
 	ProviderAzure = "azure"
 	ProviderGCP   = "gcp"
+
+	connectionsFileName       = ".iac-studio-connections.json"
+	connectionsKeyFileName    = ".iac-studio-connections.key"
+	connectionsKeyEnv         = "IAC_STUDIO_CONNECTIONS_KEY"
+	encryptedSecretPrefix     = "iacstudio:v1:"
+	encryptedSecretNonceSize  = 12
+	generatedSecretKeyByteLen = 32
 )
 
 var providerAuthMethods = map[string][]string{
@@ -90,12 +102,16 @@ type Check struct {
 }
 
 type Manager struct {
-	path string
-	mu   sync.RWMutex
+	path    string
+	keyPath string
+	mu      sync.RWMutex
 }
 
 func NewManager(projectsDir string) *Manager {
-	return &Manager{path: filepath.Join(projectsDir, ".iac-studio-connections.json")}
+	return &Manager{
+		path:    filepath.Join(projectsDir, connectionsFileName),
+		keyPath: filepath.Join(projectsDir, connectionsKeyFileName),
+	}
 }
 
 func SupportedAuthMethods(provider string) []string {
@@ -288,31 +304,53 @@ func (m *Manager) Test(id string) (TestResult, error) {
 }
 
 func (m *Manager) load() ([]Connection, error) {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.loadUnlocked()
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	connections, needsMigration, err := m.loadUnlockedWithMigrationFlag()
+	if err != nil {
+		return nil, err
+	}
+	if needsMigration {
+		if err := m.saveUnlocked(connections); err != nil {
+			return nil, err
+		}
+	}
+	return connections, nil
 }
 
 func (m *Manager) loadUnlocked() ([]Connection, error) {
+	connections, _, err := m.loadUnlockedWithMigrationFlag()
+	return connections, err
+}
+
+func (m *Manager) loadUnlockedWithMigrationFlag() ([]Connection, bool, error) {
 	data, err := os.ReadFile(m.path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []Connection{}, nil
+			return []Connection{}, false, nil
 		}
-		return nil, fmt.Errorf("read cloud connections: %w", err)
+		return nil, false, fmt.Errorf("read cloud connections: %w", err)
 	}
 	var connections []Connection
 	if err := json.Unmarshal(data, &connections); err != nil {
-		return nil, fmt.Errorf("parse cloud connections: %w", err)
+		return nil, false, fmt.Errorf("parse cloud connections: %w", err)
 	}
-	return connections, nil
+	needsMigration, err := m.decryptConnectionSecrets(connections)
+	if err != nil {
+		return nil, false, err
+	}
+	return connections, needsMigration, nil
 }
 
 func (m *Manager) saveUnlocked(connections []Connection) error {
 	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
 		return fmt.Errorf("create cloud connections directory: %w", err)
 	}
-	data, err := json.MarshalIndent(connections, "", "  ")
+	persisted, err := m.encryptConnectionSecrets(connections)
+	if err != nil {
+		return err
+	}
+	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal cloud connections: %w", err)
 	}
@@ -320,6 +358,152 @@ func (m *Manager) saveUnlocked(connections []Connection) error {
 		return fmt.Errorf("write cloud connections: %w", err)
 	}
 	return nil
+}
+
+func (m *Manager) encryptConnectionSecrets(connections []Connection) ([]Connection, error) {
+	out := make([]Connection, 0, len(connections))
+	var key []byte
+	for _, connection := range connections {
+		next := connection
+		next.Metadata = cloneMap(connection.Metadata)
+		next.Secrets = cloneMap(connection.Secrets)
+		for name, value := range next.Secrets {
+			if strings.TrimSpace(value) == "" || isEncryptedSecret(value) {
+				continue
+			}
+			if key == nil {
+				loaded, err := m.encryptionKey()
+				if err != nil {
+					return nil, err
+				}
+				key = loaded
+			}
+			encrypted, err := encryptSecretValue(key, value)
+			if err != nil {
+				return nil, fmt.Errorf("encrypt cloud connection secret %q: %w", name, err)
+			}
+			next.Secrets[name] = encrypted
+		}
+		out = append(out, next)
+	}
+	return out, nil
+}
+
+func (m *Manager) decryptConnectionSecrets(connections []Connection) (bool, error) {
+	var key []byte
+	needsMigration := false
+	for index := range connections {
+		for name, value := range connections[index].Secrets {
+			if !isEncryptedSecret(value) {
+				if strings.TrimSpace(value) != "" {
+					needsMigration = true
+				}
+				continue
+			}
+			if key == nil {
+				loaded, err := m.encryptionKey()
+				if err != nil {
+					return false, err
+				}
+				key = loaded
+			}
+			plaintext, err := decryptSecretValue(key, value)
+			if err != nil {
+				return false, fmt.Errorf("decrypt cloud connection secret %q: %w", name, err)
+			}
+			connections[index].Secrets[name] = plaintext
+		}
+	}
+	return needsMigration, nil
+}
+
+func (m *Manager) encryptionKey() ([]byte, error) {
+	if passphrase := strings.TrimSpace(os.Getenv(connectionsKeyEnv)); passphrase != "" {
+		sum := sha256.Sum256([]byte(passphrase))
+		return sum[:], nil
+	}
+	return loadOrCreateLocalKey(m.keyPath)
+}
+
+func loadOrCreateLocalKey(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err == nil {
+		decoded, decodeErr := hex.DecodeString(strings.TrimSpace(string(data)))
+		if decodeErr != nil || len(decoded) != generatedSecretKeyByteLen {
+			return nil, fmt.Errorf("read cloud connections key: invalid key material")
+		}
+		return decoded, nil
+	}
+	if !os.IsNotExist(err) {
+		return nil, fmt.Errorf("read cloud connections key: %w", err)
+	}
+
+	key := make([]byte, generatedSecretKeyByteLen)
+	if _, err := io.ReadFull(rand.Reader, key); err != nil {
+		return nil, fmt.Errorf("generate cloud connections key: %w", err)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return nil, fmt.Errorf("create cloud connections key directory: %w", err)
+	}
+	if err := writeFileAtomic(path, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
+		return nil, fmt.Errorf("write cloud connections key: %w", err)
+	}
+	return key, nil
+}
+
+func isEncryptedSecret(value string) bool {
+	return strings.HasPrefix(value, encryptedSecretPrefix)
+}
+
+func encryptSecretValue(key []byte, plaintext string) (string, error) {
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	nonce := make([]byte, encryptedSecretNonceSize)
+	if _, err := io.ReadFull(rand.Reader, nonce); err != nil {
+		return "", err
+	}
+	ciphertext := gcm.Seal(nil, nonce, []byte(plaintext), nil)
+	return encryptedSecretPrefix +
+		base64.RawURLEncoding.EncodeToString(nonce) + ":" +
+		base64.RawURLEncoding.EncodeToString(ciphertext), nil
+}
+
+func decryptSecretValue(key []byte, value string) (string, error) {
+	encoded := strings.TrimPrefix(value, encryptedSecretPrefix)
+	nonceText, ciphertextText, ok := strings.Cut(encoded, ":")
+	if !ok {
+		return "", errors.New("invalid encrypted secret envelope")
+	}
+	nonce, err := base64.RawURLEncoding.DecodeString(nonceText)
+	if err != nil {
+		return "", fmt.Errorf("decode nonce: %w", err)
+	}
+	if len(nonce) != encryptedSecretNonceSize {
+		return "", errors.New("invalid nonce length")
+	}
+	ciphertext, err := base64.RawURLEncoding.DecodeString(ciphertextText)
+	if err != nil {
+		return "", fmt.Errorf("decode ciphertext: %w", err)
+	}
+	block, err := aes.NewCipher(key)
+	if err != nil {
+		return "", err
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		return "", err
+	}
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	if err != nil {
+		return "", errors.New("authentication failed")
+	}
+	return string(plaintext), nil
 }
 
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {

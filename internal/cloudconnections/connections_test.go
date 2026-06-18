@@ -49,8 +49,115 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read persisted file: %v", err)
 	}
-	if !contains(string(data), "super-secret") {
-		t.Fatal("expected secret to persist for later runner use")
+	if contains(string(data), "super-secret") {
+		t.Fatal("secret should be encrypted at rest, but plaintext was found")
+	}
+	if !contains(string(data), encryptedSecretPrefix) {
+		t.Fatalf("expected encrypted secret envelope in persisted file: %s", string(data))
+	}
+
+	stored, err := manager.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
+		t.Fatalf("stored secret should decrypt for runner use, got %q", got)
+	}
+}
+
+func TestManagerReadsLegacyPlaintextSecrets(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	legacy := `[{
+		"id":"conn_legacy",
+		"name":"legacy",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secrets":{"secret_access_key":"legacy-secret"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+
+	stored, err := manager.Get("conn_legacy")
+	if err != nil {
+		t.Fatalf("Get legacy: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "legacy-secret" {
+		t.Fatalf("legacy plaintext secret should remain readable, got %q", got)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read migrated file: %v", err)
+	}
+	if contains(string(data), "legacy-secret") {
+		t.Fatal("legacy plaintext secret should be migrated to encrypted storage after read")
+	}
+	if !contains(string(data), encryptedSecretPrefix) {
+		t.Fatalf("migrated file should contain encrypted envelope: %s", string(data))
+	}
+}
+
+func TestManagerConnectionKeyFileMode(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	if _, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	info, err := os.Stat(manager.keyPath)
+	if err != nil {
+		t.Fatalf("stat key file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("connection key file mode should be 0600, got %o", got)
+	}
+	keyData, err := os.ReadFile(manager.keyPath)
+	if err != nil {
+		t.Fatalf("read key file: %v", err)
+	}
+	if len(strings.TrimSpace(string(keyData))) != generatedSecretKeyByteLen*2 {
+		t.Fatalf("key file should contain hex encoded 256-bit key, got %q", string(keyData))
+	}
+}
+
+func TestManagerCanUseEnvironmentEncryptionKey(t *testing.T) {
+	t.Setenv(connectionsKeyEnv, "stable-deployment-key")
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	created, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(manager.keyPath); !os.IsNotExist(err) {
+		t.Fatalf("env-key mode should not create local key file, err=%v", err)
+	}
+
+	reloaded := NewManager(dir)
+	stored, err := reloaded.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get with env key: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
+		t.Fatalf("env key should decrypt stored secret, got %q", got)
 	}
 }
 

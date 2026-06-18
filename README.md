@@ -203,12 +203,14 @@ IaC Studio runs locally and is designed to be secure by default:
 - **Review-branch handoff** — drift and rollback PR workflows create local branches that commit only generated `.iac-studio/remediations` or `.iac-studio/rollbacks` artifacts, reject unrelated dirty source files, and return explicit `git push` / `gh pr create` commands instead of collecting GitHub tokens
 - **MCP approval and audit** — AI clients can inspect and propose, while mutating or high-risk MCP tools require explicit approval and are logged to `.iac-studio/mcp-audit.jsonl`
 - **Cloud target checks** — selected Cloud Connections are tested before command execution
-- **Secret redaction** — static credentials are not echoed in API responses, terminal messages, or generated IaC
+- **Encrypted local secrets** — Cloud Connection secret fields are encrypted at rest and never echoed in API responses, terminal messages, or generated IaC
 - **No telemetry** — zero data collection, no phone-home
 
 Cloud Connections support AWS profiles and SSO, Azure CLI login, and gcloud auth
 as the preferred paths. Static AWS keys, Azure service principals, and GCP
-service account JSON are available as explicit fallback paths. See
+service account JSON are available as explicit fallback paths; their secret
+fields are encrypted in `.iac-studio-connections.json` using a local key file
+or `IAC_STUDIO_CONNECTIONS_KEY` when you need a stable deployment key. See
 [QUICKSTART.md](QUICKSTART.md#cloud-connections) and the
 [published docs](https://olandodeflexy.github.io/IaCStudio/#cloud-connections)
 for the full workflow.
