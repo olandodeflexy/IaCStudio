@@ -1944,6 +1944,11 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	})
 
 	mux.HandleFunc("POST /api/mcp-airlock/servers/{id}/tools/discover", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		if _, err := io.Copy(io.Discard, r.Body); err != nil {
+			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+			return
+		}
 		inventory, err := mcpAirlock.DiscoverTools(r.Context(), r.PathValue("id"))
 		if err != nil {
 			if errors.Is(err, mcpairlock.ErrUnknownServer) {

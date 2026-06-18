@@ -183,6 +183,7 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
                 const discovering = discoveringId === status.server.id;
                 const startDisabled = busy || status.running || !status.command_available;
                 const stopDisabled = busy || !status.running;
+                const discoverDisabled = discovering || status.state !== 'available';
                 return (
               <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
@@ -213,7 +214,7 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
                     variant="secondary"
                     className="h-7 px-2 text-[10px]"
                     onClick={() => discover(status.server.id)}
-                    disabled={discovering || !status.command_available}
+                    disabled={discoverDisabled}
                   >
                     {discovering ? '...' : 'Tools'}
                   </Button>

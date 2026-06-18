@@ -234,6 +234,44 @@ func TestMCPAirlockToolRoutesDiscoverAndEvaluateFirewall(t *testing.T) {
 	}
 }
 
+func TestMCPAirlockDiscoverRouteRejectsOversizedBody(t *testing.T) {
+	root := t.TempDir()
+	called := false
+	manager := mcpairlock.NewManager(root,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         apiTestExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		mcpairlock.WithToolDiscoverer(func(context.Context, mcpairlock.ServerDefinition, time.Duration) mcpairlock.DiscoveryProbeResult {
+			called = true
+			return mcpairlock.DiscoveryProbeResult{}
+		}),
+	)
+	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
+	defer srv.Close()
+
+	resp, err := http.Post(
+		srv.URL+"/api/mcp-airlock/servers/terraform/tools/discover",
+		"application/json",
+		strings.NewReader(strings.Repeat("x", maxRequestBody+1)),
+	)
+	if err != nil {
+		t.Fatalf("POST discover oversized: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("expected 413, got %d", resp.StatusCode)
+	}
+	if called {
+		t.Fatal("expected oversized body to be rejected before tool discovery")
+	}
+}
+
 func TestMCPAirlockToolRoutesReturnArrayJSONForEmptyInventory(t *testing.T) {
 	root := t.TempDir()
 	manager := mcpairlock.NewManager(root,

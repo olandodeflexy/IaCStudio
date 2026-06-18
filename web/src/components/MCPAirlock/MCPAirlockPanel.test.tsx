@@ -188,4 +188,29 @@ describe('MCPAirlockPanel', () => {
     expect(screen.getByText('cloud mutation')).toBeInTheDocument();
     expect(screen.getByText('blocked')).toBeInTheDocument();
   });
+
+  it('disables tool discovery until the server is available', async () => {
+    const initial = server({
+      command_available: true,
+      state: 'ready',
+      summary: 'Health check completed without exposing cloud credentials.',
+    });
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      startMCPAirlockServer: vi.fn(async () => initial),
+      stopMCPAirlockServer: vi.fn(async () => initial),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+
+    const toolsButton = await screen.findByRole('button', { name: 'Tools' });
+    expect(toolsButton).toBeDisabled();
+
+    fireEvent.click(toolsButton);
+
+    expect(client.discoverMCPAirlockTools).not.toHaveBeenCalled();
+  });
 });
