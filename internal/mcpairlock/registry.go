@@ -106,9 +106,10 @@ type Manager struct {
 	lifecycle     *lifecycleStore
 }
 
-// NewManager creates an Airlock registry. projectsDir is accepted for future
-// per-project allowlists, but the first slice only serves built-in trusted
-// definitions and optional process environment command overrides.
+// NewManager creates an Airlock registry. When projectsDir is set, Airlock
+// persists tool inventory and allowlists under the project's .iac-studio
+// directory. Definitions remain limited to trusted built-ins and explicit
+// process environment command overrides.
 func NewManager(projectsDir string, opts ...Option) *Manager {
 	m := &Manager{
 		definitions:   builtInDefinitions(),

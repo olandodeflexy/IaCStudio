@@ -291,6 +291,7 @@ func (s *Server) handleCallMCPAirlockTool(_ context.Context, raw json.RawMessage
 	if entry.Decision.ApprovalRequired {
 		audit.Approved = true
 	}
+	audit.Decision = "allowed"
 	return toolResponse{
 		Result: structuredResult(map[string]any{
 			"status":    "firewall_allowed",
@@ -299,7 +300,7 @@ func (s *Server) handleCallMCPAirlockTool(_ context.Context, raw json.RawMessage
 			"arguments": "withheld",
 			"next_step": "External execution is intentionally deferred until the Cloud Connections credential broker is active.",
 		}),
-		Audit: AuditDecision{Tool: "call_mcp_airlock_tool", Project: args.Project, ApprovalRequired: entry.Decision.ApprovalRequired, Approved: audit.Approved, Decision: "allowed"},
+		Audit: audit,
 	}
 }
 
