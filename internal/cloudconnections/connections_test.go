@@ -161,6 +161,37 @@ func TestManagerCanUseEnvironmentEncryptionKey(t *testing.T) {
 	}
 }
 
+func TestManagerWrongEncryptionKeyReturnsRemediation(t *testing.T) {
+	t.Setenv(connectionsKeyEnv, "original-deployment-key")
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	created, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	t.Setenv(connectionsKeyEnv, "rotated-deployment-key")
+	reloaded := NewManager(dir)
+	_, err = reloaded.Get(created.ID)
+	if err == nil {
+		t.Fatal("expected wrong encryption key to fail closed")
+	}
+	message := err.Error()
+	if !strings.Contains(message, connectionsKeyEnv) || !strings.Contains(message, connectionsKeyFileName) {
+		t.Fatalf("expected key remediation in decrypt error, got %q", message)
+	}
+	if strings.Contains(message, "super-secret") {
+		t.Fatalf("decrypt error leaked plaintext secret: %q", message)
+	}
+}
+
 func TestManagerKeepsExistingSecretOnMaskedUpdate(t *testing.T) {
 	manager := NewManager(t.TempDir())
 

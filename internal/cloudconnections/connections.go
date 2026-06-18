@@ -501,7 +501,7 @@ func decryptSecretValue(key []byte, value string) (string, error) {
 	}
 	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
 	if err != nil {
-		return "", errors.New("authentication failed")
+		return "", errors.New("encrypted secret authentication failed; verify " + connectionsKeyEnv + " or " + connectionsKeyFileName + " matches the key used to encrypt this connections file")
 	}
 	return string(plaintext), nil
 }

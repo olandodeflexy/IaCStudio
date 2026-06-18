@@ -163,9 +163,10 @@ Use them like this:
 6. Confirm the selected target appears in the header before running `Plan` or `Apply`.
 
 Secret fields are encrypted locally before they are written to
-`.iac-studio-connections.json`. By default IaC Studio creates a
+`.iac-studio-connections.json`. When a saved connection contains secret fields
+and `IAC_STUDIO_CONNECTIONS_KEY` is not set, IaC Studio creates a
 `.iac-studio-connections.key` file next to the connections file with `0600`
-permissions; set `IAC_STUDIO_CONNECTIONS_KEY` if you need a stable key for
+permissions. Set `IAC_STUDIO_CONNECTIONS_KEY` if you need a stable key for
 container redeploys or backups. API responses, WebSocket terminal messages, and
 generated IaC files do not echo secret values.
 
