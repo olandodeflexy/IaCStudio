@@ -154,7 +154,7 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 
 	now := time.Now().UTC()
 	inventory.DiscoveredAt = now.Format(time.RFC3339)
-	if err := m.updateInventory(func(previous *persistedToolInventory, loadErr error) error {
+	if err := m.updateInventoryAtomically(func(previous *persistedToolInventory, loadErr error) error {
 		if loadErr != nil {
 			inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(loadErr)})
 			*previous = persistedToolInventory{Servers: map[string]persistedServerTools{}}
@@ -288,7 +288,7 @@ func (m *Manager) SetToolAllowlist(serverID, project, toolName string, allowed b
 		return ToolInventoryEntry{}, errors.New("tool_name is required")
 	}
 	var snapshot persistedToolInventory
-	if err := m.updateInventory(func(next *persistedToolInventory, loadErr error) error {
+	if err := m.updateInventoryAtomically(func(next *persistedToolInventory, loadErr error) error {
 		if loadErr != nil {
 			return loadErr
 		}
@@ -551,9 +551,10 @@ func (m *Manager) loadInventory() (persistedToolInventory, error) {
 	return m.loadInventoryUnlocked()
 }
 
-// updateInventory holds one lock across load, mutation, and save so overlapping
-// discovery and allowlist updates cannot drop each other's persisted changes.
-func (m *Manager) updateInventory(update func(*persistedToolInventory, error) error) error {
+// updateInventoryAtomically holds one lock across load, mutation, and save so
+// overlapping discovery and allowlist updates cannot drop each other's
+// persisted changes.
+func (m *Manager) updateInventoryAtomically(update func(*persistedToolInventory, error) error) error {
 	m.inventoryMu.Lock()
 	defer m.inventoryMu.Unlock()
 
