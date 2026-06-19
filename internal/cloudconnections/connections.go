@@ -469,10 +469,50 @@ func loadOrCreateLocalKey(path string) ([]byte, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create cloud connections key directory: %w", err)
 	}
-	if err := writeFileAtomic(path, []byte(hex.EncodeToString(key)+"\n"), 0o600); err != nil {
+	if err := writeNewLocalKey(path, key); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			if err := ensureLocalKeyFileMode(path); err != nil {
+				return nil, err
+			}
+			return readLocalKey(path)
+		}
 		return nil, fmt.Errorf("write cloud connections key: %w", err)
 	}
 	return key, nil
+}
+
+func writeNewLocalKey(path string, key []byte) (err error) {
+	dir := filepath.Dir(path)
+	file, err := os.CreateTemp(dir, filepath.Base(path)+".*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpPath := file.Name()
+	cleanup := true
+	defer func() {
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+		if cleanup {
+			_ = os.Remove(tmpPath)
+		}
+	}()
+
+	if err = file.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err = file.WriteString(hex.EncodeToString(key) + "\n"); err != nil {
+		return err
+	}
+	if err = file.Sync(); err != nil {
+		return err
+	}
+	if err = os.Link(tmpPath, path); err != nil {
+		return err
+	}
+	syncDirBestEffort(filepath.Dir(path))
+	cleanup = false
+	return nil
 }
 
 func loadExistingLocalKey(path string) ([]byte, error) {

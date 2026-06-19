@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -286,6 +287,50 @@ func TestManagerRejectsSymlinkedConnectionKey(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o644 {
 		t.Fatalf("symlink target should not be chmodded, got %o", got)
+	}
+}
+
+func TestLoadOrCreateLocalKeyReturnsSingleKeyAcrossConcurrentCreators(t *testing.T) {
+	for attempt := 0; attempt < 20; attempt++ {
+		dir := t.TempDir()
+		keyPath := filepath.Join(dir, connectionsKeyFileName)
+		const workers = 8
+		start := make(chan struct{})
+		results := make(chan string, workers)
+		errs := make(chan error, workers)
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for i := 0; i < workers; i++ {
+			go func() {
+				defer wg.Done()
+				<-start
+				key, err := loadOrCreateLocalKey(keyPath)
+				if err != nil {
+					errs <- err
+					return
+				}
+				results <- string(key)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+		close(errs)
+
+		for err := range errs {
+			t.Fatalf("loadOrCreateLocalKey: %v", err)
+		}
+
+		var first string
+		for key := range results {
+			if first == "" {
+				first = key
+				continue
+			}
+			if key != first {
+				t.Fatal("concurrent key creators should all return the same key material")
+			}
+		}
 	}
 }
 
