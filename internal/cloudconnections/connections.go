@@ -513,7 +513,7 @@ func ensureLocalKeyFileMode(path string) error {
 		return nil
 	}
 	if err := os.Chmod(path, 0o600); err != nil {
-		return fmt.Errorf("cloud connections key permissions are too broad (%o); set %s to 0600: %w", info.Mode().Perm(), connectionsKeyFileName, err)
+		return fmt.Errorf("cloud connections key permissions are too broad (%o); tighten %s permissions to 0600: %w", info.Mode().Perm(), connectionsKeyFileName, err)
 	}
 	return nil
 }

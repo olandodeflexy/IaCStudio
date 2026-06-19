@@ -46,7 +46,7 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 		t.Fatal("secret_access_key leaked into public metadata")
 	}
 
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(manager.path), ".iac-studio-connections.json"))
+	data, err := os.ReadFile(manager.path)
 	if err != nil {
 		t.Fatalf("read persisted file: %v", err)
 	}
