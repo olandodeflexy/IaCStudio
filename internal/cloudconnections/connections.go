@@ -383,7 +383,7 @@ func (m *Manager) encryptConnectionSecrets(connections []Connection) ([]Connecti
 				continue
 			}
 			if key == nil {
-				loaded, err := m.encryptionKey()
+				loaded, err := m.encryptionKeyForEncrypt()
 				if err != nil {
 					return nil, err
 				}
@@ -412,7 +412,7 @@ func (m *Manager) decryptConnectionSecrets(connections []Connection) (bool, erro
 				continue
 			}
 			if key == nil {
-				loaded, err := m.encryptionKey()
+				loaded, err := m.encryptionKeyForDecrypt()
 				if err != nil {
 					return false, err
 				}
@@ -428,25 +428,35 @@ func (m *Manager) decryptConnectionSecrets(connections []Connection) (bool, erro
 	return needsMigration, nil
 }
 
-func (m *Manager) encryptionKey() ([]byte, error) {
-	if passphrase := strings.TrimSpace(os.Getenv(connectionsKeyEnv)); passphrase != "" {
-		sum := sha256.Sum256([]byte(passphrase))
-		return sum[:], nil
+func (m *Manager) encryptionKeyForEncrypt() ([]byte, error) {
+	if key, ok := environmentEncryptionKey(); ok {
+		return key, nil
 	}
 	return loadOrCreateLocalKey(m.keyPath)
+}
+
+func (m *Manager) encryptionKeyForDecrypt() ([]byte, error) {
+	if key, ok := environmentEncryptionKey(); ok {
+		return key, nil
+	}
+	return loadExistingLocalKey(m.keyPath)
+}
+
+func environmentEncryptionKey() ([]byte, bool) {
+	passphrase := strings.TrimSpace(os.Getenv(connectionsKeyEnv))
+	if passphrase == "" {
+		return nil, false
+	}
+	sum := sha256.Sum256([]byte(passphrase))
+	key := make([]byte, len(sum))
+	copy(key, sum[:])
+	return key, true
 }
 
 func loadOrCreateLocalKey(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
-		if err := ensureLocalKeyFileMode(path); err != nil {
-			return nil, err
-		}
-		decoded, decodeErr := hex.DecodeString(strings.TrimSpace(string(data)))
-		if decodeErr != nil || len(decoded) != generatedSecretKeyByteLen {
-			return nil, fmt.Errorf("read cloud connections key: invalid key material")
-		}
-		return decoded, nil
+		return decodeLocalKey(path, data)
 	}
 	if !os.IsNotExist(err) {
 		return nil, fmt.Errorf("read cloud connections key: %w", err)
@@ -463,6 +473,28 @@ func loadOrCreateLocalKey(path string) ([]byte, error) {
 		return nil, fmt.Errorf("write cloud connections key: %w", err)
 	}
 	return key, nil
+}
+
+func loadExistingLocalKey(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("read cloud connections key: missing key material; set %s or restore %s before reading encrypted cloud connections", connectionsKeyEnv, connectionsKeyFileName)
+		}
+		return nil, fmt.Errorf("read cloud connections key: %w", err)
+	}
+	return decodeLocalKey(path, data)
+}
+
+func decodeLocalKey(path string, data []byte) ([]byte, error) {
+	if err := ensureLocalKeyFileMode(path); err != nil {
+		return nil, err
+	}
+	decoded, decodeErr := hex.DecodeString(strings.TrimSpace(string(data)))
+	if decodeErr != nil || len(decoded) != generatedSecretKeyByteLen {
+		return nil, fmt.Errorf("read cloud connections key: invalid key material")
+	}
+	return decoded, nil
 }
 
 func ensureLocalKeyFileMode(path string) error {

@@ -249,6 +249,41 @@ func TestManagerWrongEncryptionKeyReturnsRemediation(t *testing.T) {
 	}
 }
 
+func TestManagerMissingLocalKeyDoesNotCreateReplacementOnDecrypt(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	created, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := os.Remove(manager.keyPath); err != nil {
+		t.Fatalf("remove local key file: %v", err)
+	}
+
+	reloaded := NewManager(dir)
+	_, err = reloaded.Get(created.ID)
+	if err == nil {
+		t.Fatal("expected missing local encryption key to fail closed")
+	}
+	message := err.Error()
+	if !strings.Contains(message, connectionsKeyEnv) || !strings.Contains(message, connectionsKeyFileName) {
+		t.Fatalf("expected missing key remediation in decrypt error, got %q", message)
+	}
+	if strings.Contains(message, "super-secret") {
+		t.Fatalf("decrypt error leaked plaintext secret: %q", message)
+	}
+	if _, err := os.Stat(reloaded.keyPath); !os.IsNotExist(err) {
+		t.Fatalf("decrypt should not create a replacement local key file, stat err=%v", err)
+	}
+}
+
 func TestManagerKeepsExistingSecretOnMaskedUpdate(t *testing.T) {
 	manager := NewManager(t.TempDir())
 
