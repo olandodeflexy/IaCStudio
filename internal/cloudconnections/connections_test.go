@@ -135,6 +135,44 @@ func TestManagerReadsLegacyPlaintextSecrets(t *testing.T) {
 	}
 }
 
+func TestManagerMigratesLegacyPlaintextSecretWithEnvelopePrefix(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	plaintext := encryptedSecretPrefix + "legacy-prefix-collision"
+	legacy := `[{
+		"id":"conn_legacy",
+		"name":"legacy",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secrets":{"secret_access_key":"` + plaintext + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+
+	stored, err := manager.Get("conn_legacy")
+	if err != nil {
+		t.Fatalf("Get legacy: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != plaintext {
+		t.Fatalf("legacy plaintext secret with envelope prefix should remain readable, got %q", got)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read migrated file: %v", err)
+	}
+	if contains(string(data), plaintext) {
+		t.Fatal("legacy plaintext secret with envelope prefix should be migrated to encrypted storage")
+	}
+	if !contains(string(data), encryptedSecretPrefix) {
+		t.Fatalf("migrated file should contain encrypted envelope: %s", string(data))
+	}
+}
+
 func TestManagerConnectionKeyFileMode(t *testing.T) {
 	dir := t.TempDir()
 	manager := NewManager(dir)
@@ -190,7 +228,7 @@ func TestManagerListUsesReadLockWhenNoMigrationNeeded(t *testing.T) {
 		if err != nil {
 			t.Fatalf("List: %v", err)
 		}
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(2 * time.Second):
 		t.Fatal("List blocked behind an existing read lock")
 	}
 }

@@ -519,7 +519,22 @@ func ensureLocalKeyFileMode(path string) error {
 }
 
 func isEncryptedSecret(value string) bool {
-	return strings.HasPrefix(value, encryptedSecretPrefix)
+	if !strings.HasPrefix(value, encryptedSecretPrefix) {
+		return false
+	}
+	encoded := strings.TrimPrefix(value, encryptedSecretPrefix)
+	nonceText, ciphertextText, ok := strings.Cut(encoded, ":")
+	if !ok || nonceText == "" || ciphertextText == "" {
+		return false
+	}
+	nonce, err := base64.RawURLEncoding.DecodeString(nonceText)
+	if err != nil || len(nonce) != encryptedSecretNonceSize {
+		return false
+	}
+	if _, err := base64.RawURLEncoding.DecodeString(ciphertextText); err != nil {
+		return false
+	}
+	return true
 }
 
 func encryptSecretValue(key []byte, plaintext string) (string, error) {
