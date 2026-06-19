@@ -524,11 +524,14 @@ gcloud config set project my-platform-dev</code></pre>
           <h3>Secret handling</h3>
           <div class="feature-grid compact">
             <article>
-              <h3>Stored locally</h3>
+              <h3>Encrypted locally</h3>
               <p>
                 Connections are saved under the configured projects directory in
-                <code>.iac-studio-connections.json</code>. Treat this as a local secret file
-                when static credentials or service account JSON are used.
+                <code>.iac-studio-connections.json</code>. Secret fields are encrypted before
+                they are written. When a connection contains secret fields and
+                <code>IAC_STUDIO_CONNECTIONS_KEY</code> is not set, IaC Studio creates a local
+                <code>.iac-studio-connections.key</code> file; set
+                <code>IAC_STUDIO_CONNECTIONS_KEY</code> for a stable deployment key.
               </p>
             </article>
             <article>
@@ -1111,7 +1114,7 @@ ollama pull qwen2.5-coder:7b</code></pre>
             </details>
             <details>
               <summary>Where are cloud connection credentials stored?</summary>
-              <p>Named connections are stored locally in <code>.iac-studio-connections.json</code> under your configured projects directory. API responses redact secret values.</p>
+              <p>Named connections are stored locally in <code>.iac-studio-connections.json</code> under your configured projects directory. Secret fields are encrypted before write. IaC Studio creates a local <code>.iac-studio-connections.key</code> file only when a saved connection has secret fields and <code>IAC_STUDIO_CONNECTIONS_KEY</code> is not set; use <code>IAC_STUDIO_CONNECTIONS_KEY</code> when you need a stable key. API responses redact secret values.</p>
             </details>
             <details>
               <summary>Does it send telemetry?</summary>

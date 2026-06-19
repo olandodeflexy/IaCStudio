@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestManagerRedactsStaticSecrets(t *testing.T) {
@@ -45,12 +47,408 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 		t.Fatal("secret_access_key leaked into public metadata")
 	}
 
-	data, err := os.ReadFile(filepath.Join(filepath.Dir(manager.path), ".iac-studio-connections.json"))
+	data, err := os.ReadFile(manager.path)
 	if err != nil {
 		t.Fatalf("read persisted file: %v", err)
 	}
-	if !contains(string(data), "super-secret") {
-		t.Fatal("expected secret to persist for later runner use")
+	if contains(string(data), "super-secret") {
+		t.Fatal("secret should be encrypted at rest, but plaintext was found")
+	}
+	if !contains(string(data), encryptedSecretPrefix) {
+		t.Fatalf("expected encrypted secret envelope in persisted file: %s", string(data))
+	}
+
+	stored, err := manager.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
+		t.Fatalf("stored secret should decrypt for runner use, got %q", got)
+	}
+}
+
+func TestManagerEncryptsUserSecretWithEnvelopePrefix(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	plaintext := encryptedSecretPrefix + "user-supplied-secret"
+
+	created, err := manager.Save(Connection{
+		Name:       "prefixed-secret",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": plaintext},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read persisted file: %v", err)
+	}
+	if contains(string(data), plaintext) {
+		t.Fatal("secret with envelope prefix should still be encrypted at rest")
+	}
+
+	stored, err := manager.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != plaintext {
+		t.Fatalf("prefixed secret should decrypt to original value, got %q", got)
+	}
+}
+
+func TestManagerReadsLegacyPlaintextSecrets(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	legacy := `[{
+		"id":"conn_legacy",
+		"name":"legacy",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secrets":{"secret_access_key":"legacy-secret"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+
+	stored, err := manager.Get("conn_legacy")
+	if err != nil {
+		t.Fatalf("Get legacy: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "legacy-secret" {
+		t.Fatalf("legacy plaintext secret should remain readable, got %q", got)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read migrated file: %v", err)
+	}
+	if contains(string(data), "legacy-secret") {
+		t.Fatal("legacy plaintext secret should be migrated to encrypted storage after read")
+	}
+	if !contains(string(data), encryptedSecretPrefix) {
+		t.Fatalf("migrated file should contain encrypted envelope: %s", string(data))
+	}
+}
+
+func TestManagerMigratesLegacyPlaintextSecretWithEnvelopePrefix(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	plaintext := encryptedSecretPrefix + "legacy-prefix-collision"
+	legacy := `[{
+		"id":"conn_legacy",
+		"name":"legacy",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secrets":{"secret_access_key":"` + plaintext + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(legacy), 0o600); err != nil {
+		t.Fatalf("write legacy file: %v", err)
+	}
+
+	stored, err := manager.Get("conn_legacy")
+	if err != nil {
+		t.Fatalf("Get legacy: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != plaintext {
+		t.Fatalf("legacy plaintext secret with envelope prefix should remain readable, got %q", got)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read migrated file: %v", err)
+	}
+	if contains(string(data), plaintext) {
+		t.Fatal("legacy plaintext secret with envelope prefix should be migrated to encrypted storage")
+	}
+	if !contains(string(data), encryptedSecretPrefix) {
+		t.Fatalf("migrated file should contain encrypted envelope: %s", string(data))
+	}
+}
+
+func TestManagerConnectionKeyFileMode(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	if _, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	info, err := os.Stat(manager.keyPath)
+	if err != nil {
+		t.Fatalf("stat key file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("connection key file mode should be 0600, got %o", got)
+	}
+	keyData, err := os.ReadFile(manager.keyPath)
+	if err != nil {
+		t.Fatalf("read key file: %v", err)
+	}
+	if len(strings.TrimSpace(string(keyData))) != generatedSecretKeyByteLen*2 {
+		t.Fatalf("key file should contain hex encoded 256-bit key, got %q", string(keyData))
+	}
+}
+
+func TestManagerConnectionKeyCreationCleansTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	if _, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	tmpFiles, err := filepath.Glob(filepath.Join(dir, connectionsKeyFileName+".*.tmp"))
+	if err != nil {
+		t.Fatalf("glob key temp files: %v", err)
+	}
+	if len(tmpFiles) != 0 {
+		t.Fatalf("key temp files should be cleaned up: %#v", tmpFiles)
+	}
+}
+
+func TestManagerListUsesReadLockWhenNoMigrationNeeded(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	if _, err := manager.Save(Connection{
+		Name:       "profile-only",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_profile",
+		Metadata:   map[string]string{"profile": "default"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := manager.List()
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("List blocked behind an existing read lock")
+	}
+}
+
+func TestManagerTightensExistingConnectionKeyFileMode(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	if err := os.MkdirAll(filepath.Dir(manager.keyPath), 0o755); err != nil {
+		t.Fatalf("mkdir key dir: %v", err)
+	}
+	if err := os.WriteFile(manager.keyPath, []byte(strings.Repeat("ab", generatedSecretKeyByteLen)+"\n"), 0o644); err != nil {
+		t.Fatalf("write loose key file: %v", err)
+	}
+
+	key, err := loadOrCreateLocalKey(manager.keyPath)
+	if err != nil {
+		t.Fatalf("load existing key: %v", err)
+	}
+	if len(key) != generatedSecretKeyByteLen {
+		t.Fatalf("expected %d key bytes, got %d", generatedSecretKeyByteLen, len(key))
+	}
+	info, err := os.Stat(manager.keyPath)
+	if err != nil {
+		t.Fatalf("stat key file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("connection key file mode should be tightened to 0600, got %o", got)
+	}
+}
+
+func TestManagerRejectsSymlinkedConnectionKey(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	targetPath := filepath.Join(dir, "target-key")
+	if err := os.WriteFile(targetPath, []byte(strings.Repeat("ab", generatedSecretKeyByteLen)+"\n"), 0o600); err != nil {
+		t.Fatalf("write target key: %v", err)
+	}
+	if err := os.Chmod(targetPath, 0o644); err != nil {
+		t.Fatalf("chmod target key: %v", err)
+	}
+	if err := os.Symlink(targetPath, manager.keyPath); err != nil {
+		t.Skipf("symlinks are not available on this platform: %v", err)
+	}
+
+	_, err := loadOrCreateLocalKey(manager.keyPath)
+	if err == nil {
+		t.Fatal("expected symlinked key path to be rejected")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink rejection, got %q", err.Error())
+	}
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatalf("stat target key: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("symlink target should not be chmodded, got %o", got)
+	}
+}
+
+func TestLoadOrCreateLocalKeyReturnsSingleKeyAcrossConcurrentCreators(t *testing.T) {
+	for attempt := 0; attempt < 20; attempt++ {
+		dir := t.TempDir()
+		keyPath := filepath.Join(dir, connectionsKeyFileName)
+		const workers = 8
+		start := make(chan struct{})
+		results := make(chan string, workers)
+		errs := make(chan error, workers)
+		var wg sync.WaitGroup
+		wg.Add(workers)
+		for i := 0; i < workers; i++ {
+			go func() {
+				defer wg.Done()
+				<-start
+				key, err := loadOrCreateLocalKey(keyPath)
+				if err != nil {
+					errs <- err
+					return
+				}
+				results <- string(key)
+			}()
+		}
+		close(start)
+		wg.Wait()
+		close(results)
+		close(errs)
+
+		for err := range errs {
+			t.Fatalf("loadOrCreateLocalKey: %v", err)
+		}
+
+		var first string
+		for key := range results {
+			if first == "" {
+				first = key
+				continue
+			}
+			if key != first {
+				t.Fatal("concurrent key creators should all return the same key material")
+			}
+		}
+	}
+}
+
+func TestManagerCanUseEnvironmentEncryptionKey(t *testing.T) {
+	t.Setenv(connectionsKeyEnv, "stable-deployment-key")
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	created, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if _, err := os.Stat(manager.keyPath); !os.IsNotExist(err) {
+		t.Fatalf("env-key mode should not create local key file, err=%v", err)
+	}
+
+	reloaded := NewManager(dir)
+	stored, err := reloaded.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get with env key: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
+		t.Fatalf("env key should decrypt stored secret, got %q", got)
+	}
+}
+
+func TestManagerWrongEncryptionKeyReturnsRemediation(t *testing.T) {
+	t.Setenv(connectionsKeyEnv, "original-deployment-key")
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	created, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	t.Setenv(connectionsKeyEnv, "rotated-deployment-key")
+	reloaded := NewManager(dir)
+	_, err = reloaded.Get(created.ID)
+	if err == nil {
+		t.Fatal("expected wrong encryption key to fail closed")
+	}
+	message := err.Error()
+	if !strings.Contains(message, connectionsKeyEnv) || !strings.Contains(message, connectionsKeyFileName) {
+		t.Fatalf("expected key remediation in decrypt error, got %q", message)
+	}
+	if strings.Contains(message, "super-secret") {
+		t.Fatalf("decrypt error leaked plaintext secret: %q", message)
+	}
+}
+
+func TestManagerMissingLocalKeyDoesNotCreateReplacementOnDecrypt(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	created, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	if err := os.Remove(manager.keyPath); err != nil {
+		t.Fatalf("remove local key file: %v", err)
+	}
+
+	reloaded := NewManager(dir)
+	_, err = reloaded.Get(created.ID)
+	if err == nil {
+		t.Fatal("expected missing local encryption key to fail closed")
+	}
+	message := err.Error()
+	if !strings.Contains(message, connectionsKeyEnv) || !strings.Contains(message, connectionsKeyFileName) {
+		t.Fatalf("expected missing key remediation in decrypt error, got %q", message)
+	}
+	if strings.Contains(message, "super-secret") {
+		t.Fatalf("decrypt error leaked plaintext secret: %q", message)
+	}
+	if _, err := os.Stat(reloaded.keyPath); !os.IsNotExist(err) {
+		t.Fatalf("decrypt should not create a replacement local key file, stat err=%v", err)
 	}
 }
 
