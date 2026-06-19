@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { CheckCircle2, ExternalLink, Play, RefreshCw, ServerCog, ShieldCheck, Square, XCircle } from 'lucide-react';
 
-import { api, type MCPAirlockServerStatus } from '../../api';
+import { api, type MCPAirlockServerStatus, type MCPAirlockToolInventory, type MCPAirlockToolRisk } from '../../api';
 import { Button } from '../ui/button';
 
-type MCPAirlockClient = Pick<typeof api, 'listMCPAirlockServers' | 'checkMCPAirlockServer' | 'startMCPAirlockServer' | 'stopMCPAirlockServer'>;
+type MCPAirlockClient = Pick<typeof api, 'listMCPAirlockServers' | 'checkMCPAirlockServer' | 'startMCPAirlockServer' | 'stopMCPAirlockServer' | 'getMCPAirlockTools' | 'discoverMCPAirlockTools'>;
 
 export interface MCPAirlockPanelProps {
   client?: MCPAirlockClient;
@@ -36,17 +36,44 @@ function checkIcon(status: string) {
   return <XCircle className="h-3.5 w-3.5 text-destructive" />;
 }
 
+function riskClass(risk: MCPAirlockToolRisk) {
+  if (risk === 'read_only') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
+  if (risk === 'generate_code') return 'border-primary/30 bg-primary/10 text-primary';
+  if (risk === 'modify_workspace') return 'border-yellow-500/30 bg-yellow-500/10 text-yellow-200';
+  if (risk === 'cloud_mutation' || risk === 'secret_sensitive') return 'border-orange-500/30 bg-orange-500/10 text-orange-200';
+  return 'border-destructive/40 bg-destructive/10 text-destructive';
+}
+
+function decisionClass(status: string) {
+  if (status === 'allowed') return 'text-emerald-300';
+  if (status === 'approval_required') return 'text-yellow-200';
+  return 'text-destructive';
+}
+
 export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
   const [servers, setServers] = useState<MCPAirlockServerStatus[]>([]);
+  const [toolsByServer, setToolsByServer] = useState<Record<string, MCPAirlockToolInventory>>({});
   const [loading, setLoading] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const [discoveringId, setDiscoveringId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      setServers(await client.listMCPAirlockServers());
+      const nextServers = await client.listMCPAirlockServers();
+      setServers(nextServers);
+      const inventories = await Promise.all(
+        nextServers.map(async status => {
+          try {
+            return [status.server.id, await client.getMCPAirlockTools(status.server.id)] as const;
+          } catch {
+            return [status.server.id, null] as const;
+          }
+        }),
+      );
+      setToolsByServer(Object.fromEntries(inventories.filter((entry): entry is readonly [string, MCPAirlockToolInventory] => entry[1] !== null)));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -97,6 +124,19 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
     }
   };
 
+  const discover = async (id: string) => {
+    setDiscoveringId(id);
+    setError(null);
+    try {
+      const inventory = await client.discoverMCPAirlockTools(id);
+      setToolsByServer(current => ({ ...current, [id]: inventory }));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setDiscoveringId(null);
+    }
+  };
+
   return (
     <div className="flex h-full flex-col gap-3 bg-background p-4">
       <header className="flex items-center gap-3">
@@ -140,8 +180,11 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
             >
               {(() => {
                 const busy = busyId === status.server.id;
-                const startDisabled = busy || status.running || !status.command_available;
-                const stopDisabled = busy || !status.running;
+                const discovering = discoveringId === status.server.id;
+                const checkDisabled = busy || discovering;
+                const startDisabled = busy || discovering || status.running || !status.command_available;
+                const stopDisabled = busy || discovering || !status.running;
+                const discoverDisabled = busy || discovering || !status.command_available;
                 return (
               <div className="flex items-start gap-2">
                 <div className="min-w-0 flex-1">
@@ -163,9 +206,18 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
                     variant="secondary"
                     className="h-7 px-2 text-[10px]"
                     onClick={() => check(status.server.id)}
-                    disabled={busy}
+                    disabled={checkDisabled}
                   >
                     {busy ? '...' : 'Check'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="secondary"
+                    className="h-7 px-2 text-[10px]"
+                    onClick={() => discover(status.server.id)}
+                    disabled={discoverDisabled}
+                  >
+                    {discovering ? '...' : 'Tools'}
                   </Button>
                   <Button
                     size="sm"
@@ -209,6 +261,52 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
                   credentials: {status.server.credential_mode}
                 </span>
               </div>
+
+              {toolsByServer[status.server.id] && (
+                <div className="mt-3 rounded-md border border-border bg-background/70 p-2">
+                  <div className="flex items-center gap-2 text-[10px] uppercase tracking-widest text-muted-foreground">
+                    <ShieldCheck className="h-3.5 w-3.5 text-primary" />
+                    Tool Firewall
+                    <span className="ml-auto normal-case tracking-normal">
+                      {toolsByServer[status.server.id].tools.length} tools
+                    </span>
+                  </div>
+
+                  {toolsByServer[status.server.id].checks.length > 0 && (
+                    <div className="mt-2 grid gap-1">
+                      {toolsByServer[status.server.id].checks.slice(0, 2).map(check => (
+                        <div key={`${status.server.id}-tools-${check.name}`} className="flex items-start gap-1.5 text-[10px] leading-relaxed text-muted-foreground">
+                          {checkIcon(check.status)}
+                          <span>{check.message}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  {toolsByServer[status.server.id].tools.length > 0 && (
+                    <div className="mt-2 grid gap-1.5">
+                      {toolsByServer[status.server.id].tools.slice(0, 5).map(tool => (
+                        <div key={`${status.server.id}-${tool.name}`} className="rounded border border-border/80 px-2 py-1.5">
+                          <div className="flex items-center gap-1.5">
+                            <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-foreground">
+                              {tool.name}
+                            </span>
+                            <span className={`rounded border px-1.5 py-0.5 text-[9px] ${riskClass(tool.risk)}`}>
+                              {tool.risk.replace('_', ' ')}
+                            </span>
+                          </div>
+                          <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
+                            <span className={decisionClass(tool.decision.status)}>
+                              {tool.decision.status.replace('_', ' ')}
+                            </span>
+                            <span>{tool.schema_state}</span>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
 
               {status.server.install_hint && !status.command_available && (
                 <div className="mt-2 rounded-md border border-border bg-background px-2 py-1.5 text-[11px] leading-relaxed text-muted-foreground">

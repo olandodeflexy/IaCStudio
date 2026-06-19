@@ -178,6 +178,43 @@ export interface MCPAirlockServerStatus {
   last_exit_reason?: string;
 }
 
+export type MCPAirlockToolRisk =
+  | 'read_only'
+  | 'generate_code'
+  | 'modify_workspace'
+  | 'cloud_mutation'
+  | 'secret_sensitive'
+  | 'destructive'
+  | 'unknown';
+
+export interface MCPAirlockToolDecision {
+  status: 'allowed' | 'blocked' | 'approval_required';
+  allowed: boolean;
+  approval_required: boolean;
+  risk: MCPAirlockToolRisk;
+  reason: string;
+  allowlisted: boolean;
+  untrusted_output: boolean;
+}
+
+export interface MCPAirlockToolEntry {
+  server_id: string;
+  name: string;
+  description?: string;
+  input_schema_hash: string;
+  last_seen_at: string;
+  schema_state: 'new' | 'known' | 'changed' | 'unknown';
+  risk: MCPAirlockToolRisk;
+  decision: MCPAirlockToolDecision;
+}
+
+export interface MCPAirlockToolInventory {
+  server_id: string;
+  discovered_at?: string;
+  tools: MCPAirlockToolEntry[];
+  checks: MCPAirlockCheck[];
+}
+
 export type PlanRiskLevel = 'safe' | 'risky' | 'destructive' | 'unknown';
 
 export interface PlanFieldChange {
@@ -434,6 +471,34 @@ export const api = {
 
   async stopMCPAirlockServer(id: string): Promise<MCPAirlockServerStatus> {
     const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/stop`, { method: 'POST' });
+    return (await check(res)).json();
+  },
+
+  async getMCPAirlockTools(id: string): Promise<MCPAirlockToolInventory> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/tools`);
+    return (await check(res)).json();
+  },
+
+  async discoverMCPAirlockTools(id: string): Promise<MCPAirlockToolInventory> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/tools/discover`, { method: 'POST' });
+    return (await check(res)).json();
+  },
+
+  async evaluateMCPAirlockTool(id: string, toolName: string, project?: string): Promise<MCPAirlockToolEntry> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/tools/evaluate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool_name: toolName, project }),
+    });
+    return (await check(res)).json();
+  },
+
+  async setMCPAirlockToolAllowlist(id: string, toolName: string, allowed: boolean, project?: string): Promise<MCPAirlockToolEntry> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/tools/allowlist`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool_name: toolName, project, allowed }),
+    });
     return (await check(res)).json();
   },
 

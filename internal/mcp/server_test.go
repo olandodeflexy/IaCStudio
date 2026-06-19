@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/iac-studio/iac-studio/internal/cloudconnections"
+	"github.com/iac-studio/iac-studio/internal/mcpairlock"
 	"github.com/iac-studio/iac-studio/internal/runner"
 )
 
@@ -58,7 +59,7 @@ func TestServerLifecycleAndToolList(t *testing.T) {
 	if err := json.Unmarshal([]byte(lines[1]), &listResp); err != nil {
 		t.Fatalf("decode tools/list response: %v", err)
 	}
-	for _, name := range []string{"list_projects", "inspect_project", "list_mcp_airlock_servers", "check_mcp_airlock_server", "classify_plan", "scan_drift", "open_remediation_pr", "apply"} {
+	for _, name := range []string{"list_projects", "inspect_project", "list_mcp_airlock_servers", "check_mcp_airlock_server", "discover_mcp_airlock_tools", "evaluate_mcp_airlock_tool", "call_mcp_airlock_tool", "classify_plan", "scan_drift", "open_remediation_pr", "apply"} {
 		if !containsTool(listResp.Result.Tools, name) {
 			t.Fatalf("tools/list missing %s", name)
 		}
@@ -221,6 +222,180 @@ func TestMCPAirlockToolsExposeTrustedReadOnlyStatus(t *testing.T) {
 	mustRemarshal(t, checkResult.StructuredContent, &checkPayload)
 	if checkPayload.Server.State != "not_configured" || checkPayload.Server.Configured {
 		t.Fatalf("expected AWS built-in to require explicit local command config, got %+v", checkPayload.Server)
+	}
+}
+
+func TestMCPAirlockCallRefusesBlockedExternalTool(t *testing.T) {
+	server := newTestServer(t)
+	command, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mcpAirlock = mcpairlock.NewManager(server.projectsDir,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         command,
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		mcpairlock.WithToolDiscoverer(func(context.Context, mcpairlock.ServerDefinition, time.Duration) mcpairlock.DiscoveryProbeResult {
+			return mcpairlock.DiscoveryProbeResult{Tools: []mcpairlock.DiscoveredTool{{
+				Name:        "apply_workspace",
+				Description: "Apply a Terraform workspace.",
+				InputSchema: map[string]any{"type": "object"},
+			}}}
+		}),
+	)
+	if _, err := server.mcpAirlock.DiscoverTools(context.Background(), "terraform"); err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+
+	result := callTool(t, server, "call_mcp_airlock_tool", map[string]any{
+		"server_id": "terraform",
+		"tool_name": "apply_workspace",
+	})
+
+	if !result.IsError {
+		t.Fatalf("expected blocked external tool call to return an MCP tool error: %+v", result)
+	}
+	var payload struct {
+		Status   string `json:"status"`
+		Error    string `json:"error"`
+		Decision struct {
+			Status string `json:"status"`
+		} `json:"decision"`
+	}
+	mustRemarshal(t, result.StructuredContent, &payload)
+	if payload.Status != "blocked" || payload.Error != "mcp_airlock_tool_blocked" || payload.Decision.Status != "blocked" {
+		t.Fatalf("unexpected block payload: %+v", payload)
+	}
+}
+
+func TestMCPAirlockCallRefusesNewReadOnlyToolUntilRediscovered(t *testing.T) {
+	server := newTestServer(t)
+	command, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mcpAirlock = mcpairlock.NewManager(server.projectsDir,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         command,
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		mcpairlock.WithToolDiscoverer(func(context.Context, mcpairlock.ServerDefinition, time.Duration) mcpairlock.DiscoveryProbeResult {
+			return mcpairlock.DiscoveryProbeResult{Tools: []mcpairlock.DiscoveredTool{{
+				Name:        "list_modules",
+				Description: "List Terraform registry modules.",
+				InputSchema: map[string]any{"type": "object"},
+				Annotations: map[string]any{"readOnlyHint": true},
+			}}}
+		}),
+	)
+	if _, err := server.mcpAirlock.DiscoverTools(context.Background(), "terraform"); err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+
+	result := callTool(t, server, "call_mcp_airlock_tool", map[string]any{
+		"server_id": "terraform",
+		"tool_name": "list_modules",
+	})
+
+	if !result.IsError {
+		t.Fatalf("expected new read-only external tool call to be blocked pending schema review: %+v", result)
+	}
+	var payload struct {
+		Status   string `json:"status"`
+		Decision struct {
+			Status string `json:"status"`
+			Reason string `json:"reason"`
+		} `json:"decision"`
+	}
+	mustRemarshal(t, result.StructuredContent, &payload)
+	if payload.Status != "blocked" || payload.Decision.Status != "blocked" || !strings.Contains(payload.Decision.Reason, "new external MCP tool schemas") {
+		t.Fatalf("unexpected schema-review block payload: %+v", payload)
+	}
+}
+
+func TestMCPAirlockApprovalRequiredIncludesExternalToolContext(t *testing.T) {
+	server := newTestServer(t)
+	command, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mcpAirlock = mcpairlock.NewManager(server.projectsDir,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         command,
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		mcpairlock.WithToolDiscoverer(func(context.Context, mcpairlock.ServerDefinition, time.Duration) mcpairlock.DiscoveryProbeResult {
+			return mcpairlock.DiscoveryProbeResult{Tools: []mcpairlock.DiscoveredTool{{
+				Name:        "apply_workspace",
+				Description: "Apply a Terraform workspace.",
+				InputSchema: map[string]any{"type": "object"},
+			}}}
+		}),
+	)
+	if _, err := server.mcpAirlock.DiscoverTools(context.Background(), "terraform"); err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+	if _, err := server.mcpAirlock.SetToolAllowlist("terraform", "", "apply_workspace", true); err != nil {
+		t.Fatalf("SetToolAllowlist: %v", err)
+	}
+
+	result := callTool(t, server, "call_mcp_airlock_tool", map[string]any{
+		"server_id": "terraform",
+		"tool_name": "apply_workspace",
+	})
+
+	if result.IsError {
+		t.Fatalf("approval_required should be a structured gate, not an MCP error: %s", result.Content[0].Text)
+	}
+	var payload struct {
+		Status           string `json:"status"`
+		Tool             string `json:"tool"`
+		Server           string `json:"server"`
+		ServerID         string `json:"server_id"`
+		ToolName         string `json:"tool_name"`
+		ApprovalRequired bool   `json:"approval_required"`
+		ExternalTool     struct {
+			ServerID string `json:"server_id"`
+			Name     string `json:"name"`
+			Decision struct {
+				Status           string `json:"status"`
+				ApprovalRequired bool   `json:"approval_required"`
+			} `json:"decision"`
+		} `json:"external_tool"`
+		Decision struct {
+			Status           string `json:"status"`
+			ApprovalRequired bool   `json:"approval_required"`
+		} `json:"decision"`
+	}
+	mustRemarshal(t, result.StructuredContent, &payload)
+	if payload.Status != "approval_required" || !payload.ApprovalRequired || payload.Tool != "call_mcp_airlock_tool" {
+		t.Fatalf("unexpected approval payload status: %+v", payload)
+	}
+	if payload.Server != "terraform" || payload.ServerID != "terraform" || payload.ToolName != "apply_workspace" {
+		t.Fatalf("approval payload did not include external request context: %+v", payload)
+	}
+	if payload.ExternalTool.ServerID != "terraform" || payload.ExternalTool.Name != "apply_workspace" {
+		t.Fatalf("approval payload did not include evaluated external tool: %+v", payload.ExternalTool)
+	}
+	if payload.Decision.Status != "approval_required" || !payload.Decision.ApprovalRequired ||
+		payload.ExternalTool.Decision.Status != "approval_required" || !payload.ExternalTool.Decision.ApprovalRequired {
+		t.Fatalf("approval payload did not include evaluated decision: %+v", payload)
 	}
 }
 

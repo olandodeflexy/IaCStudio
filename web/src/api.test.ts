@@ -150,6 +150,68 @@ describe('api.mcpAirlock', () => {
       method: 'POST',
     });
   });
+
+  it('calls MCP Airlock tool inventory and firewall endpoints', async () => {
+    const inventory = {
+      server_id: 'terraform-official',
+      tools: [{
+        server_id: 'terraform-official',
+        name: 'apply_workspace',
+        input_schema_hash: 'sha256:def',
+        last_seen_at: '2026-06-13T10:00:00Z',
+        schema_state: 'new',
+        risk: 'cloud_mutation',
+        decision: {
+          status: 'blocked',
+          allowed: false,
+          approval_required: false,
+          risk: 'cloud_mutation',
+          reason: 'requires allowlist',
+          allowlisted: false,
+          untrusted_output: true,
+        },
+      }],
+      checks: [],
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(inventory), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(inventory), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(inventory.tools[0]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(inventory.tools[0]), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.getMCPAirlockTools('terraform-official')).resolves.toEqual(inventory);
+    await expect(api.discoverMCPAirlockTools('terraform-official')).resolves.toEqual(inventory);
+    await expect(api.evaluateMCPAirlockTool('terraform-official', 'apply_workspace', 'demo')).resolves.toEqual(inventory.tools[0]);
+    await expect(api.setMCPAirlockToolAllowlist('terraform-official', 'apply_workspace', true, 'demo')).resolves.toEqual(inventory.tools[0]);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/mcp-airlock/servers/terraform-official/tools');
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/mcp-airlock/servers/terraform-official/tools/discover', {
+      method: 'POST',
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(3, '/api/mcp-airlock/servers/terraform-official/tools/evaluate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool_name: 'apply_workspace', project: 'demo' }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, '/api/mcp-airlock/servers/terraform-official/tools/allowlist', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ tool_name: 'apply_workspace', project: 'demo', allowed: true }),
+    });
+  });
 });
 
 describe('api.runCommand', () => {
