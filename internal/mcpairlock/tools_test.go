@@ -176,6 +176,74 @@ func TestDiscoverToolsDoesNotDropConcurrentAllowlistUpdate(t *testing.T) {
 	}
 }
 
+func TestDiscoverToolsDoesNotDropConcurrentServerInventory(t *testing.T) {
+	started := map[string]chan struct{}{
+		"aws":       make(chan struct{}),
+		"terraform": make(chan struct{}),
+	}
+	releaseDiscovery := make(chan struct{})
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{
+			{
+				ID:              "aws",
+				Name:            "AWS",
+				Command:         testExecutable(t),
+				Transport:       "stdio",
+				Trusted:         true,
+				ReadOnlyDefault: true,
+				CredentialMode:  "none",
+			},
+			{
+				ID:              "terraform",
+				Name:            "Terraform",
+				Command:         testExecutable(t),
+				Transport:       "stdio",
+				Trusted:         true,
+				ReadOnlyDefault: true,
+				CredentialMode:  "none",
+			},
+		}),
+		WithToolDiscoverer(func(_ context.Context, definition ServerDefinition, _ time.Duration) DiscoveryProbeResult {
+			close(started[definition.ID])
+			<-releaseDiscovery
+			return DiscoveryProbeResult{Tools: []DiscoveredTool{{
+				Name:        definition.ID + "_tool",
+				Description: "Read-only test tool",
+				InputSchema: map[string]any{"type": "object"},
+				Annotations: map[string]any{"readOnlyHint": true},
+			}}}
+		}),
+	)
+
+	errCh := make(chan error, 2)
+	for _, id := range []string{"aws", "terraform"} {
+		id := id
+		go func() {
+			_, err := manager.DiscoverTools(context.Background(), id)
+			errCh <- err
+		}()
+	}
+
+	<-started["aws"]
+	<-started["terraform"]
+	close(releaseDiscovery)
+	for range 2 {
+		if err := <-errCh; err != nil {
+			t.Fatalf("DiscoverTools: %v", err)
+		}
+	}
+
+	for _, id := range []string{"aws", "terraform"} {
+		inventory, err := manager.Inventory(id)
+		if err != nil {
+			t.Fatalf("Inventory %s: %v", id, err)
+		}
+		if len(inventory.Tools) != 1 || inventory.Tools[0].Name != id+"_tool" {
+			t.Fatalf("expected %s inventory to survive concurrent discovery, got %+v", id, inventory.Tools)
+		}
+	}
+}
+
 func TestDiscoverToolsRecoversFromCorruptInventory(t *testing.T) {
 	root := t.TempDir()
 	manager := NewManager(root,
