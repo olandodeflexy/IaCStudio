@@ -204,6 +204,29 @@ func TestManagerConnectionKeyFileMode(t *testing.T) {
 	}
 }
 
+func TestManagerConnectionKeyCreationCleansTempFiles(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	if _, err := manager.Save(Connection{
+		Name:       "prod-admin",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	tmpFiles, err := filepath.Glob(filepath.Join(dir, connectionsKeyFileName+".*.tmp"))
+	if err != nil {
+		t.Fatalf("glob key temp files: %v", err)
+	}
+	if len(tmpFiles) != 0 {
+		t.Fatalf("key temp files should be cleaned up: %#v", tmpFiles)
+	}
+}
+
 func TestManagerListUsesReadLockWhenNoMigrationNeeded(t *testing.T) {
 	manager := NewManager(t.TempDir())
 	if _, err := manager.Save(Connection{

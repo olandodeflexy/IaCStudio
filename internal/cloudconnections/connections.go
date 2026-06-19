@@ -511,7 +511,6 @@ func writeNewLocalKey(path string, key []byte) (err error) {
 		return err
 	}
 	syncDirBestEffort(filepath.Dir(path))
-	cleanup = false
 	return nil
 }
 
