@@ -284,8 +284,19 @@ func (s *Server) handleCallMCPAirlockTool(_ context.Context, raw json.RawMessage
 	if entry.Decision.ApprovalRequired && !s.approved(args.ApprovalToken) {
 		audit.Decision = "approval_required"
 		return toolResponse{
-			Result: approvalRequiredResult("call_mcp_airlock_tool", entry.Decision.Reason),
-			Audit:  audit,
+			Result: structuredResult(map[string]any{
+				"status":            "approval_required",
+				"tool":              "call_mcp_airlock_tool",
+				"server":            args.ServerID,
+				"server_id":         args.ServerID,
+				"tool_name":         args.ToolName,
+				"external_tool":     entry,
+				"decision":          entry.Decision,
+				"reason":            entry.Decision.Reason,
+				"approval_required": true,
+				"next_step":         "Approve the action through IaC Studio or retry with the configured local approval token.",
+			}),
+			Audit: audit,
 		}
 	}
 	if entry.Decision.ApprovalRequired {

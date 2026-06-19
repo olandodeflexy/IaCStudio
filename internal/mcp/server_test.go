@@ -324,6 +324,81 @@ func TestMCPAirlockCallRefusesNewReadOnlyToolUntilRediscovered(t *testing.T) {
 	}
 }
 
+func TestMCPAirlockApprovalRequiredIncludesExternalToolContext(t *testing.T) {
+	server := newTestServer(t)
+	command, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mcpAirlock = mcpairlock.NewManager(server.projectsDir,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         command,
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		mcpairlock.WithToolDiscoverer(func(context.Context, mcpairlock.ServerDefinition, time.Duration) mcpairlock.DiscoveryProbeResult {
+			return mcpairlock.DiscoveryProbeResult{Tools: []mcpairlock.DiscoveredTool{{
+				Name:        "apply_workspace",
+				Description: "Apply a Terraform workspace.",
+				InputSchema: map[string]any{"type": "object"},
+			}}}
+		}),
+	)
+	if _, err := server.mcpAirlock.DiscoverTools(context.Background(), "terraform"); err != nil {
+		t.Fatalf("DiscoverTools: %v", err)
+	}
+	if _, err := server.mcpAirlock.SetToolAllowlist("terraform", "", "apply_workspace", true); err != nil {
+		t.Fatalf("SetToolAllowlist: %v", err)
+	}
+
+	result := callTool(t, server, "call_mcp_airlock_tool", map[string]any{
+		"server_id": "terraform",
+		"tool_name": "apply_workspace",
+	})
+
+	if result.IsError {
+		t.Fatalf("approval_required should be a structured gate, not an MCP error: %s", result.Content[0].Text)
+	}
+	var payload struct {
+		Status           string `json:"status"`
+		Tool             string `json:"tool"`
+		Server           string `json:"server"`
+		ServerID         string `json:"server_id"`
+		ToolName         string `json:"tool_name"`
+		ApprovalRequired bool   `json:"approval_required"`
+		ExternalTool     struct {
+			ServerID string `json:"server_id"`
+			Name     string `json:"name"`
+			Decision struct {
+				Status           string `json:"status"`
+				ApprovalRequired bool   `json:"approval_required"`
+			} `json:"decision"`
+		} `json:"external_tool"`
+		Decision struct {
+			Status           string `json:"status"`
+			ApprovalRequired bool   `json:"approval_required"`
+		} `json:"decision"`
+	}
+	mustRemarshal(t, result.StructuredContent, &payload)
+	if payload.Status != "approval_required" || !payload.ApprovalRequired || payload.Tool != "call_mcp_airlock_tool" {
+		t.Fatalf("unexpected approval payload status: %+v", payload)
+	}
+	if payload.Server != "terraform" || payload.ServerID != "terraform" || payload.ToolName != "apply_workspace" {
+		t.Fatalf("approval payload did not include external request context: %+v", payload)
+	}
+	if payload.ExternalTool.ServerID != "terraform" || payload.ExternalTool.Name != "apply_workspace" {
+		t.Fatalf("approval payload did not include evaluated external tool: %+v", payload.ExternalTool)
+	}
+	if payload.Decision.Status != "approval_required" || !payload.Decision.ApprovalRequired ||
+		payload.ExternalTool.Decision.Status != "approval_required" || !payload.ExternalTool.Decision.ApprovalRequired {
+		t.Fatalf("approval payload did not include evaluated decision: %+v", payload)
+	}
+}
+
 func TestSanitizeExecutionResultRedactsCredentialValues(t *testing.T) {
 	result := sanitizeExecutionResult(&runner.ExecutionResult{
 		ID:       "plan-1",
