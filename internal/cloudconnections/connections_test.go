@@ -189,6 +189,36 @@ func TestManagerTightensExistingConnectionKeyFileMode(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsSymlinkedConnectionKey(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	targetPath := filepath.Join(dir, "target-key")
+	if err := os.WriteFile(targetPath, []byte(strings.Repeat("ab", generatedSecretKeyByteLen)+"\n"), 0o600); err != nil {
+		t.Fatalf("write target key: %v", err)
+	}
+	if err := os.Chmod(targetPath, 0o644); err != nil {
+		t.Fatalf("chmod target key: %v", err)
+	}
+	if err := os.Symlink(targetPath, manager.keyPath); err != nil {
+		t.Skipf("symlinks are not available on this platform: %v", err)
+	}
+
+	_, err := loadOrCreateLocalKey(manager.keyPath)
+	if err == nil {
+		t.Fatal("expected symlinked key path to be rejected")
+	}
+	if !strings.Contains(err.Error(), "symlink") {
+		t.Fatalf("expected symlink rejection, got %q", err.Error())
+	}
+	info, err := os.Stat(targetPath)
+	if err != nil {
+		t.Fatalf("stat target key: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("symlink target should not be chmodded, got %o", got)
+	}
+}
+
 func TestManagerCanUseEnvironmentEncryptionKey(t *testing.T) {
 	t.Setenv(connectionsKeyEnv, "stable-deployment-key")
 	dir := t.TempDir()

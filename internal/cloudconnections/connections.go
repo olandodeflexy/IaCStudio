@@ -454,12 +454,12 @@ func environmentEncryptionKey() ([]byte, bool) {
 }
 
 func loadOrCreateLocalKey(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
+	err := ensureLocalKeyFileMode(path)
 	if err == nil {
-		return decodeLocalKey(path, data)
+		return readLocalKey(path)
 	}
-	if !os.IsNotExist(err) {
-		return nil, fmt.Errorf("read cloud connections key: %w", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		return nil, err
 	}
 
 	key := make([]byte, generatedSecretKeyByteLen)
@@ -476,19 +476,20 @@ func loadOrCreateLocalKey(path string) ([]byte, error) {
 }
 
 func loadExistingLocalKey(path string) ([]byte, error) {
-	data, err := os.ReadFile(path)
+	err := ensureLocalKeyFileMode(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf("read cloud connections key: missing key material; set %s or restore %s before reading encrypted cloud connections", connectionsKeyEnv, connectionsKeyFileName)
 		}
-		return nil, fmt.Errorf("read cloud connections key: %w", err)
+		return nil, err
 	}
-	return decodeLocalKey(path, data)
+	return readLocalKey(path)
 }
 
-func decodeLocalKey(path string, data []byte) ([]byte, error) {
-	if err := ensureLocalKeyFileMode(path); err != nil {
-		return nil, err
+func readLocalKey(path string) ([]byte, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("read cloud connections key: %w", err)
 	}
 	decoded, decodeErr := hex.DecodeString(strings.TrimSpace(string(data)))
 	if decodeErr != nil || len(decoded) != generatedSecretKeyByteLen {
@@ -498,9 +499,12 @@ func decodeLocalKey(path string, data []byte) ([]byte, error) {
 }
 
 func ensureLocalKeyFileMode(path string) error {
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		return fmt.Errorf("stat cloud connections key: %w", err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf("cloud connections key must not be a symlink")
 	}
 	if !info.Mode().IsRegular() {
 		return fmt.Errorf("cloud connections key must be a regular file")
