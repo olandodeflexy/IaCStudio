@@ -66,6 +66,38 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 	}
 }
 
+func TestManagerEncryptsUserSecretWithEnvelopePrefix(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	plaintext := encryptedSecretPrefix + "user-supplied-secret"
+
+	created, err := manager.Save(Connection{
+		Name:       "prefixed-secret",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": plaintext},
+	})
+	if err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read persisted file: %v", err)
+	}
+	if contains(string(data), plaintext) {
+		t.Fatal("secret with envelope prefix should still be encrypted at rest")
+	}
+
+	stored, err := manager.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != plaintext {
+		t.Fatalf("prefixed secret should decrypt to original value, got %q", got)
+	}
+}
+
 func TestManagerReadsLegacyPlaintextSecrets(t *testing.T) {
 	dir := t.TempDir()
 	manager := NewManager(dir)

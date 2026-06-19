@@ -379,7 +379,7 @@ func (m *Manager) encryptConnectionSecrets(connections []Connection) ([]Connecti
 		next.Metadata = cloneMap(connection.Metadata)
 		next.Secrets = cloneMap(connection.Secrets)
 		for name, value := range next.Secrets {
-			if strings.TrimSpace(value) == "" || isEncryptedSecret(value) {
+			if strings.TrimSpace(value) == "" {
 				continue
 			}
 			if key == nil {
