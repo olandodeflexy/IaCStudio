@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestManagerRedactsStaticSecrets(t *testing.T) {
@@ -129,6 +130,62 @@ func TestManagerConnectionKeyFileMode(t *testing.T) {
 	}
 	if len(strings.TrimSpace(string(keyData))) != generatedSecretKeyByteLen*2 {
 		t.Fatalf("key file should contain hex encoded 256-bit key, got %q", string(keyData))
+	}
+}
+
+func TestManagerListUsesReadLockWhenNoMigrationNeeded(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	if _, err := manager.Save(Connection{
+		Name:       "profile-only",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_profile",
+		Metadata:   map[string]string{"profile": "default"},
+	}); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+
+	manager.mu.RLock()
+	defer manager.mu.RUnlock()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := manager.List()
+		errCh <- err
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+	case <-time.After(500 * time.Millisecond):
+		t.Fatal("List blocked behind an existing read lock")
+	}
+}
+
+func TestManagerTightensExistingConnectionKeyFileMode(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	if err := os.MkdirAll(filepath.Dir(manager.keyPath), 0o755); err != nil {
+		t.Fatalf("mkdir key dir: %v", err)
+	}
+	if err := os.WriteFile(manager.keyPath, []byte(strings.Repeat("ab", generatedSecretKeyByteLen)+"\n"), 0o644); err != nil {
+		t.Fatalf("write loose key file: %v", err)
+	}
+
+	key, err := loadOrCreateLocalKey(manager.keyPath)
+	if err != nil {
+		t.Fatalf("load existing key: %v", err)
+	}
+	if len(key) != generatedSecretKeyByteLen {
+		t.Fatalf("expected %d key bytes, got %d", generatedSecretKeyByteLen, len(key))
+	}
+	info, err := os.Stat(manager.keyPath)
+	if err != nil {
+		t.Fatalf("stat key file: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("connection key file mode should be tightened to 0600, got %o", got)
 	}
 }
 

@@ -304,16 +304,27 @@ func (m *Manager) Test(id string) (TestResult, error) {
 }
 
 func (m *Manager) load() ([]Connection, error) {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mu.RLock()
 	connections, needsMigration, err := m.loadUnlockedWithMigrationFlag()
+	m.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
-	if needsMigration {
-		if err := m.saveUnlocked(connections); err != nil {
-			return nil, err
-		}
+	if !needsMigration {
+		return connections, nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	connections, needsMigration, err = m.loadUnlockedWithMigrationFlag()
+	if err != nil {
+		return nil, err
+	}
+	if !needsMigration {
+		return connections, nil
+	}
+	if err := m.saveUnlocked(connections); err != nil {
+		return nil, err
 	}
 	return connections, nil
 }
@@ -428,6 +439,9 @@ func (m *Manager) encryptionKey() ([]byte, error) {
 func loadOrCreateLocalKey(path string) ([]byte, error) {
 	data, err := os.ReadFile(path)
 	if err == nil {
+		if err := ensureLocalKeyFileMode(path); err != nil {
+			return nil, err
+		}
 		decoded, decodeErr := hex.DecodeString(strings.TrimSpace(string(data)))
 		if decodeErr != nil || len(decoded) != generatedSecretKeyByteLen {
 			return nil, fmt.Errorf("read cloud connections key: invalid key material")
@@ -449,6 +463,23 @@ func loadOrCreateLocalKey(path string) ([]byte, error) {
 		return nil, fmt.Errorf("write cloud connections key: %w", err)
 	}
 	return key, nil
+}
+
+func ensureLocalKeyFileMode(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return fmt.Errorf("stat cloud connections key: %w", err)
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("cloud connections key must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 == 0 {
+		return nil
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		return fmt.Errorf("cloud connections key permissions are too broad (%o); set %s to 0600: %w", info.Mode().Perm(), connectionsKeyFileName, err)
+	}
+	return nil
 }
 
 func isEncryptedSecret(value string) bool {
