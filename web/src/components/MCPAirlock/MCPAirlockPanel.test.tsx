@@ -238,6 +238,34 @@ describe('MCPAirlockPanel', () => {
     });
   });
 
+  it('allows tool discovery in non-ready lifecycle states when the command is available', async () => {
+    const initial = server({
+      command_available: true,
+      state: 'stopped',
+      summary: 'MCP server process stopped.',
+      last_exit_reason: 'stopped by user',
+    });
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      startMCPAirlockServer: vi.fn(async () => initial),
+      stopMCPAirlockServer: vi.fn(async () => initial),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+
+    const toolsButton = await screen.findByRole('button', { name: 'Tools' });
+    expect(toolsButton).toBeEnabled();
+
+    fireEvent.click(toolsButton);
+
+    await waitFor(() => {
+      expect(client.discoverMCPAirlockTools).toHaveBeenCalledWith('terraform-official');
+    });
+  });
+
   it('disables tool discovery when the command is unavailable', async () => {
     const initial = server({
       ready: true,

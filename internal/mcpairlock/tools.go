@@ -154,7 +154,15 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 
 	now := time.Now().UTC()
 	inventory.DiscoveredAt = now.Format(time.RFC3339)
-	if err := m.updateInventoryAtomically(func(previous *persistedToolInventory, loadErr error) error {
+	if err := m.persistDiscoveredTools(id, result, &inventory); err != nil {
+		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(err)})
+		return inventory, nil
+	}
+	return inventory, nil
+}
+
+func (m *Manager) persistDiscoveredTools(id string, result DiscoveryProbeResult, inventory *ToolInventory) error {
+	return m.updateInventoryAtomically(func(previous *persistedToolInventory, loadErr error) error {
 		if loadErr != nil {
 			inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(loadErr)})
 			*previous = persistedToolInventory{Servers: map[string]persistedServerTools{}}
@@ -209,11 +217,7 @@ func (m *Manager) DiscoverTools(ctx context.Context, id string) (ToolInventory, 
 			Tools:        seen,
 		}
 		return nil
-	}); err != nil {
-		inventory.Checks = append(inventory.Checks, Check{Name: "inventory", Status: "warn", Message: m.publicInventoryWarning(err)})
-		return inventory, nil
-	}
-	return inventory, nil
+	})
 }
 
 // Inventory returns the last persisted inventory for one server.
