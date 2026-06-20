@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -956,7 +957,40 @@ func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
 }
 
 func requestHasBody(r *http.Request) bool {
-	return r.Body != nil && r.Body != http.NoBody && r.ContentLength != 0
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+		return false
+	}
+	if r.ContentLength > 0 {
+		return true
+	}
+
+	var first [1]byte
+	n, err := r.Body.Read(first[:])
+	if n > 0 {
+		r.Body = prependBody(r.Body, first[:n])
+		return true
+	}
+	return err != nil && !errors.Is(err, io.EOF)
+}
+
+type prependReadCloser struct {
+	reader io.Reader
+	closer io.Closer
+}
+
+func (p prependReadCloser) Read(buf []byte) (int, error) {
+	return p.reader.Read(buf)
+}
+
+func (p prependReadCloser) Close() error {
+	return p.closer.Close()
+}
+
+func prependBody(body io.ReadCloser, prefix []byte) io.ReadCloser {
+	return prependReadCloser{
+		reader: io.MultiReader(bytes.NewReader(prefix), body),
+		closer: body,
+	}
 }
 
 func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool {

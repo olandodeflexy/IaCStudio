@@ -216,6 +216,21 @@ func TestOptionalJSONBodyAllowsEmptyRequestWithNonJSONContentType(t *testing.T) 
 	}
 }
 
+func TestOptionalJSONBodyAllowsEmptyUnknownLengthRequestWithNonJSONContentType(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/kill", strings.NewReader(""))
+	req.ContentLength = -1
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusUnsupportedMediaType {
+		t.Fatalf("empty unknown-length optional body should not require JSON content type")
+	}
+}
+
 func TestOptionalJSONBodyRejectsWrongContentTypeWhenBodyPresent(t *testing.T) {
 	root := canonicalTempDir(t)
 	router := fullRouterForTest(t, root)
@@ -230,6 +245,39 @@ func TestOptionalJSONBodyRejectsWrongContentTypeWhenBodyPresent(t *testing.T) {
 	}
 	if body := rec.Body.String(); !strings.Contains(body, "application/json") {
 		t.Fatalf("response body %q does not contain application/json", body)
+	}
+}
+
+func TestOptionalJSONBodyRejectsWrongContentTypeWhenUnknownLengthBodyPresent(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/kill", strings.NewReader(`{"env":"dev"}`))
+	req.ContentLength = -1
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("unknown-length optional JSON body with text/plain should 415, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "application/json") {
+		t.Fatalf("response body %q does not contain application/json", body)
+	}
+}
+
+func TestOptionalJSONBodyRestoresPeekedUnknownLengthBody(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/kill", strings.NewReader(`{}`))
+	req.ContentLength = -1
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusBadRequest && strings.Contains(rec.Body.String(), "invalid request body") {
+		t.Fatalf("peeked unknown-length body was not restored before JSON decode: %s", rec.Body.String())
 	}
 }
 
