@@ -2,10 +2,33 @@ package project
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestListAllEmptyWorkspaceReturnsEmptySlice(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	states, err := manager.ListAll()
+	if err != nil {
+		t.Fatalf("list all: %v", err)
+	}
+	if states == nil {
+		t.Fatal("expected empty workspace to return a non-nil slice")
+	}
+	if len(states) != 0 {
+		t.Fatalf("expected no project states, got %d", len(states))
+	}
+	encoded, err := json.Marshal(states)
+	if err != nil {
+		t.Fatalf("marshal states: %v", err)
+	}
+	if string(encoded) != "[]" {
+		t.Fatalf("empty project states encoded as %s, want []", encoded)
+	}
+}
 
 func TestLoadAndSavePreservesLayeredMetadata(t *testing.T) {
 	root := t.TempDir()

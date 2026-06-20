@@ -149,7 +149,7 @@ func (m *Manager) ListAll() ([]*State, error) {
 		return nil, err
 	}
 
-	var states []*State
+	states := make([]*State, 0)
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
