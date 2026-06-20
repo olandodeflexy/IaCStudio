@@ -281,6 +281,88 @@ func TestOptionalJSONBodyRestoresPeekedUnknownLengthBody(t *testing.T) {
 	}
 }
 
+func TestRegisteredMandatoryJSONRoutesRejectWrongContentType(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	tests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{
+			name: "module promotion",
+			path: "/api/projects/demo/promote-to-module",
+			body: `{"module_name":"networking","resource_ids":[]}`,
+		},
+		{
+			name: "agent run",
+			path: "/api/projects/demo/ai/agent",
+			body: `{"prompt":"summarize this project"}`,
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "text/plain")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("%s should reject text/plain with 415, got %d: %s", tc.path, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestRegisteredOptionalJSONRoutesAllowEmptyWrongContentType(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	paths := []string{
+		"/api/projects/demo/policy/run",
+		"/api/projects/demo/security/scanners/run",
+		"/api/projects/demo/ai/index",
+		"/api/projects/demo/plan/classify",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, path, nil)
+			req.Header.Set("Content-Type", "text/plain")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code == http.StatusUnsupportedMediaType {
+				t.Fatalf("%s should allow empty optional body despite text/plain", path)
+			}
+		})
+	}
+}
+
+func TestRegisteredOptionalJSONRoutesRejectWrongContentTypeWhenBodyPresent(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	paths := []string{
+		"/api/projects/demo/policy/run",
+		"/api/projects/demo/security/scanners/run",
+		"/api/projects/demo/ai/index",
+		"/api/projects/demo/plan/classify",
+	}
+	for _, path := range paths {
+		t.Run(path, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{}`))
+			req.Header.Set("Content-Type", "text/plain")
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("%s should reject text/plain body with 415, got %d: %s", path, rec.Code, rec.Body.String())
+			}
+		})
+	}
+}
+
 func TestStateRoutesRejectTraversalProjectName(t *testing.T) {
 	root := t.TempDir()
 	srv := httptest.NewServer(fullRouterForTest(t, root))

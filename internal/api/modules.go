@@ -169,6 +169,9 @@ func registerModuleRoutes(mux *http.ServeMux, projectsDir string, reg *registry.
 	// Body: {"module_name": "networking", "resource_ids": ["aws_vpc.main", ...]}
 	mux.HandleFunc("POST /api/projects/{name}/promote-to-module", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		name := r.PathValue("name")
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {

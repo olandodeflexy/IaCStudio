@@ -99,6 +99,9 @@ func registerAgentRoutes(
 	// the project. Returns the specialist used and the final text.
 	mux.HandleFunc("POST /api/projects/{name}/ai/agent", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		name := r.PathValue("name")
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {

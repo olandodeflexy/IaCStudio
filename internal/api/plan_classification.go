@@ -27,6 +27,9 @@ type planClassifyRequest struct {
 func registerPlanClassificationRoutes(mux *http.ServeMux, projectsDir string) {
 	mux.HandleFunc("POST /api/projects/{name}/plan/classify", func(w http.ResponseWriter, r *http.Request) {
 		r.Body = http.MaxBytesReader(w, r.Body, maxPlanClassifyRequestBody)
+		if !requireOptionalJSONContentType(w, r) {
+			return
+		}
 		name := r.PathValue("name")
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {
