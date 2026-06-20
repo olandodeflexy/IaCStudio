@@ -33,6 +33,16 @@ func fullRouterForTest(t *testing.T, projectsDir string) *http.ServeMux {
 	)
 }
 
+func canonicalTempDir(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	resolved, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return root
+	}
+	return resolved
+}
+
 func assertResponseBodyContains(t *testing.T, resp *http.Response, want ...string) {
 	t.Helper()
 	data, err := io.ReadAll(resp.Body)
@@ -129,6 +139,83 @@ func TestInitAllowedOriginsFormatsIPv6LoopbackOrigin(t *testing.T) {
 	}
 	if IsAllowedOrigin("http://::1:3000") {
 		t.Fatal("IPv6 origins should not use unbracketed host syntax")
+	}
+}
+
+func TestJSONMutationRejectsMissingContentType(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/security/scan", strings.NewReader(`[]`))
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("missing content type should 415, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "application/json") {
+		t.Fatalf("response body %q does not contain application/json", body)
+	}
+}
+
+func TestJSONMutationRejectsWrongContentType(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/security/scan", strings.NewReader(`[]`))
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("text/plain content type should 415, got %d", rec.Code)
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "application/json") {
+		t.Fatalf("response body %q does not contain application/json", body)
+	}
+}
+
+func TestJSONMutationAllowsContentTypeParameters(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/security/scan", strings.NewReader(`[]`))
+	req.Header.Set("Content-Type", "application/json; charset=utf-8")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("application/json with charset should 200, got %d", rec.Code)
+	}
+}
+
+func TestOptionalJSONBodyAllowsEmptyRequestWithoutContentType(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/kill", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusUnsupportedMediaType {
+		t.Fatalf("empty optional body should not require content type")
+	}
+}
+
+func TestOptionalJSONBodyRejectsWrongContentTypeWhenBodyPresent(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/kill", strings.NewReader(`{"env":"dev"}`))
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnsupportedMediaType {
+		t.Fatalf("optional JSON body with text/plain should 415, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "application/json") {
+		t.Fatalf("response body %q does not contain application/json", body)
 	}
 }
 
