@@ -960,9 +960,6 @@ func requestHasBody(r *http.Request) bool {
 }
 
 func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool {
-	if strings.TrimSpace(r.Header.Get("Content-Type")) != "" {
-		return requireJSONContentType(w, r)
-	}
 	if requestHasBody(r) {
 		return requireJSONContentType(w, r)
 	}

@@ -202,6 +202,20 @@ func TestOptionalJSONBodyAllowsEmptyRequestWithoutContentType(t *testing.T) {
 	}
 }
 
+func TestOptionalJSONBodyAllowsEmptyRequestWithNonJSONContentType(t *testing.T) {
+	root := canonicalTempDir(t)
+	router := fullRouterForTest(t, root)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/kill", nil)
+	req.Header.Set("Content-Type", "text/plain")
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+
+	if rec.Code == http.StatusUnsupportedMediaType {
+		t.Fatalf("empty optional body should not require JSON content type")
+	}
+}
+
 func TestOptionalJSONBodyRejectsWrongContentTypeWhenBodyPresent(t *testing.T) {
 	root := canonicalTempDir(t)
 	router := fullRouterForTest(t, root)
