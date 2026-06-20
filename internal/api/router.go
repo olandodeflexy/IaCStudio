@@ -1,12 +1,14 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net"
 	"net/http"
 	"os"
@@ -940,6 +942,64 @@ func limitBody(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxRequestBody)
 }
 
+func requireJSONContentType(w http.ResponseWriter, r *http.Request) bool {
+	contentType := strings.TrimSpace(r.Header.Get("Content-Type"))
+	if contentType == "" {
+		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+		return false
+	}
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil || !strings.EqualFold(mediaType, "application/json") {
+		http.Error(w, "content type must be application/json", http.StatusUnsupportedMediaType)
+		return false
+	}
+	return true
+}
+
+func requestHasBody(r *http.Request) bool {
+	if r.Body == nil || r.Body == http.NoBody || r.ContentLength == 0 {
+		return false
+	}
+	if r.ContentLength > 0 {
+		return true
+	}
+
+	var first [1]byte
+	n, err := r.Body.Read(first[:])
+	if n > 0 {
+		r.Body = prependBody(r.Body, first[:n])
+		return true
+	}
+	return err != nil && !errors.Is(err, io.EOF)
+}
+
+type prependReadCloser struct {
+	reader io.Reader
+	closer io.Closer
+}
+
+func (p prependReadCloser) Read(buf []byte) (int, error) {
+	return p.reader.Read(buf)
+}
+
+func (p prependReadCloser) Close() error {
+	return p.closer.Close()
+}
+
+func prependBody(body io.ReadCloser, prefix []byte) io.ReadCloser {
+	return prependReadCloser{
+		reader: io.MultiReader(bytes.NewReader(prefix), body),
+		closer: body,
+	}
+}
+
+func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool {
+	if requestHasBody(r) {
+		return requireJSONContentType(w, r)
+	}
+	return true
+}
+
 // RouterOptions allows callers to provide long-lived services that need
 // explicit lifecycle management outside the router.
 type RouterOptions struct {
@@ -1009,6 +1069,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// Create project
 	mux.HandleFunc("POST /api/projects", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req struct {
 			Name string `json:"name"`
 			Tool string `json:"tool"` // terraform | opentofu | ansible
@@ -1082,6 +1145,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// is auto-filled from "name" when not explicitly set.
 	mux.HandleFunc("POST /api/blueprints/{id}/render", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		id := r.PathValue("id")
 		bp, ok := scaffold.Default.Get(id)
 		if !ok {
@@ -1189,6 +1255,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			return
 		}
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var body syncRequest
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			http.Error(w, "invalid request body", 400)
@@ -1407,6 +1476,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		projectRoot := projectPath
 
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req struct {
 			Tool     string `json:"tool"`
 			Command  string `json:"command"`  // init | plan | apply | check | playbook
@@ -1717,6 +1789,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		// A missing body (EOF) is fine — kill defaults to the project
 		// root. Any other decode failure is a client error; treating
 		// it as "no env" would silently target the wrong execution.
+		if !requireOptionalJSONContentType(w, r) {
+			return
+		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), 400)
 			return
@@ -1740,6 +1815,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// AI chat
 	mux.HandleFunc("POST /api/ai/chat", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req ai.ChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -1779,6 +1857,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// clients keep working; new clients should prefer this endpoint.
 	mux.HandleFunc("POST /api/ai/chat/stream", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req ai.ChatRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -1867,6 +1948,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// Smart resource suggestions based on canvas state
 	mux.HandleFunc("POST /api/ai/suggest", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req struct {
 			Tool     string              `json:"tool"`
 			Provider string              `json:"provider"`
@@ -1883,6 +1967,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// Analyze plan/apply output and suggest fixes
 	mux.HandleFunc("POST /api/ai/fix", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req ai.PlanFixRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -1963,6 +2050,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 
 	mux.HandleFunc("POST /api/mcp-airlock/servers/{id}/tools/evaluate", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req struct {
 			ToolName string `json:"tool_name"`
 			Project  string `json:"project,omitempty"`
@@ -1990,6 +2080,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 
 	mux.HandleFunc("POST /api/mcp-airlock/servers/{id}/tools/allowlist", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req struct {
 			ToolName string `json:"tool_name"`
 			Project  string `json:"project,omitempty"`
@@ -2053,6 +2146,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 
 	mux.HandleFunc("POST /api/cloud/connections", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req cloudconnections.Connection
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -2070,6 +2166,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 
 	mux.HandleFunc("PUT /api/cloud/connections/{id}", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		id := r.PathValue("id")
 		if _, err := cloudConnections.Get(id); err != nil {
 			if errors.Is(err, os.ErrNotExist) {
@@ -2156,6 +2255,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			return
 		}
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var state project.State
 		if err := json.NewDecoder(r.Body).Decode(&state); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -2276,6 +2378,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 
 	mux.HandleFunc("PUT /api/ai/settings", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req ai.ProviderConfig
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -2368,6 +2473,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// Scan and import an existing project directory
 	mux.HandleFunc("POST /api/import", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req struct {
 			Path string `json:"path"`
 		}
@@ -2395,6 +2503,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// AI topology builder — runs async, sends progress via WebSocket, returns result via HTTP
 	mux.HandleFunc("POST /api/ai/topology", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req ai.TopologyRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -2457,6 +2568,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// Security scan from canvas resources (no project dir needed)
 	mux.HandleFunc("POST /api/security/scan", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var resources []parser.Resource
 		if err := json.NewDecoder(r.Body).Decode(&resources); err != nil {
 			http.Error(w, "invalid request", 400)
@@ -2511,6 +2625,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		var req struct {
 			Env string `json:"env,omitempty"`
 		}
+		if !requireOptionalJSONContentType(w, r) {
+			return
+		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
@@ -2539,6 +2656,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		var req struct {
 			Env      string                     `json:"env,omitempty"`
 			Proposal *recovery.RollbackProposal `json:"proposal,omitempty"`
+		}
+		if !requireOptionalJSONContentType(w, r) {
+			return
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -2587,6 +2707,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		var req struct {
 			Env      string                     `json:"env,omitempty"`
 			Proposal *recovery.RollbackProposal `json:"proposal,omitempty"`
+		}
+		if !requireOptionalJSONContentType(w, r) {
+			return
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -2655,6 +2778,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			ConnectionID string `json:"connection_id,omitempty"`
 		}
 		if r.Method == http.MethodPost {
+			if !requireOptionalJSONContentType(w, r) {
+				return
+			}
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 				http.Error(w, "invalid request body: "+err.Error(), 400)
 				return
@@ -2692,6 +2818,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			Env          string `json:"env,omitempty"`
 			ConnectionID string `json:"connection_id,omitempty"`
 			Mode         string `json:"mode"`
+		}
+		if !requireOptionalJSONContentType(w, r) {
+			return
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), 400)
@@ -2734,6 +2863,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			ConnectionID string                     `json:"connection_id,omitempty"`
 			Mode         string                     `json:"mode"`
 			Proposal     *drift.RemediationProposal `json:"proposal,omitempty"`
+		}
+		if !requireOptionalJSONContentType(w, r) {
+			return
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), 400)
@@ -2798,6 +2930,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			ConnectionID string                     `json:"connection_id,omitempty"`
 			Mode         string                     `json:"mode"`
 			Proposal     *drift.RemediationProposal `json:"proposal,omitempty"`
+		}
+		if !requireOptionalJSONContentType(w, r) {
+			return
 		}
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
@@ -2886,6 +3021,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 
 	mux.HandleFunc("POST /api/export", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
 		var req struct {
 			Format    string            `json:"format"`
 			Resources []parser.Resource `json:"resources"`

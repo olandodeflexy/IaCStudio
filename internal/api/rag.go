@@ -57,6 +57,9 @@ func registerRAGRoutes(mux *http.ServeMux, projectsDir string, aiClient *ai.Clie
 	// call basis (useful for CI benchmarks). Returns the new Stats.
 	mux.HandleFunc("POST /api/projects/{name}/ai/index", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireOptionalJSONContentType(w, r) {
+			return
+		}
 		name := r.PathValue("name")
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {

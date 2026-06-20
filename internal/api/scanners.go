@@ -68,6 +68,9 @@ func registerScannerRoutes(mux *http.ServeMux, projectsDir string) {
 	// and returns a unified Findings feed.
 	mux.HandleFunc("POST /api/projects/{name}/security/scanners/run", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
+		if !requireOptionalJSONContentType(w, r) {
+			return
+		}
 		name := r.PathValue("name")
 		projectPath, err := safeProjectPath(projectsDir, name)
 		if err != nil {
