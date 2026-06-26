@@ -746,6 +746,10 @@ func applySecretReferenceDefaultsToAll(connections []Connection) bool {
 }
 
 func applySecretReferenceDefaults(connection *Connection) bool {
+	if connection.SecretStore != "" && connection.SecretStore != SecretStoreLocalEncrypted {
+		return false
+	}
+
 	refs := localEncryptedSecretRefs(connection.ID, connection.AuthMethod, connection.Secrets)
 	if len(refs) == 0 {
 		changed := connection.SecretStore != "" || len(connection.SecretRefs) != 0

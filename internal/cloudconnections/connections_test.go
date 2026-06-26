@@ -98,6 +98,48 @@ func TestManagerRejectsUnsupportedSecretStore(t *testing.T) {
 	}
 }
 
+func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	ref := "vault://secret/data/iac/prod#secret_access_key"
+	record := `[{
+		"id":"conn_external",
+		"name":"external",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"` + ref + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write external store record: %v", err)
+	}
+
+	stored, err := manager.Get("conn_external")
+	if err != nil {
+		t.Fatalf("Get external store record: %v", err)
+	}
+	if got := stored.SecretStore; got != "vault" {
+		t.Fatalf("external secret store should be preserved, got %q", got)
+	}
+	if got := stored.SecretRefs["secret_access_key"]; got != ref {
+		t.Fatalf("external secret ref should be preserved, got %q", got)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read external store record: %v", err)
+	}
+	if !contains(string(data), ref) {
+		t.Fatalf("external secret ref should not be overwritten: %s", string(data))
+	}
+	if contains(string(data), "local://connections/") {
+		t.Fatalf("external secret store should not receive local refs: %s", string(data))
+	}
+}
+
 func TestManagerEncryptsUserSecretWithEnvelopePrefix(t *testing.T) {
 	manager := NewManager(t.TempDir())
 	plaintext := encryptedSecretPrefix + "user-supplied-secret"
