@@ -54,7 +54,8 @@ describe('CloudConnectionsPanel', () => {
     const client = makeClient();
     render(<CloudConnectionsPanel client={client} />);
 
-    expect(await screen.findByText(/Secrets are stored locally on this machine/)).toBeInTheDocument();
+    expect(screen.getByText(/Secrets are encrypted and stored locally on this machine/)).toBeInTheDocument();
+    await screen.findByText('0 connections');
   });
 
   it('creates an AWS profile connection and refreshes the list', async () => {
