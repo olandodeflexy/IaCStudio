@@ -50,6 +50,14 @@ function makeClient(initial: CloudConnection[] = []) {
 }
 
 describe('CloudConnectionsPanel', () => {
+  it('shows the local secret storage warning', async () => {
+    const client = makeClient();
+    render(<CloudConnectionsPanel client={client} />);
+
+    expect(screen.getByText(/Secrets are encrypted and stored locally on this machine/)).toBeInTheDocument();
+    await screen.findByText('0 connections');
+  });
+
   it('creates an AWS profile connection and refreshes the list', async () => {
     const client = makeClient();
     render(<CloudConnectionsPanel client={client} />);

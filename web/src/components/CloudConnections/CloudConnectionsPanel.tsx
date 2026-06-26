@@ -238,6 +238,10 @@ export function CloudConnectionsPanel({
       )}
 
       <section className="grid gap-2">
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          Secrets are encrypted and stored locally on this machine in the IaC Studio projects directory. Use scoped, revocable credentials.
+        </div>
+
         <label className="grid gap-1 text-xs text-muted-foreground">
           Name
           <input
