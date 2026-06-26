@@ -56,7 +56,7 @@ func TestHealthEndpointUsesConfiguredVersion(t *testing.T) {
 		ai.NewClient("http://127.0.0.1:1", "ignored"),
 		runner.NewSafeRunner(runner.DefaultSafetyConfig()),
 		root,
-		RouterOptions{Version: "9.8.7-test"},
+		RouterOptions{AppVersion: "9.8.7-test"},
 	)
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	rec := httptest.NewRecorder()

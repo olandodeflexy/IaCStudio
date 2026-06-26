@@ -104,7 +104,7 @@ func main() {
 	// Build router
 	router := api.NewRouterWithOptions(hub, fw, aiClient, safeRun, *projectsDir, api.RouterOptions{
 		MCPAirlock: mcpAirlock,
-		Version:    AppVersion,
+		AppVersion: AppVersion,
 	})
 
 	// Serve embedded frontend
