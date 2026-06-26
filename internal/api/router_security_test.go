@@ -379,6 +379,41 @@ func TestStateRoutesRejectTraversalProjectName(t *testing.T) {
 	}
 }
 
+func TestSafeProjectPathAllowsMissingProjectUnderSymlinkedRoot(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on Windows")
+	}
+	realRoot := t.TempDir()
+	linkRoot := filepath.Join(t.TempDir(), "projects-link")
+	if err := os.Symlink(realRoot, linkRoot); err != nil {
+		t.Fatalf("create symlinked projects root: %v", err)
+	}
+
+	got, err := safeProjectPath(linkRoot, "demo")
+	if err != nil {
+		t.Fatalf("safeProjectPath should allow missing project under symlinked root: %v", err)
+	}
+	if got != filepath.Join(linkRoot, "demo") {
+		t.Fatalf("safeProjectPath returned %q, want %q", got, filepath.Join(linkRoot, "demo"))
+	}
+}
+
+func TestSafeProjectPathRejectsExistingProjectSymlinkEscape(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink permissions vary on Windows")
+	}
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatalf("create escaping project symlink: %v", err)
+	}
+
+	_, err := safeProjectPath(root, "escape")
+	if err == nil || !strings.Contains(err.Error(), "project path escapes root") {
+		t.Fatalf("expected escaping project symlink rejection, got %v", err)
+	}
+}
+
 func TestSyncRejectsResourceFileOutsideProject(t *testing.T) {
 	root := t.TempDir()
 	projectDir := filepath.Join(root, "demo")
