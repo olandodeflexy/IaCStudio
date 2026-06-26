@@ -113,7 +113,10 @@ func TestManagerRejectsExternalStoreWithLocalSecretValuesDuringPersistence(t *te
 	if err == nil {
 		t.Fatal("external stores should fail closed when local secret values are present")
 	}
-	if !strings.Contains(err.Error(), "cannot persist local secret values") {
+	if !strings.Contains(err.Error(), "conn_external") ||
+		!strings.Contains(err.Error(), "external") ||
+		!strings.Contains(err.Error(), `secret store "vault"`) ||
+		!strings.Contains(err.Error(), "local secret values") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -139,7 +142,10 @@ func TestManagerRejectsExternalStoreWithLocalSecretValuesOnLoad(t *testing.T) {
 
 	if _, err := manager.Get("conn_external"); err == nil {
 		t.Fatal("Get should reject unsupported external stores that persisted local secret values")
-	} else if !strings.Contains(err.Error(), "cannot persist local secret values") {
+	} else if !strings.Contains(err.Error(), "conn_external") ||
+		!strings.Contains(err.Error(), "external") ||
+		!strings.Contains(err.Error(), `secret store "vault"`) ||
+		!strings.Contains(err.Error(), "local secret values") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

@@ -395,7 +395,7 @@ func (m *Manager) storeConnectionSecrets(connections []Connection) ([]Connection
 		next.SecretStore = strings.TrimSpace(next.SecretStore)
 		if next.SecretStore != "" && next.SecretStore != store.Kind() {
 			if hasNonEmptySecrets(next.Secrets) {
-				return nil, fmt.Errorf("unsupported secret store %q cannot persist local secret values", next.SecretStore)
+				return nil, fmt.Errorf("connection %s uses unsupported secret store %q with local secret values", connectionLabel(next), next.SecretStore)
 			}
 			out = append(out, next)
 			continue
@@ -425,7 +425,7 @@ func (m *Manager) loadConnectionSecrets(connections []Connection) (bool, error) 
 		connections[index].SecretStore = strings.TrimSpace(connections[index].SecretStore)
 		if connections[index].SecretStore != "" && connections[index].SecretStore != store.Kind() {
 			if hasNonEmptySecrets(connections[index].Secrets) {
-				return false, fmt.Errorf("unsupported secret store %q cannot persist local secret values", connections[index].SecretStore)
+				return false, fmt.Errorf("connection %s uses unsupported secret store %q with local secret values", connectionLabel(connections[index]), connections[index].SecretStore)
 			}
 			continue
 		}
@@ -457,6 +457,21 @@ func secretScope(connection Connection) SecretScope {
 		Provider:     connection.Provider,
 		AuthMethod:   connection.AuthMethod,
 	}
+}
+
+func connectionLabel(connection Connection) string {
+	id := strings.TrimSpace(connection.ID)
+	name := strings.TrimSpace(connection.Name)
+	if id == "" && name == "" {
+		return "<unknown>"
+	}
+	if id == "" {
+		return fmt.Sprintf("%q", name)
+	}
+	if name == "" || name == id {
+		return fmt.Sprintf("%q", id)
+	}
+	return fmt.Sprintf("%q (%s)", id, name)
 }
 
 func (m *Manager) encryptionKeyForEncrypt() ([]byte, error) {
