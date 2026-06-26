@@ -236,6 +236,7 @@ func (m *Manager) Save(input Connection) (PublicConnection, error) {
 			if existing.ID == input.ID {
 				input.CreatedAt = existing.CreatedAt
 				input.Secrets = mergeSecrets(existing.Secrets, input.Secrets)
+				preserveExistingExternalSecretRefs(&input, existing)
 				break
 			}
 		}
@@ -743,6 +744,17 @@ func applySecretReferenceDefaultsToAll(connections []Connection) bool {
 		}
 	}
 	return changed
+}
+
+func preserveExistingExternalSecretRefs(input *Connection, existing Connection) {
+	if existing.SecretStore == "" || existing.SecretStore == SecretStoreLocalEncrypted {
+		return
+	}
+	if input.SecretStore != "" || len(input.SecretRefs) != 0 || len(input.Secrets) != 0 {
+		return
+	}
+	input.SecretStore = existing.SecretStore
+	input.SecretRefs = cloneMap(existing.SecretRefs)
 }
 
 func applySecretReferenceDefaults(connection *Connection) bool {

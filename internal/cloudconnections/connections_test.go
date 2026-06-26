@@ -139,6 +139,30 @@ func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 		t.Fatalf("public secret fields should include referenced secret field: %#v", listed[0].SecretFields)
 	}
 
+	if _, err := manager.Save(Connection{
+		ID:         "conn_external",
+		Name:       "external-renamed",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Region:     "us-west-2",
+		Metadata:   map[string]string{"access_key_id": "AKIARENAMED"},
+	}); err != nil {
+		t.Fatalf("Save external store metadata update: %v", err)
+	}
+	updated, err := manager.Get("conn_external")
+	if err != nil {
+		t.Fatalf("Get updated external store record: %v", err)
+	}
+	if got := updated.SecretStore; got != "vault" {
+		t.Fatalf("external secret store should survive metadata update, got %q", got)
+	}
+	if got := updated.SecretRefs["secret_access_key"]; got != ref {
+		t.Fatalf("external secret ref should survive metadata update, got %q", got)
+	}
+	if got := updated.Region; got != "us-west-2" {
+		t.Fatalf("metadata update should still apply, got region %q", got)
+	}
+
 	data, err := os.ReadFile(manager.path)
 	if err != nil {
 		t.Fatalf("read external store record: %v", err)
