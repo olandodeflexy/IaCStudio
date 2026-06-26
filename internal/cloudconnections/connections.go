@@ -393,7 +393,7 @@ func (m *Manager) storeConnectionSecrets(connections []Connection) ([]Connection
 		next.Secrets = cloneMap(connection.Secrets)
 		next.SecretRefs = cloneMap(connection.SecretRefs)
 		if next.SecretStore != "" && next.SecretStore != store.Kind() {
-			if len(next.Secrets) != 0 {
+			if hasNonEmptySecrets(next.Secrets) {
 				return nil, fmt.Errorf("unsupported secret store %q cannot persist local secret values", next.SecretStore)
 			}
 			out = append(out, next)
@@ -422,6 +422,9 @@ func (m *Manager) loadConnectionSecrets(connections []Connection) (bool, error) 
 	store := m.localSecretStore()
 	for index := range connections {
 		if connections[index].SecretStore != "" && connections[index].SecretStore != store.Kind() {
+			if hasNonEmptySecrets(connections[index].Secrets) {
+				return false, fmt.Errorf("unsupported secret store %q cannot persist local secret values", connections[index].SecretStore)
+			}
 			continue
 		}
 		if len(connections[index].Secrets) == 0 {
@@ -879,6 +882,15 @@ func mergeSecrets(existing, submitted map[string]string) map[string]string {
 		return nil
 	}
 	return out
+}
+
+func hasNonEmptySecrets(secrets map[string]string) bool {
+	for _, value := range secrets {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateReadiness(connection Connection) []Check {

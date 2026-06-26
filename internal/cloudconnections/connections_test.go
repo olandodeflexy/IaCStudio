@@ -118,6 +118,32 @@ func TestManagerRejectsExternalStoreWithLocalSecretValuesDuringPersistence(t *te
 	}
 }
 
+func TestManagerRejectsExternalStoreWithLocalSecretValuesOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	record := `[{
+		"id":"conn_external",
+		"name":"external",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"vault://secret/data/iac/prod#secret_access_key"},
+		"secrets":{"secret_access_key":"must-not-load"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write external store record: %v", err)
+	}
+
+	if _, err := manager.Get("conn_external"); err == nil {
+		t.Fatal("Get should reject unsupported external stores that persisted local secret values")
+	} else if !strings.Contains(err.Error(), "cannot persist local secret values") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	manager := NewManager(dir)
