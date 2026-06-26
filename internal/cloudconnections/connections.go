@@ -1,6 +1,7 @@
 package cloudconnections
 
 import (
+	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/rand"
@@ -355,7 +356,7 @@ func (m *Manager) loadUnlockedWithMigrationFlag() ([]Connection, bool, error) {
 	if err := json.Unmarshal(data, &connections); err != nil {
 		return nil, false, fmt.Errorf("parse cloud connections: %w", err)
 	}
-	needsMigration, err := m.decryptConnectionSecrets(connections)
+	needsMigration, err := m.loadConnectionSecrets(connections)
 	if err != nil {
 		return nil, false, err
 	}
@@ -369,7 +370,7 @@ func (m *Manager) saveUnlocked(connections []Connection) error {
 	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
 		return fmt.Errorf("create cloud connections directory: %w", err)
 	}
-	persisted, err := m.encryptConnectionSecrets(connections)
+	persisted, err := m.storeConnectionSecrets(connections)
 	if err != nil {
 		return err
 	}
@@ -383,62 +384,94 @@ func (m *Manager) saveUnlocked(connections []Connection) error {
 	return nil
 }
 
-func (m *Manager) encryptConnectionSecrets(connections []Connection) ([]Connection, error) {
+func (m *Manager) storeConnectionSecrets(connections []Connection) ([]Connection, error) {
 	out := make([]Connection, 0, len(connections))
-	var key []byte
+	store := m.localSecretStore()
 	for _, connection := range connections {
 		next := connection
 		next.Metadata = cloneMap(connection.Metadata)
 		next.Secrets = cloneMap(connection.Secrets)
 		next.SecretRefs = cloneMap(connection.SecretRefs)
-		for name, value := range next.Secrets {
-			if strings.TrimSpace(value) == "" {
-				continue
+		next.SecretStore = strings.TrimSpace(next.SecretStore)
+		if next.SecretStore != "" && next.SecretStore != store.Kind() {
+			if hasNonEmptySecrets(next.Secrets) {
+				return nil, fmt.Errorf("connection %s uses unsupported secret store %q with local secret values", connectionLabel(next), next.SecretStore)
 			}
-			if key == nil {
-				loaded, err := m.encryptionKeyForEncrypt()
-				if err != nil {
-					return nil, err
-				}
-				key = loaded
-			}
-			encrypted, err := encryptSecretValue(key, value)
-			if err != nil {
-				return nil, fmt.Errorf("encrypt cloud connection secret %q: %w", name, err)
-			}
-			next.Secrets[name] = encrypted
+			out = append(out, next)
+			continue
+		}
+		if len(next.Secrets) == 0 {
+			out = append(out, next)
+			continue
+		}
+		stored, err := store.Save(context.Background(), secretScope(next), next.Secrets)
+		if err != nil {
+			return nil, err
+		}
+		next.Secrets = stored.Values
+		next.SecretRefs = stored.Refs
+		if len(next.Secrets) > 0 {
+			next.SecretStore = store.Kind()
 		}
 		out = append(out, next)
 	}
 	return out, nil
 }
 
-func (m *Manager) decryptConnectionSecrets(connections []Connection) (bool, error) {
-	var key []byte
+func (m *Manager) loadConnectionSecrets(connections []Connection) (bool, error) {
 	needsMigration := false
+	store := m.localSecretStore()
 	for index := range connections {
-		for name, value := range connections[index].Secrets {
-			if !isEncryptedSecret(value) {
-				if strings.TrimSpace(value) != "" {
-					needsMigration = true
-				}
-				continue
+		connections[index].SecretStore = strings.TrimSpace(connections[index].SecretStore)
+		if connections[index].SecretStore != "" && connections[index].SecretStore != store.Kind() {
+			if hasNonEmptySecrets(connections[index].Secrets) {
+				return false, fmt.Errorf("connection %s uses unsupported secret store %q with local secret values", connectionLabel(connections[index]), connections[index].SecretStore)
 			}
-			if key == nil {
-				loaded, err := m.encryptionKeyForDecrypt()
-				if err != nil {
-					return false, err
-				}
-				key = loaded
-			}
-			plaintext, err := decryptSecretValue(key, value)
-			if err != nil {
-				return false, fmt.Errorf("decrypt cloud connection secret %q: %w", name, err)
-			}
-			connections[index].Secrets[name] = plaintext
+			continue
+		}
+		if len(connections[index].Secrets) == 0 {
+			continue
+		}
+		loaded, err := store.Load(context.Background(), secretScope(connections[index]), StoredSecrets{
+			Values: connections[index].Secrets,
+			Refs:   connections[index].SecretRefs,
+		})
+		if err != nil {
+			return false, err
+		}
+		connections[index].Secrets = loaded.Values
+		if loaded.NeedsMigration {
+			needsMigration = true
 		}
 	}
 	return needsMigration, nil
+}
+
+func (m *Manager) localSecretStore() SecretStore {
+	return newLocalEncryptedSecretStore(m.encryptionKeyForEncrypt, m.encryptionKeyForDecrypt)
+}
+
+func secretScope(connection Connection) SecretScope {
+	return SecretScope{
+		ConnectionID: connection.ID,
+		Provider:     connection.Provider,
+		AuthMethod:   connection.AuthMethod,
+	}
+}
+
+func connectionLabel(connection Connection) string {
+	id := strings.TrimSpace(connection.ID)
+	name := strings.TrimSpace(connection.Name)
+	if id == "" && name == "" {
+		return "<unknown>"
+	}
+	if id == "" {
+		return fmt.Sprintf("%q", name)
+	}
+	if name == "" || name == id {
+		return fmt.Sprintf("%q", id)
+	}
+	return fmt.Sprintf("%q (%s)", id, name)
 }
 
 func (m *Manager) encryptionKeyForEncrypt() ([]byte, error) {
@@ -866,6 +899,15 @@ func mergeSecrets(existing, submitted map[string]string) map[string]string {
 		return nil
 	}
 	return out
+}
+
+func hasNonEmptySecrets(secrets map[string]string) bool {
+	for _, value := range secrets {
+		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func validateReadiness(connection Connection) []Check {

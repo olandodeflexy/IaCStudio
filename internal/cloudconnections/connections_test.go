@@ -98,6 +98,137 @@ func TestManagerRejectsUnsupportedSecretStore(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsExternalStoreWithLocalSecretValuesDuringPersistence(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	err := manager.saveUnlocked([]Connection{{
+		ID:          "conn_external",
+		Name:        "external",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		SecretStore: "vault",
+		SecretRefs:  map[string]string{"secret_access_key": "vault://secret/data/iac/prod#secret_access_key"},
+		Secrets:     map[string]string{"secret_access_key": "must-not-persist"},
+	}})
+	if err == nil {
+		t.Fatal("external stores should fail closed when local secret values are present")
+	}
+	if !strings.Contains(err.Error(), "conn_external") ||
+		!strings.Contains(err.Error(), "external") ||
+		!strings.Contains(err.Error(), `secret store "vault"`) ||
+		!strings.Contains(err.Error(), "local secret values") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestManagerRejectsExternalStoreWithLocalSecretValuesOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	record := `[{
+		"id":"conn_external",
+		"name":"external",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"vault://secret/data/iac/prod#secret_access_key"},
+		"secrets":{"secret_access_key":"must-not-load"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write external store record: %v", err)
+	}
+
+	if _, err := manager.Get("conn_external"); err == nil {
+		t.Fatal("Get should reject unsupported external stores that persisted local secret values")
+	} else if !strings.Contains(err.Error(), "conn_external") ||
+		!strings.Contains(err.Error(), "external") ||
+		!strings.Contains(err.Error(), `secret store "vault"`) ||
+		!strings.Contains(err.Error(), "local secret values") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestManagerNormalizesLocalSecretStoreDuringPersistence(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	err := manager.saveUnlocked([]Connection{{
+		ID:          "conn_local",
+		Name:        "local",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		SecretStore: " local_encrypted ",
+		Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:     map[string]string{"secret_access_key": "super-secret"},
+	}})
+	if err != nil {
+		t.Fatalf("save local encrypted record with whitespace store: %v", err)
+	}
+
+	stored, err := manager.Get("conn_local")
+	if err != nil {
+		t.Fatalf("Get normalized local encrypted record: %v", err)
+	}
+	if got := stored.SecretStore; got != SecretStoreLocalEncrypted {
+		t.Fatalf("local encrypted secret store should be normalized, got %q", got)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
+		t.Fatalf("local encrypted secret should decrypt after normalized persistence, got %q", got)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read persisted local encrypted record: %v", err)
+	}
+	if contains(string(data), `"secret_store": " local_encrypted "`) {
+		t.Fatalf("persisted local secret store should be normalized: %s", string(data))
+	}
+}
+
+func TestManagerNormalizesLocalSecretStoreDuringLoad(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+
+	if _, err := manager.Save(Connection{
+		Name:       "local",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "super-secret"},
+	}); err != nil {
+		t.Fatalf("Save local encrypted record: %v", err)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read local encrypted record: %v", err)
+	}
+	data = []byte(strings.Replace(string(data), `"secret_store": "local_encrypted"`, `"secret_store": " local_encrypted "`, 1))
+	if err := os.WriteFile(manager.path, data, 0o600); err != nil {
+		t.Fatalf("write local encrypted record with whitespace store: %v", err)
+	}
+
+	listed, err := manager.List()
+	if err != nil {
+		t.Fatalf("List normalized local encrypted record: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("expected one local encrypted record, got %d", len(listed))
+	}
+	if got := listed[0].SecretStore; got != SecretStoreLocalEncrypted {
+		t.Fatalf("public local encrypted secret store should be normalized, got %q", got)
+	}
+
+	stored, err := manager.Get(listed[0].ID)
+	if err != nil {
+		t.Fatalf("Get normalized local encrypted record: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
+		t.Fatalf("local encrypted secret should decrypt after normalized load, got %q", got)
+	}
+}
+
 func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	manager := NewManager(dir)
