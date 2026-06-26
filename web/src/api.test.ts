@@ -214,6 +214,46 @@ describe('api.mcpAirlock', () => {
   });
 });
 
+describe('api.listProjectStates', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('returns project state arrays unchanged', async () => {
+    const states = [{ name: 'demo', tool: 'terraform' }];
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(states), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    await expect(api.listProjectStates()).resolves.toEqual(states);
+  });
+
+  it('coerces null project state responses to an empty array', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('null', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    await expect(api.listProjectStates()).resolves.toEqual([]);
+  });
+
+  it('coerces malformed project state responses to an empty array', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ states: [] }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    await expect(api.listProjectStates()).resolves.toEqual([]);
+  });
+});
+
 describe('api.runCommand', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

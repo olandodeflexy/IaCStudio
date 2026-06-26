@@ -636,7 +636,8 @@ export const api = {
   // List all projects with their state
   async listProjectStates(): Promise<any[]> {
     const res = await fetch(`${BASE}/api/projects/states`);
-    return (await check(res)).json();
+    const states = await (await check(res)).json();
+    return Array.isArray(states) ? states : [];
   },
 
   // Health check
