@@ -392,6 +392,7 @@ func (m *Manager) storeConnectionSecrets(connections []Connection) ([]Connection
 		next.Metadata = cloneMap(connection.Metadata)
 		next.Secrets = cloneMap(connection.Secrets)
 		next.SecretRefs = cloneMap(connection.SecretRefs)
+		next.SecretStore = strings.TrimSpace(next.SecretStore)
 		if next.SecretStore != "" && next.SecretStore != store.Kind() {
 			if hasNonEmptySecrets(next.Secrets) {
 				return nil, fmt.Errorf("unsupported secret store %q cannot persist local secret values", next.SecretStore)
@@ -421,6 +422,7 @@ func (m *Manager) loadConnectionSecrets(connections []Connection) (bool, error) 
 	needsMigration := false
 	store := m.localSecretStore()
 	for index := range connections {
+		connections[index].SecretStore = strings.TrimSpace(connections[index].SecretStore)
 		if connections[index].SecretStore != "" && connections[index].SecretStore != store.Kind() {
 			if hasNonEmptySecrets(connections[index].Secrets) {
 				return false, fmt.Errorf("unsupported secret store %q cannot persist local secret values", connections[index].SecretStore)
