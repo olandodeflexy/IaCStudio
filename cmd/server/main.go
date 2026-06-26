@@ -103,7 +103,10 @@ func main() {
 	}()
 
 	// Build router
-	router := api.NewRouterWithOptions(hub, fw, aiClient, safeRun, *projectsDir, api.RouterOptions{MCPAirlock: mcpAirlock})
+	router := api.NewRouterWithOptions(hub, fw, aiClient, safeRun, *projectsDir, api.RouterOptions{
+		MCPAirlock: mcpAirlock,
+		Version:    AppVersion,
+	})
 
 	// Serve embedded frontend
 	frontendContent, _ := fs.Sub(frontendFS, "frontend/dist")

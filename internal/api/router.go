@@ -1035,6 +1035,17 @@ func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool
 // explicit lifecycle management outside the router.
 type RouterOptions struct {
 	MCPAirlock *mcpairlock.Manager
+	Version    string
+}
+
+const defaultRouterVersion = "0.1.0"
+
+func (opts RouterOptions) version() string {
+	version := strings.TrimSpace(opts.Version)
+	if version == "" {
+		return defaultRouterVersion
+	}
+	return version
 }
 
 // NewRouter creates the HTTP router with all endpoints.
@@ -1045,6 +1056,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 // NewRouterWithOptions creates the HTTP router with explicit service options.
 func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runner.SafeRunner, projectsDir string, opts RouterOptions) *http.ServeMux {
 	mux := http.NewServeMux()
+	version := opts.version()
 	if fw != nil {
 		fw.OnChange(func(file, _ string) {
 			invalidatePlanForChangedFile(projectsDir, file)
@@ -1053,7 +1065,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 
 	// Health
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "0.1.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": version})
 	})
 
 	// List available IaC tools detected on this machine
