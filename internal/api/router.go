@@ -59,13 +59,13 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 		}
 	}
 	resolved := filepath.Join(projectsDir, name)
-	// Resolve symlinks so a symlink at ~/iac-projects/evil -> /etc/ is caught
-	// (and so macOS's /var/folders -> /private/var/folders symlink doesn't
-	// cause httptest-based tests to trip the escape check below).
+	// Resolve symlinks so a symlink at ~/iac-projects/evil -> /etc/ is caught.
+	// For missing project paths, resolve the deepest existing parent first so a
+	// symlinked projects root can still create new project directories.
 	//
 	// filepath.Abs errors surface explicitly — a failure would leave an
 	// empty absProjects, which would then let any resolved path pass the
-	// HasPrefix check and weaken the symlink-escape protection.
+	// containment check and weaken the symlink-escape protection.
 	absProjects, err := filepath.Abs(projectsDir)
 	if err != nil {
 		return "", fmt.Errorf("resolve projects dir: %w", err)
@@ -73,20 +73,51 @@ func safeProjectPath(projectsDir, name string) (string, error) {
 	if evalProjects, err := filepath.EvalSymlinks(absProjects); err == nil {
 		absProjects = evalProjects
 	}
-	absResolved, err := filepath.Abs(resolved)
+	absResolved, err := resolveExistingPathForContainment(resolved)
 	if err != nil {
 		return "", fmt.Errorf("resolve project path: %w", err)
 	}
-	// If the directory already exists, resolve symlinks in the actual path.
-	if evalResolved, err := filepath.EvalSymlinks(resolved); err == nil {
-		if absEval, absErr := filepath.Abs(evalResolved); absErr == nil {
-			absResolved = absEval
-		}
-	}
-	if !strings.HasPrefix(absResolved, absProjects+string(filepath.Separator)) {
+	rel, err := filepath.Rel(absProjects, absResolved)
+	if err != nil || rel == "." || rel == ".." || filepath.IsAbs(rel) || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", fmt.Errorf("project path escapes root: %q", name)
 	}
 	return resolved, nil
+}
+
+func resolveExistingPathForContainment(path string) (string, error) {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	if evalPath, err := filepath.EvalSymlinks(absPath); err == nil {
+		return filepath.Abs(evalPath)
+	}
+
+	existing := absPath
+	missing := make([]string, 0)
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", err
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return absPath, nil
+		}
+		missing = append([]string{filepath.Base(existing)}, missing...)
+		existing = parent
+	}
+
+	evalExisting, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return "", err
+	}
+	resolved := evalExisting
+	for _, part := range missing {
+		resolved = filepath.Join(resolved, part)
+	}
+	return filepath.Abs(resolved)
 }
 
 // safeSubdir resolves a subdirectory beneath projectPath while
