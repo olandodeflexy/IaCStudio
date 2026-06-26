@@ -101,6 +101,9 @@ export interface CatalogResource {
 
 export type CloudProvider = 'aws' | 'azure' | 'gcp';
 
+export type KnownCloudSecretStore = 'local_encrypted';
+export type CloudSecretStore = KnownCloudSecretStore | (string & Record<never, never>);
+
 export type CloudAuthMethod =
   | 'aws_profile'
   | 'aws_sso'
@@ -118,6 +121,7 @@ export interface CloudConnection {
   region?: string;
   metadata?: Record<string, string>;
   secret_fields?: string[];
+  secret_store?: CloudSecretStore;
   created_at?: string;
   updated_at?: string;
 }

@@ -35,6 +35,9 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 	if slices.Contains(created.SecretFields, "secret_access_key") == false {
 		t.Fatalf("secret field presence should be exposed without value: %#v", created.SecretFields)
 	}
+	if created.SecretStore != SecretStoreLocalEncrypted {
+		t.Fatalf("secret store should report local encrypted storage, got %q", created.SecretStore)
+	}
 
 	listed, err := manager.List()
 	if err != nil {
@@ -57,6 +60,12 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 	if !contains(string(data), encryptedSecretPrefix) {
 		t.Fatalf("expected encrypted secret envelope in persisted file: %s", string(data))
 	}
+	if !contains(string(data), `"secret_store": "local_encrypted"`) {
+		t.Fatalf("expected persisted secret store metadata: %s", string(data))
+	}
+	if !contains(string(data), `"secret_refs"`) || !contains(string(data), `local://connections/`) {
+		t.Fatalf("expected persisted local secret refs: %s", string(data))
+	}
 
 	stored, err := manager.Get(created.ID)
 	if err != nil {
@@ -64,6 +73,114 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 	}
 	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
 		t.Fatalf("stored secret should decrypt for runner use, got %q", got)
+	}
+	if got := stored.SecretRefs["secret_access_key"]; got != "local://connections/"+created.ID+"/secret_access_key" {
+		t.Fatalf("stored secret ref should point at local encrypted store, got %q", got)
+	}
+}
+
+func TestManagerRejectsUnsupportedSecretStore(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	_, err := manager.Save(Connection{
+		Name:        "prod-admin",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:     map[string]string{"secret_access_key": "super-secret"},
+		SecretStore: "vault",
+	})
+	if err == nil {
+		t.Fatal("Save should reject unsupported secret stores until an adapter is registered")
+	}
+	if !strings.Contains(err.Error(), "unsupported secret store") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	ref := "vault://secret/data/iac/prod#secret_access_key"
+	record := `[{
+		"id":"conn_external",
+		"name":"external",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secret_store":" vault ",
+		"secret_refs":{"secret_access_key":" ` + ref + ` ","session_token":"   "},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write external store record: %v", err)
+	}
+
+	stored, err := manager.Get("conn_external")
+	if err != nil {
+		t.Fatalf("Get external store record: %v", err)
+	}
+	if got := strings.TrimSpace(stored.SecretStore); got != "vault" {
+		t.Fatalf("external secret store should be preserved, got %q", got)
+	}
+	if got := strings.TrimSpace(stored.SecretRefs["secret_access_key"]); got != ref {
+		t.Fatalf("external secret ref should be preserved, got %q", got)
+	}
+
+	listed, err := manager.List()
+	if err != nil {
+		t.Fatalf("List external store record: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("expected one external store record, got %d", len(listed))
+	}
+	if !slices.Contains(listed[0].SecretFields, "secret_access_key") {
+		t.Fatalf("public secret fields should include referenced secret field: %#v", listed[0].SecretFields)
+	}
+	if got := listed[0].SecretStore; got != "vault" {
+		t.Fatalf("public secret store should be normalized, got %q", got)
+	}
+
+	if _, err := manager.Save(Connection{
+		ID:         "conn_external",
+		Name:       "external-renamed",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Region:     "us-west-2",
+		Metadata:   map[string]string{"access_key_id": "AKIARENAMED"},
+	}); err != nil {
+		t.Fatalf("Save external store metadata update: %v", err)
+	}
+	updated, err := manager.Get("conn_external")
+	if err != nil {
+		t.Fatalf("Get updated external store record: %v", err)
+	}
+	if got := updated.SecretStore; got != "vault" {
+		t.Fatalf("external secret store should survive metadata update, got %q", got)
+	}
+	if got := updated.SecretRefs["secret_access_key"]; got != ref {
+		t.Fatalf("external secret ref should survive metadata update, got %q", got)
+	}
+	if _, ok := updated.SecretRefs["session_token"]; ok {
+		t.Fatalf("empty external secret ref should be dropped: %#v", updated.SecretRefs)
+	}
+	if got := updated.Region; got != "us-west-2" {
+		t.Fatalf("metadata update should still apply, got region %q", got)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read external store record: %v", err)
+	}
+	if !contains(string(data), ref) {
+		t.Fatalf("external secret ref should not be overwritten: %s", string(data))
+	}
+	if contains(string(data), `"secret_store": " vault "`) || contains(string(data), `"session_token": "   "`) {
+		t.Fatalf("external secret refs should be normalized on update: %s", string(data))
+	}
+	if contains(string(data), "local://connections/") {
+		t.Fatalf("external secret store should not receive local refs: %s", string(data))
 	}
 }
 
