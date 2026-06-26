@@ -108,8 +108,8 @@ func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 		"provider":"aws",
 		"auth_method":"aws_static",
 		"metadata":{"access_key_id":"AKIAEXAMPLE"},
-		"secret_store":"vault",
-		"secret_refs":{"secret_access_key":"` + ref + `"},
+		"secret_store":" vault ",
+		"secret_refs":{"secret_access_key":" ` + ref + ` ","session_token":"   "},
 		"created_at":"2026-06-18T00:00:00Z",
 		"updated_at":"2026-06-18T00:00:00Z"
 	}]`
@@ -121,10 +121,10 @@ func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get external store record: %v", err)
 	}
-	if got := stored.SecretStore; got != "vault" {
+	if got := strings.TrimSpace(stored.SecretStore); got != "vault" {
 		t.Fatalf("external secret store should be preserved, got %q", got)
 	}
-	if got := stored.SecretRefs["secret_access_key"]; got != ref {
+	if got := strings.TrimSpace(stored.SecretRefs["secret_access_key"]); got != ref {
 		t.Fatalf("external secret ref should be preserved, got %q", got)
 	}
 
@@ -137,6 +137,9 @@ func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 	}
 	if !slices.Contains(listed[0].SecretFields, "secret_access_key") {
 		t.Fatalf("public secret fields should include referenced secret field: %#v", listed[0].SecretFields)
+	}
+	if got := listed[0].SecretStore; got != "vault" {
+		t.Fatalf("public secret store should be normalized, got %q", got)
 	}
 
 	if _, err := manager.Save(Connection{
@@ -159,6 +162,9 @@ func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 	if got := updated.SecretRefs["secret_access_key"]; got != ref {
 		t.Fatalf("external secret ref should survive metadata update, got %q", got)
 	}
+	if _, ok := updated.SecretRefs["session_token"]; ok {
+		t.Fatalf("empty external secret ref should be dropped: %#v", updated.SecretRefs)
+	}
 	if got := updated.Region; got != "us-west-2" {
 		t.Fatalf("metadata update should still apply, got region %q", got)
 	}
@@ -169,6 +175,9 @@ func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 	}
 	if !contains(string(data), ref) {
 		t.Fatalf("external secret ref should not be overwritten: %s", string(data))
+	}
+	if contains(string(data), `"secret_store": " vault "`) || contains(string(data), `"session_token": "   "`) {
+		t.Fatalf("external secret refs should be normalized on update: %s", string(data))
 	}
 	if contains(string(data), "local://connections/") {
 		t.Fatalf("external secret store should not receive local refs: %s", string(data))

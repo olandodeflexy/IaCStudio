@@ -718,7 +718,7 @@ func normalizeAndValidate(connection *Connection) error {
 }
 
 func publicConnection(connection Connection) PublicConnection {
-	secretStore := connection.SecretStore
+	secretStore := strings.TrimSpace(connection.SecretStore)
 	if secretStore == "" && len(connection.Secrets) > 0 {
 		secretStore = SecretStoreLocalEncrypted
 	}
@@ -747,14 +747,19 @@ func applySecretReferenceDefaultsToAll(connections []Connection) bool {
 }
 
 func preserveExistingExternalSecretRefs(input *Connection, existing Connection) {
-	if existing.SecretStore == "" || existing.SecretStore == SecretStoreLocalEncrypted {
+	secretStore := strings.TrimSpace(existing.SecretStore)
+	if secretStore == "" || secretStore == SecretStoreLocalEncrypted {
 		return
 	}
 	if input.SecretStore != "" || len(input.SecretRefs) != 0 || len(input.Secrets) != 0 {
 		return
 	}
-	input.SecretStore = existing.SecretStore
-	input.SecretRefs = cloneMap(existing.SecretRefs)
+	secretRefs := trimMap(existing.SecretRefs)
+	if len(secretRefs) == 0 {
+		return
+	}
+	input.SecretStore = secretStore
+	input.SecretRefs = secretRefs
 }
 
 func applySecretReferenceDefaults(connection *Connection) bool {
