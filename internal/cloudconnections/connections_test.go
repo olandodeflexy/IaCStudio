@@ -128,6 +128,17 @@ func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 		t.Fatalf("external secret ref should be preserved, got %q", got)
 	}
 
+	listed, err := manager.List()
+	if err != nil {
+		t.Fatalf("List external store record: %v", err)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("expected one external store record, got %d", len(listed))
+	}
+	if !slices.Contains(listed[0].SecretFields, "secret_access_key") {
+		t.Fatalf("public secret fields should include referenced secret field: %#v", listed[0].SecretFields)
+	}
+
 	data, err := os.ReadFile(manager.path)
 	if err != nil {
 		t.Fatalf("read external store record: %v", err)

@@ -728,7 +728,7 @@ func publicConnection(connection Connection) PublicConnection {
 		AuthMethod:   connection.AuthMethod,
 		Region:       connection.Region,
 		Metadata:     publicMetadata(connection.AuthMethod, connection.Metadata),
-		SecretFields: presentSecretFields(connection.AuthMethod, connection.Secrets),
+		SecretFields: presentSecretFields(connection.AuthMethod, connection.Secrets, connection.SecretRefs),
 		SecretStore:  secretStore,
 		CreatedAt:    connection.CreatedAt,
 		UpdatedAt:    connection.UpdatedAt,
@@ -825,10 +825,10 @@ func secretMetadata(authMethod string, secrets map[string]string) map[string]str
 	return out
 }
 
-func presentSecretFields(authMethod string, secrets map[string]string) []string {
+func presentSecretFields(authMethod string, secrets, secretRefs map[string]string) []string {
 	out := []string{}
 	for _, key := range secretFieldsByMethod[authMethod] {
-		if strings.TrimSpace(secrets[key]) != "" {
+		if strings.TrimSpace(secrets[key]) != "" || strings.TrimSpace(secretRefs[key]) != "" {
 			out = append(out, key)
 		}
 	}
