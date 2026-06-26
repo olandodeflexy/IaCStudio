@@ -37,8 +37,7 @@ func (s *localEncryptedSecretStore) Save(ctx context.Context, scope SecretScope,
 	values := map[string]string{}
 	var key []byte
 	for name, value := range secrets {
-		value = strings.TrimSpace(value)
-		if value == "" {
+		if strings.TrimSpace(value) == "" {
 			continue
 		}
 		if key == nil {
@@ -72,8 +71,7 @@ func (s *localEncryptedSecretStore) Load(ctx context.Context, _ SecretScope, sto
 	needsMigration := false
 	var key []byte
 	for name, value := range stored.Values {
-		value = strings.TrimSpace(value)
-		if value == "" {
+		if strings.TrimSpace(value) == "" {
 			continue
 		}
 		if !isEncryptedSecret(value) {

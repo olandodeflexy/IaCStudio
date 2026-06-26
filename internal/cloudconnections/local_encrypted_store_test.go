@@ -20,7 +20,7 @@ func TestLocalEncryptedSecretStoreRoundTrip(t *testing.T) {
 
 	stored, err := store.Save(context.Background(), scope, map[string]string{
 		"secret_access_key": "super-secret",
-		"session_token":     "session-secret",
+		"session_token":     "  session-secret  ",
 	})
 	if err != nil {
 		t.Fatalf("Save: %v", err)
@@ -42,7 +42,7 @@ func TestLocalEncryptedSecretStoreRoundTrip(t *testing.T) {
 	if got := loaded.Values["secret_access_key"]; got != "super-secret" {
 		t.Fatalf("secret_access_key should round trip, got %q", got)
 	}
-	if got := loaded.Values["session_token"]; got != "session-secret" {
+	if got := loaded.Values["session_token"]; got != "  session-secret  " {
 		t.Fatalf("session_token should round trip, got %q", got)
 	}
 }
@@ -60,7 +60,7 @@ func TestLocalEncryptedSecretStoreMarksPlaintextForMigration(t *testing.T) {
 	}
 
 	loaded, err := store.Load(context.Background(), scope, StoredSecrets{
-		Values: map[string]string{"secret_access_key": "legacy-secret"},
+		Values: map[string]string{"secret_access_key": "  legacy-secret  "},
 	})
 	if err != nil {
 		t.Fatalf("Load legacy plaintext: %v", err)
@@ -68,7 +68,7 @@ func TestLocalEncryptedSecretStoreMarksPlaintextForMigration(t *testing.T) {
 	if !loaded.NeedsMigration {
 		t.Fatal("plaintext local secret should be marked for migration")
 	}
-	if got := loaded.Values["secret_access_key"]; got != "legacy-secret" {
+	if got := loaded.Values["secret_access_key"]; got != "  legacy-secret  " {
 		t.Fatalf("plaintext local secret should remain usable before migration, got %q", got)
 	}
 }
