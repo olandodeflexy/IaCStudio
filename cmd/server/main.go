@@ -22,10 +22,9 @@ import (
 	"github.com/iac-studio/iac-studio/internal/watcher"
 )
 
-const (
-	AppName    = "iac-studio"
-	AppVersion = "0.1.0"
-)
+const AppName = "iac-studio"
+
+var AppVersion = "0.1.0"
 
 // frontendFS holds the built React frontend. The directory is created by
 // `make build-frontend` (or `cd web && npm run build`) before the Go

@@ -1031,8 +1031,8 @@ func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool
 	return true
 }
 
-// RouterOptions allows callers to provide long-lived services that need
-// explicit lifecycle management outside the router.
+// RouterOptions allows callers to provide services and configuration that need
+// explicit ownership outside the router.
 type RouterOptions struct {
 	MCPAirlock *mcpairlock.Manager
 	Version    string
