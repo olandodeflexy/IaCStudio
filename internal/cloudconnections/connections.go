@@ -11,6 +11,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -23,6 +24,8 @@ const (
 	ProviderAWS   = "aws"
 	ProviderAzure = "azure"
 	ProviderGCP   = "gcp"
+
+	SecretStoreLocalEncrypted = "local_encrypted"
 
 	connectionsFileName       = ".iac-studio-connections.json"
 	connectionsKeyFileName    = ".iac-studio-connections.key"
@@ -65,15 +68,17 @@ var requiredFieldsByMethod = map[string][]string{
 // Connection is the persisted form. Secrets are intentionally isolated from
 // public metadata so route handlers can return redacted PublicConnection views.
 type Connection struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	Provider   string            `json:"provider"`
-	AuthMethod string            `json:"auth_method"`
-	Region     string            `json:"region,omitempty"`
-	Metadata   map[string]string `json:"metadata,omitempty"`
-	Secrets    map[string]string `json:"secrets,omitempty"`
-	CreatedAt  time.Time         `json:"created_at"`
-	UpdatedAt  time.Time         `json:"updated_at"`
+	ID          string            `json:"id"`
+	Name        string            `json:"name"`
+	Provider    string            `json:"provider"`
+	AuthMethod  string            `json:"auth_method"`
+	Region      string            `json:"region,omitempty"`
+	Metadata    map[string]string `json:"metadata,omitempty"`
+	Secrets     map[string]string `json:"secrets,omitempty"`
+	SecretStore string            `json:"secret_store,omitempty"`
+	SecretRefs  map[string]string `json:"secret_refs,omitempty"`
+	CreatedAt   time.Time         `json:"created_at"`
+	UpdatedAt   time.Time         `json:"updated_at"`
 }
 
 type PublicConnection struct {
@@ -84,6 +89,7 @@ type PublicConnection struct {
 	Region       string            `json:"region,omitempty"`
 	Metadata     map[string]string `json:"metadata,omitempty"`
 	SecretFields []string          `json:"secret_fields,omitempty"`
+	SecretStore  string            `json:"secret_store,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
 	UpdatedAt    time.Time         `json:"updated_at"`
 }
@@ -200,6 +206,7 @@ func (m *Manager) Get(id string) (*Connection, error) {
 			connectionCopy := connection
 			connectionCopy.Metadata = cloneMap(connection.Metadata)
 			connectionCopy.Secrets = cloneMap(connection.Secrets)
+			connectionCopy.SecretRefs = cloneMap(connection.SecretRefs)
 			return &connectionCopy, nil
 		}
 	}
@@ -236,6 +243,7 @@ func (m *Manager) Save(input Connection) (PublicConnection, error) {
 	input.UpdatedAt = now
 	input.Metadata = publicMetadata(input.AuthMethod, input.Metadata)
 	input.Secrets = secretMetadata(input.AuthMethod, input.Secrets)
+	applySecretReferenceDefaults(&input)
 
 	replaced := false
 	for index, existing := range connections {
@@ -350,6 +358,9 @@ func (m *Manager) loadUnlockedWithMigrationFlag() ([]Connection, bool, error) {
 	if err != nil {
 		return nil, false, err
 	}
+	if applySecretReferenceDefaultsToAll(connections) {
+		needsMigration = true
+	}
 	return connections, needsMigration, nil
 }
 
@@ -378,6 +389,7 @@ func (m *Manager) encryptConnectionSecrets(connections []Connection) ([]Connecti
 		next := connection
 		next.Metadata = cloneMap(connection.Metadata)
 		next.Secrets = cloneMap(connection.Secrets)
+		next.SecretRefs = cloneMap(connection.SecretRefs)
 		for name, value := range next.Secrets {
 			if strings.TrimSpace(value) == "" {
 				continue
@@ -683,6 +695,7 @@ func normalizeAndValidate(connection *Connection) error {
 	connection.Provider = strings.TrimSpace(connection.Provider)
 	connection.AuthMethod = strings.TrimSpace(connection.AuthMethod)
 	connection.Region = strings.TrimSpace(connection.Region)
+	connection.SecretStore = strings.TrimSpace(connection.SecretStore)
 
 	if connection.Name == "" {
 		return errors.New("connection name is required")
@@ -696,10 +709,18 @@ func normalizeAndValidate(connection *Connection) error {
 	}
 	connection.Metadata = trimMap(connection.Metadata)
 	connection.Secrets = trimMap(connection.Secrets)
+	connection.SecretRefs = trimMap(connection.SecretRefs)
+	if connection.SecretStore != "" && connection.SecretStore != SecretStoreLocalEncrypted {
+		return fmt.Errorf("unsupported secret store %q", connection.SecretStore)
+	}
 	return nil
 }
 
 func publicConnection(connection Connection) PublicConnection {
+	secretStore := connection.SecretStore
+	if secretStore == "" && len(connection.Secrets) > 0 {
+		secretStore = SecretStoreLocalEncrypted
+	}
 	return PublicConnection{
 		ID:           connection.ID,
 		Name:         connection.Name,
@@ -708,9 +729,60 @@ func publicConnection(connection Connection) PublicConnection {
 		Region:       connection.Region,
 		Metadata:     publicMetadata(connection.AuthMethod, connection.Metadata),
 		SecretFields: presentSecretFields(connection.AuthMethod, connection.Secrets),
+		SecretStore:  secretStore,
 		CreatedAt:    connection.CreatedAt,
 		UpdatedAt:    connection.UpdatedAt,
 	}
+}
+
+func applySecretReferenceDefaultsToAll(connections []Connection) bool {
+	changed := false
+	for index := range connections {
+		if applySecretReferenceDefaults(&connections[index]) {
+			changed = true
+		}
+	}
+	return changed
+}
+
+func applySecretReferenceDefaults(connection *Connection) bool {
+	refs := localEncryptedSecretRefs(connection.ID, connection.AuthMethod, connection.Secrets)
+	if len(refs) == 0 {
+		changed := connection.SecretStore != "" || len(connection.SecretRefs) != 0
+		connection.SecretStore = ""
+		connection.SecretRefs = nil
+		return changed
+	}
+
+	changed := false
+	if connection.SecretStore == "" {
+		connection.SecretStore = SecretStoreLocalEncrypted
+		changed = true
+	}
+	if connection.SecretStore != SecretStoreLocalEncrypted {
+		return changed
+	}
+	if !maps.Equal(connection.SecretRefs, refs) {
+		connection.SecretRefs = refs
+		changed = true
+	}
+	return changed
+}
+
+func localEncryptedSecretRefs(connectionID, authMethod string, secrets map[string]string) map[string]string {
+	if strings.TrimSpace(connectionID) == "" {
+		return nil
+	}
+	out := map[string]string{}
+	for _, key := range secretFieldsByMethod[authMethod] {
+		if strings.TrimSpace(secrets[key]) != "" {
+			out[key] = "local://connections/" + connectionID + "/" + key
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 func publicMetadata(authMethod string, metadata map[string]string) map[string]string {

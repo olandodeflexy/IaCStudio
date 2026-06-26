@@ -38,6 +38,7 @@ func TestCloudConnectionRoutesRedactSecrets(t *testing.T) {
 		ID           string            `json:"id"`
 		Metadata     map[string]string `json:"metadata"`
 		SecretFields []string          `json:"secret_fields"`
+		SecretStore  string            `json:"secret_store"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&created); err != nil {
 		t.Fatalf("decode create: %v", err)
@@ -47,6 +48,9 @@ func TestCloudConnectionRoutesRedactSecrets(t *testing.T) {
 	}
 	if got := created.Metadata["access_key_id"]; got != "AKIAEXAMPLE" {
 		t.Fatalf("public metadata should include access key id, got %q", got)
+	}
+	if got := created.SecretStore; got != "local_encrypted" {
+		t.Fatalf("public response should include local encrypted secret store, got %q", got)
 	}
 
 	resp, err = http.Get(srv.URL + "/api/cloud/connections")

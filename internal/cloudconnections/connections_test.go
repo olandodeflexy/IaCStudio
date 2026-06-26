@@ -35,6 +35,9 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 	if slices.Contains(created.SecretFields, "secret_access_key") == false {
 		t.Fatalf("secret field presence should be exposed without value: %#v", created.SecretFields)
 	}
+	if created.SecretStore != SecretStoreLocalEncrypted {
+		t.Fatalf("secret store should report local encrypted storage, got %q", created.SecretStore)
+	}
 
 	listed, err := manager.List()
 	if err != nil {
@@ -57,6 +60,12 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 	if !contains(string(data), encryptedSecretPrefix) {
 		t.Fatalf("expected encrypted secret envelope in persisted file: %s", string(data))
 	}
+	if !contains(string(data), `"secret_store": "local_encrypted"`) {
+		t.Fatalf("expected persisted secret store metadata: %s", string(data))
+	}
+	if !contains(string(data), `"secret_refs"`) || !contains(string(data), `local://connections/`) {
+		t.Fatalf("expected persisted local secret refs: %s", string(data))
+	}
 
 	stored, err := manager.Get(created.ID)
 	if err != nil {
@@ -64,6 +73,28 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 	}
 	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
 		t.Fatalf("stored secret should decrypt for runner use, got %q", got)
+	}
+	if got := stored.SecretRefs["secret_access_key"]; got != "local://connections/"+created.ID+"/secret_access_key" {
+		t.Fatalf("stored secret ref should point at local encrypted store, got %q", got)
+	}
+}
+
+func TestManagerRejectsUnsupportedSecretStore(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	_, err := manager.Save(Connection{
+		Name:        "prod-admin",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:     map[string]string{"secret_access_key": "super-secret"},
+		SecretStore: "vault",
+	})
+	if err == nil {
+		t.Fatal("Save should reject unsupported secret stores until an adapter is registered")
+	}
+	if !strings.Contains(err.Error(), "unsupported secret store") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
