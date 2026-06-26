@@ -72,3 +72,46 @@ func TestLocalEncryptedSecretStoreMarksPlaintextForMigration(t *testing.T) {
 		t.Fatalf("plaintext local secret should remain usable before migration, got %q", got)
 	}
 }
+
+func TestLocalEncryptedSecretStoreMemoizesKeysPerInstance(t *testing.T) {
+	key := []byte("0123456789abcdef0123456789abcdef")
+	encryptLoads := 0
+	decryptLoads := 0
+	store := newLocalEncryptedSecretStore(
+		func() ([]byte, error) {
+			encryptLoads++
+			return key, nil
+		},
+		func() ([]byte, error) {
+			decryptLoads++
+			return key, nil
+		},
+	)
+	scope := SecretScope{
+		ConnectionID: "conn_test",
+		Provider:     ProviderAWS,
+		AuthMethod:   "aws_static",
+	}
+
+	storedA, err := store.Save(context.Background(), scope, map[string]string{"secret_access_key": "secret-a"})
+	if err != nil {
+		t.Fatalf("Save A: %v", err)
+	}
+	storedB, err := store.Save(context.Background(), scope, map[string]string{"secret_access_key": "secret-b"})
+	if err != nil {
+		t.Fatalf("Save B: %v", err)
+	}
+	if encryptLoads != 1 {
+		t.Fatalf("encryption key should load once per store instance, got %d loads", encryptLoads)
+	}
+
+	if _, err := store.Load(context.Background(), scope, storedA); err != nil {
+		t.Fatalf("Load A: %v", err)
+	}
+	if _, err := store.Load(context.Background(), scope, storedB); err != nil {
+		t.Fatalf("Load B: %v", err)
+	}
+	if decryptLoads != 1 {
+		t.Fatalf("decryption key should load once per store instance, got %d loads", decryptLoads)
+	}
+}

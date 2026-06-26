@@ -4,11 +4,18 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 )
 
 type localEncryptedSecretStore struct {
 	keyForEncrypt func() ([]byte, error)
 	keyForDecrypt func() ([]byte, error)
+	encryptOnce   sync.Once
+	encryptKey    []byte
+	encryptErr    error
+	decryptOnce   sync.Once
+	decryptKey    []byte
+	decryptErr    error
 }
 
 func newLocalEncryptedSecretStore(keyForEncrypt, keyForDecrypt func() ([]byte, error)) *localEncryptedSecretStore {
@@ -35,7 +42,7 @@ func (s *localEncryptedSecretStore) Save(ctx context.Context, scope SecretScope,
 			continue
 		}
 		if key == nil {
-			loaded, err := s.keyForEncrypt()
+			loaded, err := s.encryptionKey()
 			if err != nil {
 				return StoredSecrets{}, err
 			}
@@ -75,7 +82,7 @@ func (s *localEncryptedSecretStore) Load(ctx context.Context, _ SecretScope, sto
 			continue
 		}
 		if key == nil {
-			loaded, err := s.keyForDecrypt()
+			loaded, err := s.decryptionKey()
 			if err != nil {
 				return LoadedSecrets{}, err
 			}
@@ -98,4 +105,18 @@ func (s *localEncryptedSecretStore) Load(ctx context.Context, _ SecretScope, sto
 
 func (s *localEncryptedSecretStore) Delete(ctx context.Context, _ SecretScope, _ StoredSecrets) error {
 	return ctx.Err()
+}
+
+func (s *localEncryptedSecretStore) encryptionKey() ([]byte, error) {
+	s.encryptOnce.Do(func() {
+		s.encryptKey, s.encryptErr = s.keyForEncrypt()
+	})
+	return s.encryptKey, s.encryptErr
+}
+
+func (s *localEncryptedSecretStore) decryptionKey() ([]byte, error) {
+	s.decryptOnce.Do(func() {
+		s.decryptKey, s.decryptErr = s.keyForDecrypt()
+	})
+	return s.decryptKey, s.decryptErr
 }
