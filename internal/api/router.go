@@ -1031,10 +1031,21 @@ func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool
 	return true
 }
 
-// RouterOptions allows callers to provide long-lived services that need
-// explicit lifecycle management outside the router.
+// RouterOptions allows callers to provide services and configuration that need
+// explicit ownership outside the router.
 type RouterOptions struct {
 	MCPAirlock *mcpairlock.Manager
+	AppVersion string
+}
+
+const defaultAppVersion = "0.1.0"
+
+func (opts RouterOptions) appVersion() string {
+	version := strings.TrimSpace(opts.AppVersion)
+	if version == "" {
+		return defaultAppVersion
+	}
+	return version
 }
 
 // NewRouter creates the HTTP router with all endpoints.
@@ -1045,6 +1056,7 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 // NewRouterWithOptions creates the HTTP router with explicit service options.
 func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runner.SafeRunner, projectsDir string, opts RouterOptions) *http.ServeMux {
 	mux := http.NewServeMux()
+	appVersion := opts.appVersion()
 	if fw != nil {
 		fw.OnChange(func(file, _ string) {
 			invalidatePlanForChangedFile(projectsDir, file)
@@ -1053,7 +1065,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 
 	// Health
 	mux.HandleFunc("GET /api/health", func(w http.ResponseWriter, r *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": "0.1.0"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok", "version": appVersion})
 	})
 
 	// List available IaC tools detected on this machine

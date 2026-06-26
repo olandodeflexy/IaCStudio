@@ -43,6 +43,41 @@ func canonicalTempDir(t *testing.T) string {
 	return resolved
 }
 
+func TestHealthEndpointUsesConfiguredVersion(t *testing.T) {
+	root := canonicalTempDir(t)
+	hub := NewHub()
+	go hub.Run()
+	t.Cleanup(hub.Close)
+	fw := watcher.New(hub)
+	t.Cleanup(fw.Close)
+	router := NewRouterWithOptions(
+		hub,
+		fw,
+		ai.NewClient("http://127.0.0.1:1", "ignored"),
+		runner.NewSafeRunner(runner.DefaultSafetyConfig()),
+		root,
+		RouterOptions{AppVersion: "9.8.7-test"},
+	)
+	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
+	rec := httptest.NewRecorder()
+
+	router.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected health request to return 200, got %d", rec.Code)
+	}
+	var body map[string]string
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil {
+		t.Fatalf("decode health response: %v", err)
+	}
+	if body["status"] != "ok" {
+		t.Fatalf("expected health status ok, got %q", body["status"])
+	}
+	if body["version"] != "9.8.7-test" {
+		t.Fatalf("expected configured version, got %q", body["version"])
+	}
+}
+
 func assertResponseBodyContains(t *testing.T, resp *http.Response, want ...string) {
 	t.Helper()
 	data, err := io.ReadAll(resp.Body)
