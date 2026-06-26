@@ -98,6 +98,26 @@ func TestManagerRejectsUnsupportedSecretStore(t *testing.T) {
 	}
 }
 
+func TestManagerRejectsExternalStoreWithLocalSecretValuesDuringPersistence(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	err := manager.saveUnlocked([]Connection{{
+		ID:          "conn_external",
+		Name:        "external",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		SecretStore: "vault",
+		SecretRefs:  map[string]string{"secret_access_key": "vault://secret/data/iac/prod#secret_access_key"},
+		Secrets:     map[string]string{"secret_access_key": "must-not-persist"},
+	}})
+	if err == nil {
+		t.Fatal("external stores should fail closed when local secret values are present")
+	}
+	if !strings.Contains(err.Error(), "cannot persist local secret values") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestManagerPreservesExternalSecretRefsOnLoad(t *testing.T) {
 	dir := t.TempDir()
 	manager := NewManager(dir)
