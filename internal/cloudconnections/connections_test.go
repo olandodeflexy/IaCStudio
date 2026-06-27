@@ -242,6 +242,129 @@ func TestManagerLoadsSecretRefsWithRegisteredStore(t *testing.T) {
 	}
 }
 
+func TestManagerGetResolvesOnlyRequestedRegisteredStore(t *testing.T) {
+	dir := t.TempDir()
+	firstRef := "vault://connections/conn_first/secret_access_key"
+	secondRef := "vault://connections/conn_second/secret_access_key"
+	store := &fakeSecretStore{
+		kind: "vault",
+		values: map[string]string{
+			firstRef:  "first-secret",
+			secondRef: "second-secret",
+		},
+	}
+	manager := NewManager(dir, WithSecretStore(store))
+	record := `[{
+		"id":"conn_first",
+		"name":"first",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAFIRST"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"` + firstRef + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	},{
+		"id":"conn_second",
+		"name":"second",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIASECOND"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"` + secondRef + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write registered store records: %v", err)
+	}
+
+	stored, err := manager.Get("conn_second")
+	if err != nil {
+		t.Fatalf("Get requested registered store record: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "second-secret" {
+		t.Fatalf("registered store should resolve requested secret only, got %q", got)
+	}
+	if len(store.loads) != 1 {
+		t.Fatalf("Get should resolve only one registered store record, got %d loads", len(store.loads))
+	}
+	if got := store.loads[0].Refs["secret_access_key"]; got != secondRef {
+		t.Fatalf("registered store should receive requested ref, got %q", got)
+	}
+}
+
+func TestManagerPreservesRegisteredStoreRefsOnPartialSecretUpdate(t *testing.T) {
+	store := &fakeSecretStore{kind: "vault"}
+	manager := NewManager(t.TempDir(), WithSecretStore(store))
+
+	created, err := manager.Save(Connection{
+		Name:        "external",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:     map[string]string{"secret_access_key": "old-secret", "session_token": "session-token"},
+		SecretStore: "vault",
+	})
+	if err != nil {
+		t.Fatalf("Save initial registered store connection: %v", err)
+	}
+	secretRef := "vault://connections/" + created.ID + "/secret_access_key"
+	sessionRef := "vault://connections/" + created.ID + "/session_token"
+
+	updated, err := manager.Save(Connection{
+		ID:         created.ID,
+		Name:       "external",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:    map[string]string{"secret_access_key": "rotated-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Save partial registered store secret update: %v", err)
+	}
+	if got := updated.SecretStore; got != "vault" {
+		t.Fatalf("partial update should preserve registered store, got %q", got)
+	}
+	if !slices.Contains(updated.SecretFields, "secret_access_key") || !slices.Contains(updated.SecretFields, "session_token") {
+		t.Fatalf("partial update should preserve all referenced secret fields: %#v", updated.SecretFields)
+	}
+	if len(store.saves) != 2 {
+		t.Fatalf("registered store should save initial and rotated secrets, got %d saves", len(store.saves))
+	}
+	if _, ok := store.saves[1].Refs["session_token"]; ok {
+		t.Fatalf("partial update should only write submitted secret values, got refs %#v", store.saves[1].Refs)
+	}
+
+	stored, err := manager.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get partial registered store secret update: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "rotated-secret" {
+		t.Fatalf("registered store should resolve rotated secret, got %q", got)
+	}
+	if got := stored.Secrets["session_token"]; got != "session-token" {
+		t.Fatalf("registered store should preserve existing session token ref, got %q", got)
+	}
+	if got := stored.SecretRefs["secret_access_key"]; got != secretRef {
+		t.Fatalf("registered store should preserve rotated secret ref, got %q", got)
+	}
+	if got := stored.SecretRefs["session_token"]; got != sessionRef {
+		t.Fatalf("registered store should preserve untouched secret ref, got %q", got)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read persisted partial update: %v", err)
+	}
+	if contains(string(data), "rotated-secret") || contains(string(data), "session-token") {
+		t.Fatalf("registered store partial update should not persist plaintext: %s", string(data))
+	}
+	if !contains(string(data), secretRef) || !contains(string(data), sessionRef) {
+		t.Fatalf("registered store partial update should preserve both refs: %s", string(data))
+	}
+}
+
 func TestManagerMigratesRegisteredStoreRefsForUse(t *testing.T) {
 	dir := t.TempDir()
 	oldRef := "vault://legacy/conn_external/secret_access_key"

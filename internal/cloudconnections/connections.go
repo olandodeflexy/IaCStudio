@@ -208,20 +208,7 @@ func (m *Manager) List() ([]PublicConnection, error) {
 }
 
 func (m *Manager) Get(id string) (*Connection, error) {
-	connections, err := m.loadForUse()
-	if err != nil {
-		return nil, err
-	}
-	for _, connection := range connections {
-		if connection.ID == id {
-			connectionCopy := connection
-			connectionCopy.Metadata = cloneMap(connection.Metadata)
-			connectionCopy.Secrets = cloneMap(connection.Secrets)
-			connectionCopy.SecretRefs = cloneMap(connection.SecretRefs)
-			return &connectionCopy, nil
-		}
-	}
-	return nil, os.ErrNotExist
+	return m.loadOneForUse(id)
 }
 
 func (m *Manager) Save(input Connection) (PublicConnection, error) {
@@ -255,6 +242,7 @@ func (m *Manager) Save(input Connection) (PublicConnection, error) {
 	input.UpdatedAt = now
 	input.Metadata = publicMetadata(input.AuthMethod, input.Metadata)
 	input.Secrets = secretMetadata(input.AuthMethod, input.Secrets)
+	input.SecretRefs = secretRefsMetadata(input.AuthMethod, input.SecretRefs)
 	applySecretReferenceDefaults(&input)
 
 	replaced := false
@@ -352,31 +340,43 @@ func (m *Manager) load() ([]Connection, error) {
 	return connections, nil
 }
 
-func (m *Manager) loadForUse() ([]Connection, error) {
+func (m *Manager) loadOneForUse(id string) (*Connection, error) {
 	m.mu.RLock()
-	connections, needsMigration, err := m.loadUnlockedWithMigrationFlag(true)
+	connections, index, needsMigration, err := m.loadOneUnlockedWithMigrationFlag(id, true)
 	m.mu.RUnlock()
 	if err != nil {
 		return nil, err
 	}
+	if index < 0 {
+		return nil, os.ErrNotExist
+	}
 	if !needsMigration {
-		return connections, nil
+		return cloneConnection(connections[index]), nil
 	}
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	connections, needsMigration, err = m.loadUnlockedWithMigrationFlag(true)
+	connections, index, needsMigration, err = m.loadOneUnlockedWithMigrationFlag(id, true)
 	if err != nil {
 		return nil, err
 	}
+	if index < 0 {
+		return nil, os.ErrNotExist
+	}
 	if !needsMigration {
-		return connections, nil
+		return cloneConnection(connections[index]), nil
 	}
 	if err := m.saveUnlocked(connections); err != nil {
 		return nil, err
 	}
-	connections, _, err = m.loadUnlockedWithMigrationFlag(true)
-	return connections, err
+	connections, index, _, err = m.loadOneUnlockedWithMigrationFlag(id, true)
+	if err != nil {
+		return nil, err
+	}
+	if index < 0 {
+		return nil, os.ErrNotExist
+	}
+	return cloneConnection(connections[index]), nil
 }
 
 func (m *Manager) loadUnlocked() ([]Connection, error) {
@@ -397,6 +397,27 @@ func (m *Manager) loadUnlockedWithMigrationFlag(resolveSecretRefs bool) ([]Conne
 		needsMigration = true
 	}
 	return connections, needsMigration, nil
+}
+
+func (m *Manager) loadOneUnlockedWithMigrationFlag(id string, resolveSecretRefs bool) ([]Connection, int, bool, error) {
+	connections, err := m.readConnectionsUnlocked()
+	if err != nil {
+		return nil, -1, false, err
+	}
+	for index := range connections {
+		if connections[index].ID != id {
+			continue
+		}
+		needsMigration, err := m.loadConnectionSecrets(connections[index:index+1], resolveSecretRefs)
+		if err != nil {
+			return nil, -1, false, err
+		}
+		if applySecretReferenceDefaults(&connections[index]) {
+			needsMigration = true
+		}
+		return connections, index, needsMigration, nil
+	}
+	return connections, -1, false, nil
 }
 
 func (m *Manager) readConnectionsUnlocked() ([]Connection, error) {
@@ -457,7 +478,7 @@ func (m *Manager) storeConnectionSecrets(connections []Connection) ([]Connection
 			return nil, err
 		}
 		next.Secrets = stored.Values
-		next.SecretRefs = stored.Refs
+		next.SecretRefs = secretRefsMetadata(next.AuthMethod, mergeSecretRefs(next.SecretRefs, stored.Refs))
 		if len(next.Secrets) > 0 || len(next.SecretRefs) > 0 {
 			next.SecretStore = store.Kind()
 		}
@@ -830,6 +851,14 @@ func publicConnection(connection Connection) PublicConnection {
 	}
 }
 
+func cloneConnection(connection Connection) *Connection {
+	connectionCopy := connection
+	connectionCopy.Metadata = cloneMap(connection.Metadata)
+	connectionCopy.Secrets = cloneMap(connection.Secrets)
+	connectionCopy.SecretRefs = cloneMap(connection.SecretRefs)
+	return &connectionCopy
+}
+
 func applySecretReferenceDefaultsToAll(connections []Connection) bool {
 	changed := false
 	for index := range connections {
@@ -845,10 +874,10 @@ func preserveExistingExternalSecretRefs(input *Connection, existing Connection) 
 	if secretStore == "" || secretStore == SecretStoreLocalEncrypted {
 		return
 	}
-	if input.SecretStore != "" || len(input.SecretRefs) != 0 || len(input.Secrets) != 0 {
+	if input.SecretStore != "" && input.SecretStore != secretStore {
 		return
 	}
-	secretRefs := trimMap(existing.SecretRefs)
+	secretRefs := secretRefsMetadata(input.AuthMethod, mergeSecretRefs(existing.SecretRefs, input.SecretRefs))
 	if len(secretRefs) == 0 {
 		return
 	}
@@ -936,6 +965,19 @@ func secretMetadata(authMethod string, secrets map[string]string) map[string]str
 	return out
 }
 
+func secretRefsMetadata(authMethod string, refs map[string]string) map[string]string {
+	out := map[string]string{}
+	for _, key := range secretFieldsByMethod[authMethod] {
+		if value := strings.TrimSpace(refs[key]); value != "" {
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 func presentSecretFields(authMethod string, secrets, secretRefs map[string]string) []string {
 	out := []string{}
 	for _, key := range secretFieldsByMethod[authMethod] {
@@ -950,6 +992,22 @@ func mergeSecrets(existing, submitted map[string]string) map[string]string {
 	out := cloneMap(existing)
 	for key, value := range submitted {
 		if value = strings.TrimSpace(value); value != "" && !isMasked(value) {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[key] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mergeSecretRefs(existing, submitted map[string]string) map[string]string {
+	out := cloneMap(existing)
+	for key, value := range submitted {
+		if value = strings.TrimSpace(value); value != "" {
 			if out == nil {
 				out = map[string]string{}
 			}
