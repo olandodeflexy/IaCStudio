@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iac-studio/iac-studio/internal/agentproviders"
 	"github.com/iac-studio/iac-studio/internal/ai"
 	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/catalog"
@@ -1034,8 +1035,9 @@ func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool
 // RouterOptions allows callers to provide services and configuration that need
 // explicit ownership outside the router.
 type RouterOptions struct {
-	MCPAirlock *mcpairlock.Manager
-	AppVersion string
+	MCPAirlock          *mcpairlock.Manager
+	AppVersion          string
+	LocalAgentProviders func() []agentproviders.LocalProviderStatus
 }
 
 const defaultAppVersion = "0.1.0"
@@ -1046,6 +1048,13 @@ func (opts RouterOptions) appVersion() string {
 		return defaultAppVersion
 	}
 	return version
+}
+
+func (opts RouterOptions) localAgentProviders() []agentproviders.LocalProviderStatus {
+	if opts.LocalAgentProviders != nil {
+		return opts.LocalAgentProviders()
+	}
+	return agentproviders.DiscoverLocal()
 }
 
 // NewRouter creates the HTTP router with all endpoints.
@@ -1072,6 +1081,15 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	mux.HandleFunc("GET /api/tools", func(w http.ResponseWriter, r *http.Request) {
 		tools := run.DetectTools()
 		_ = json.NewEncoder(w).Encode(tools)
+	})
+
+	// List local assistant providers detected on this machine. The built-in
+	// discovery is PATH-only: it does not execute provider CLIs, read auth
+	// files, call localhost services, or return absolute executable paths.
+	mux.HandleFunc("GET /api/agent-hub/providers/local", func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"providers": opts.localAgentProviders(),
+		})
 	})
 
 	// Resource catalog — returns all resources for a tool, optionally filtered by provider
