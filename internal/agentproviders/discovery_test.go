@@ -49,7 +49,7 @@ func TestDiscoverLocalUsesLookupWithoutLeakingPaths(t *testing.T) {
 	if status := byID["copilot"]; !status.Installed || status.Command != "gh-copilot" || status.Entrypoint != "gh copilot" {
 		t.Fatalf("unexpected copilot status: %+v", status)
 	}
-	if status := byID["ollama"]; !status.Installed || status.Category != "local_model" {
+	if status := byID["ollama"]; !status.Installed || status.Category != "local_model" || status.CredentialMode != CredentialNone {
 		t.Fatalf("unexpected ollama status: %+v", status)
 	}
 

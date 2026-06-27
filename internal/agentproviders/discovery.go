@@ -6,18 +6,20 @@ const (
 	StateAvailable          = "available"
 	StateNotInstalled       = "not_installed"
 	CredentialExternalLogin = "external_login"
+	CredentialNone          = "none"
 )
 
 type LookupFunc func(file string) (string, error)
 
 type LocalProviderDefinition struct {
-	ID          string
-	Name        string
-	Category    string
-	Entrypoint  string
-	Candidates  []string
-	AuthHint    string
-	InstallHint string
+	ID             string
+	Name           string
+	Category       string
+	Entrypoint     string
+	Candidates     []string
+	CredentialMode string
+	AuthHint       string
+	InstallHint    string
 }
 
 type LocalProviderStatus struct {
@@ -70,6 +72,10 @@ func (d Discoverer) DiscoverLocal() []LocalProviderStatus {
 }
 
 func (d Discoverer) status(definition LocalProviderDefinition) LocalProviderStatus {
+	credMode := definition.CredentialMode
+	if credMode == "" {
+		credMode = CredentialExternalLogin
+	}
 	status := LocalProviderStatus{
 		ID:             definition.ID,
 		Name:           definition.Name,
@@ -77,7 +83,7 @@ func (d Discoverer) status(definition LocalProviderDefinition) LocalProviderStat
 		State:          StateNotInstalled,
 		Entrypoint:     definition.Entrypoint,
 		Candidates:     append([]string(nil), definition.Candidates...),
-		CredentialMode: CredentialExternalLogin,
+		CredentialMode: credMode,
 		AuthHint:       definition.AuthHint,
 		InstallHint:    definition.InstallHint,
 	}
@@ -132,13 +138,14 @@ func DefaultLocalProviders() []LocalProviderDefinition {
 			InstallHint: "Install the GitHub CLI Copilot extension and sign in locally.",
 		},
 		{
-			ID:          "ollama",
-			Name:        "Ollama",
-			Category:    "local_model",
-			Entrypoint:  "ollama",
-			Candidates:  []string{"ollama"},
-			AuthHint:    "Uses local models and does not require cloud credentials.",
-			InstallHint: "Install Ollama to enable local model workflows.",
+			ID:             "ollama",
+			Name:           "Ollama",
+			Category:       "local_model",
+			Entrypoint:     "ollama",
+			Candidates:     []string{"ollama"},
+			CredentialMode: CredentialNone,
+			AuthHint:       "Uses local models and does not require cloud credentials.",
+			InstallHint:    "Install Ollama to enable local model workflows.",
 		},
 	}
 }
