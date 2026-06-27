@@ -248,6 +248,17 @@ describe('api.listLocalAgentProviders', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/agent-hub/providers/local');
   });
+
+  it('coerces null local agent provider responses to an empty array', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('null', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    await expect(api.listLocalAgentProviders()).resolves.toEqual([]);
+  });
 });
 
 describe('api.listProjectStates', () => {

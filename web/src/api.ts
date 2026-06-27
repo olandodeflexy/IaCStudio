@@ -550,8 +550,10 @@ export const api = {
 
   async listLocalAgentProviders(): Promise<LocalAgentProviderStatus[]> {
     const res = await fetch(`${BASE}/api/agent-hub/providers/local`);
-    const body = (await (await check(res)).json()) as LocalAgentProvidersResponse;
-    return Array.isArray(body.providers) ? body.providers : [];
+    const body = (await (await check(res)).json()) as unknown;
+    if (!body || typeof body !== 'object') return [];
+    const providers = (body as Partial<LocalAgentProvidersResponse>).providers;
+    return Array.isArray(providers) ? providers : [];
   },
 
   async listCloudConnections(): Promise<CloudConnection[]> {
