@@ -127,9 +127,9 @@ func DefaultLocalProviders() []LocalProviderDefinition {
 			Name:        "GitHub Copilot CLI",
 			Category:    "local_agent",
 			Entrypoint:  "gh copilot",
-			Candidates:  []string{"gh"},
+			Candidates:  []string{"gh-copilot"},
 			AuthHint:    "Use the local GitHub CLI auth session and Copilot entitlement.",
-			InstallHint: "Install GitHub CLI with Copilot access and sign in locally.",
+			InstallHint: "Install the GitHub CLI Copilot extension and sign in locally.",
 		},
 		{
 			ID:          "ollama",

@@ -22,9 +22,9 @@ func TestDefaultLocalProviderOrder(t *testing.T) {
 
 func TestDiscoverLocalUsesLookupWithoutLeakingPaths(t *testing.T) {
 	installed := map[string]string{
-		"codex":  "/private/bin/codex",
-		"gh":     "/private/bin/gh",
-		"ollama": "/private/bin/ollama",
+		"codex":      "/private/bin/codex",
+		"gh-copilot": "/private/bin/gh-copilot",
+		"ollama":     "/private/bin/ollama",
 	}
 	discoverer := NewDiscoverer(WithLookupFunc(func(file string) (string, error) {
 		path, ok := installed[file]
@@ -46,7 +46,7 @@ func TestDiscoverLocalUsesLookupWithoutLeakingPaths(t *testing.T) {
 	if status := byID["claude"]; status.Installed || status.State != StateNotInstalled || status.Command != "" {
 		t.Fatalf("unexpected claude status: %+v", status)
 	}
-	if status := byID["copilot"]; !status.Installed || status.Command != "gh" || status.Entrypoint != "gh copilot" {
+	if status := byID["copilot"]; !status.Installed || status.Command != "gh-copilot" || status.Entrypoint != "gh copilot" {
 		t.Fatalf("unexpected copilot status: %+v", status)
 	}
 	if status := byID["ollama"]; !status.Installed || status.Category != "local_model" {
@@ -57,7 +57,7 @@ func TestDiscoverLocalUsesLookupWithoutLeakingPaths(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal statuses: %v", err)
 	}
-	if got := string(data); containsAny(got, []string{"/private/bin/codex", "/private/bin/gh", "/private/bin/ollama"}) {
+	if got := string(data); containsAny(got, []string{"/private/bin/codex", "/private/bin/gh-copilot", "/private/bin/ollama"}) {
 		t.Fatalf("status JSON leaked executable path: %s", got)
 	}
 }
