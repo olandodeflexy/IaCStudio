@@ -1083,9 +1083,9 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		_ = json.NewEncoder(w).Encode(tools)
 	})
 
-	// List local assistant providers detected on this machine. Discovery is
-	// PATH-only: it does not execute provider CLIs, read auth files, call
-	// localhost services, or return absolute executable paths.
+	// List local assistant providers detected on this machine. The built-in
+	// discovery is PATH-only: it does not execute provider CLIs, read auth
+	// files, call localhost services, or return absolute executable paths.
 	mux.HandleFunc("GET /api/agent-hub/providers/local", func(w http.ResponseWriter, _ *http.Request) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"providers": opts.localAgentProviders(),

@@ -62,6 +62,34 @@ func TestDiscoverLocalUsesLookupWithoutLeakingPaths(t *testing.T) {
 	}
 }
 
+func TestStatusNormalizesListFieldsForJSONConsumers(t *testing.T) {
+	discoverer := NewDiscoverer(WithLookupFunc(func(string) (string, error) {
+		return "", errors.New("not found")
+	}))
+
+	status := discoverer.status(LocalProviderDefinition{
+		ID:         "custom",
+		Name:       "Custom Provider",
+		Category:   "local_agent",
+		Entrypoint: "custom",
+	})
+
+	if status.Candidates == nil {
+		t.Fatalf("candidates should be an empty slice, got nil")
+	}
+	if status.Capabilities == nil {
+		t.Fatalf("capabilities should be an empty slice, got nil")
+	}
+	data, err := json.Marshal(status)
+	if err != nil {
+		t.Fatalf("marshal status: %v", err)
+	}
+	got := string(data)
+	if !strings.Contains(got, `"candidates":[]`) || !strings.Contains(got, `"capabilities":[]`) {
+		t.Fatalf("status JSON should expose empty arrays, got %s", got)
+	}
+}
+
 func containsAny(s string, needles []string) bool {
 	for _, needle := range needles {
 		if len(needle) > 0 && strings.Contains(s, needle) {

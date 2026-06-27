@@ -91,9 +91,9 @@ func (d Discoverer) status(definition LocalProviderDefinition) LocalProviderStat
 		Category:       definition.Category,
 		State:          StateNotInstalled,
 		Entrypoint:     definition.Entrypoint,
-		Candidates:     append([]string(nil), definition.Candidates...),
+		Candidates:     cloneStringSlice(definition.Candidates),
 		Version:        version,
-		Capabilities:   append([]string(nil), definition.Capabilities...),
+		Capabilities:   cloneStringSlice(definition.Capabilities),
 		CredentialMode: credentialMode,
 		AuthHint:       definition.AuthHint,
 		InstallHint:    definition.InstallHint,
@@ -108,6 +108,13 @@ func (d Discoverer) status(definition LocalProviderDefinition) LocalProviderStat
 		}
 	}
 	return status
+}
+
+func cloneStringSlice(values []string) []string {
+	if len(values) == 0 {
+		return []string{}
+	}
+	return append([]string(nil), values...)
 }
 
 func DefaultLocalProviders() []LocalProviderDefinition {
