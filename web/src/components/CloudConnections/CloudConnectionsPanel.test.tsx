@@ -59,7 +59,7 @@ function makeClient(initial: CloudConnection[] = []) {
 }
 
 describe('CloudConnectionsPanel', () => {
-  it('shows the local secret storage warning', async () => {
+  it('shows the no-stored-secrets warning for a new connection', async () => {
     const client = makeClient();
     render(<CloudConnectionsPanel client={client} />);
 
@@ -107,6 +107,15 @@ describe('CloudConnectionsPanel', () => {
         secret_fields: ['secret_access_key'],
         secret_store: 'custom_secret_store',
       },
+      {
+        id: 'conn_5',
+        name: 'prototype-safe',
+        provider: 'aws',
+        auth_method: 'aws_static',
+        metadata: { access_key_id: 'AKIAPROTOTYPE' },
+        secret_fields: ['secret_access_key'],
+        secret_store: 'toString',
+      },
     ]);
     render(<CloudConnectionsPanel client={client} />);
 
@@ -115,6 +124,7 @@ describe('CloudConnectionsPanel', () => {
     expect(screen.getByText('OS keychain')).toBeInTheDocument();
     expect(screen.getByText('Vault')).toBeInTheDocument();
     expect(screen.getByText('Custom Secret Store')).toBeInTheDocument();
+    expect(screen.getByText('ToString')).toBeInTheDocument();
   });
 
   it('shows the selected connection secret store near the form', async () => {
@@ -183,6 +193,24 @@ describe('CloudConnectionsPanel', () => {
     });
     await screen.findByText('aws_static / us-west-2');
     expect(screen.getAllByText('Local encrypted').length).toBeGreaterThanOrEqual(1);
+  });
+
+  it('does not show local encrypted storage for cleared draft secret fields', async () => {
+    const client = makeClient();
+    render(<CloudConnectionsPanel client={client} />);
+
+    await screen.findByText('0 connections');
+    fireEvent.change(screen.getByLabelText('Auth'), { target: { value: 'aws_static' } });
+    fireEvent.change(screen.getByLabelText('Secret access key'), { target: { value: 'secret-value' } });
+
+    expect(screen.getByText(/Secrets are encrypted and stored locally/)).toBeInTheDocument();
+    expect(screen.getByText('Local encrypted')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Secret access key'), { target: { value: '   ' } });
+
+    expect(screen.getByText(/No secrets are stored for this connection yet/)).toBeInTheDocument();
+    expect(screen.getByText('No stored secrets')).toBeInTheDocument();
+    expect(screen.queryByText('Local encrypted')).not.toBeInTheDocument();
   });
 
   it('does not render stored secret values when editing', async () => {

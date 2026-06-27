@@ -89,21 +89,21 @@ const defaultInput = (): CloudConnectionInput => ({
   secrets: {},
 });
 
-const secretStoreLabels: Record<string, string> = {
-  local_encrypted: 'Local encrypted',
-  os_keychain: 'OS keychain',
-  vault: 'Vault',
-  aws_secrets_manager: 'AWS Secrets Manager',
-  aws_ssm_parameter_store: 'AWS SSM Parameter Store',
-  azure_key_vault: 'Azure Key Vault',
-  gcp_secret_manager: 'GCP Secret Manager',
-};
+const secretStoreLabels = new Map<string, string>([
+  ['local_encrypted', 'Local encrypted'],
+  ['os_keychain', 'OS keychain'],
+  ['vault', 'Vault'],
+  ['aws_secrets_manager', 'AWS Secrets Manager'],
+  ['aws_ssm_parameter_store', 'AWS SSM Parameter Store'],
+  ['azure_key_vault', 'Azure Key Vault'],
+  ['gcp_secret_manager', 'GCP Secret Manager'],
+]);
 
 function secretStoreLabel(store?: CloudSecretStore) {
   const value = store?.trim();
   if (!value) return 'No stored secrets';
   return (
-    secretStoreLabels[value]
+    secretStoreLabels.get(value)
     || value
       .split(/[_-]+/)
       .filter(Boolean)
@@ -146,6 +146,10 @@ function connectionSecretStore(
   connection?: Pick<CloudConnection, 'secret_fields' | 'secret_store'>,
 ): CloudSecretStore | undefined {
   return connection?.secret_store || (connection?.secret_fields?.length ? 'local_encrypted' : undefined);
+}
+
+function hasDraftSecretValues(secrets?: Record<string, string>) {
+  return Object.values(secrets || {}).some(value => value?.trim());
 }
 
 function splitFields(input: CloudConnectionInput) {
@@ -191,7 +195,7 @@ export function CloudConnectionsPanel({
     [connections, form.id],
   );
   const formSecretStore = connectionSecretStore(selected)
-    || (Object.keys(form.secrets || {}).length > 0 ? 'local_encrypted' : undefined);
+    || (hasDraftSecretValues(form.secrets) ? 'local_encrypted' : undefined);
 
   const load = async () => {
     setLoading(true);
