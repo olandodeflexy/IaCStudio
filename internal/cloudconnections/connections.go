@@ -109,10 +109,11 @@ type Check struct {
 }
 
 type Manager struct {
-	path         string
-	keyPath      string
-	secretStores map[string]SecretStore
-	mu           sync.RWMutex
+	path           string
+	keyPath        string
+	secretStores   map[string]SecretStore
+	secretStoresMu sync.RWMutex
+	mu             sync.RWMutex
 }
 
 func NewManager(projectsDir string, opts ...Option) *Manager {
@@ -278,7 +279,7 @@ func (m *Manager) Delete(id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	connections, err := m.loadUnlocked()
+	connections, err := m.readConnectionsUnlocked()
 	if err != nil {
 		return err
 	}
@@ -287,6 +288,9 @@ func (m *Manager) Delete(id string) error {
 	for _, connection := range connections {
 		if connection.ID == id {
 			found = true
+			if err := m.deleteConnectionSecrets(connection); err != nil {
+				return err
+			}
 			continue
 		}
 		next = append(next, connection)
@@ -381,16 +385,9 @@ func (m *Manager) loadUnlocked() ([]Connection, error) {
 }
 
 func (m *Manager) loadUnlockedWithMigrationFlag(resolveSecretRefs bool) ([]Connection, bool, error) {
-	data, err := os.ReadFile(m.path)
+	connections, err := m.readConnectionsUnlocked()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return []Connection{}, false, nil
-		}
-		return nil, false, fmt.Errorf("read cloud connections: %w", err)
-	}
-	var connections []Connection
-	if err := json.Unmarshal(data, &connections); err != nil {
-		return nil, false, fmt.Errorf("parse cloud connections: %w", err)
+		return nil, false, err
 	}
 	needsMigration, err := m.loadConnectionSecrets(connections, resolveSecretRefs)
 	if err != nil {
@@ -400,6 +397,21 @@ func (m *Manager) loadUnlockedWithMigrationFlag(resolveSecretRefs bool) ([]Conne
 		needsMigration = true
 	}
 	return connections, needsMigration, nil
+}
+
+func (m *Manager) readConnectionsUnlocked() ([]Connection, error) {
+	data, err := os.ReadFile(m.path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []Connection{}, nil
+		}
+		return nil, fmt.Errorf("read cloud connections: %w", err)
+	}
+	var connections []Connection
+	if err := json.Unmarshal(data, &connections); err != nil {
+		return nil, fmt.Errorf("parse cloud connections: %w", err)
+	}
+	return connections, nil
 }
 
 func (m *Manager) saveUnlocked(connections []Connection) error {
@@ -483,6 +495,24 @@ func (m *Manager) loadConnectionSecrets(connections []Connection, resolveSecretR
 		}
 	}
 	return needsMigration, nil
+}
+
+func (m *Manager) deleteConnectionSecrets(connection Connection) error {
+	connection.SecretStore = strings.TrimSpace(connection.SecretStore)
+	store, ok := m.secretStoreFor(connection.SecretStore)
+	if !ok {
+		if hasNonEmptySecrets(connection.Secrets) {
+			return fmt.Errorf("connection %s uses unsupported secret store %q with local secret values", connectionLabel(connection), connection.SecretStore)
+		}
+		return nil
+	}
+	if len(connection.Secrets) == 0 && len(connection.SecretRefs) == 0 {
+		return nil
+	}
+	return store.Delete(context.Background(), secretScope(connection), StoredSecrets{
+		Values: cloneMap(connection.Secrets),
+		Refs:   cloneMap(connection.SecretRefs),
+	})
 }
 
 func secretScope(connection Connection) SecretScope {

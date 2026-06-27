@@ -9,9 +9,9 @@ import (
 // Option customizes a Cloud Connections manager.
 type Option func(*Manager)
 
-// WithSecretStore registers a secret store backend. Later registrations for the
-// same kind replace earlier ones, which keeps tests and future backend wiring
-// straightforward while preserving fail-closed lookup behavior.
+// WithSecretStore registers a secret store backend. It is intended for
+// NewManager construction-time wiring; registry access is synchronized so later
+// test or adapter wiring cannot race with lookups.
 func WithSecretStore(store SecretStore) Option {
 	return func(m *Manager) {
 		m.registerSecretStore(store)
@@ -21,6 +21,9 @@ func WithSecretStore(store SecretStore) Option {
 // SupportedSecretStores returns the registered backend kinds for diagnostics
 // and future UI/API discovery.
 func (m *Manager) SupportedSecretStores() []string {
+	m.secretStoresMu.RLock()
+	defer m.secretStoresMu.RUnlock()
+
 	kinds := make([]string, 0, len(m.secretStores))
 	for kind := range m.secretStores {
 		kinds = append(kinds, kind)
@@ -47,6 +50,8 @@ func (m *Manager) registerSecretStore(store SecretStore) {
 	if kind == "" {
 		return
 	}
+	m.secretStoresMu.Lock()
+	defer m.secretStoresMu.Unlock()
 	m.secretStores[kind] = store
 }
 
@@ -60,6 +65,8 @@ func (m *Manager) secretStoreFor(kind string) (SecretStore, bool) {
 	if kind == "" {
 		kind = SecretStoreLocalEncrypted
 	}
+	m.secretStoresMu.RLock()
+	defer m.secretStoresMu.RUnlock()
 	store, ok := m.secretStores[kind]
 	return store, ok
 }

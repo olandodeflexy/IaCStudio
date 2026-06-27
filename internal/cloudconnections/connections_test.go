@@ -12,10 +12,11 @@ import (
 )
 
 type fakeSecretStore struct {
-	kind   string
-	values map[string]string
-	saves  []StoredSecrets
-	loads  []StoredSecrets
+	kind    string
+	values  map[string]string
+	saves   []StoredSecrets
+	loads   []StoredSecrets
+	deletes []StoredSecrets
 }
 
 func (s *fakeSecretStore) Kind() string {
@@ -58,7 +59,11 @@ func (s *fakeSecretStore) Load(_ context.Context, _ SecretScope, stored StoredSe
 	return LoadedSecrets{Values: values, NeedsMigration: needsMigration}, nil
 }
 
-func (s *fakeSecretStore) Delete(context.Context, SecretScope, StoredSecrets) error {
+func (s *fakeSecretStore) Delete(_ context.Context, _ SecretScope, stored StoredSecrets) error {
+	s.deletes = append(s.deletes, stored)
+	for _, ref := range stored.Refs {
+		delete(s.values, ref)
+	}
 	return nil
 }
 
@@ -284,6 +289,48 @@ func TestManagerMigratesRegisteredStoreRefsForUse(t *testing.T) {
 	}
 	if contains(string(data), oldRef) || !contains(string(data), newRef) {
 		t.Fatalf("registered store migration should replace old ref with new ref: %s", string(data))
+	}
+}
+
+func TestManagerDeletesRegisteredStoreSecrets(t *testing.T) {
+	store := &fakeSecretStore{kind: "vault"}
+	manager := NewManager(t.TempDir(), WithSecretStore(store))
+
+	created, err := manager.Save(Connection{
+		Name:        "external",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:     map[string]string{"secret_access_key": "super-secret"},
+		SecretStore: "vault",
+	})
+	if err != nil {
+		t.Fatalf("Save with registered secret store: %v", err)
+	}
+	ref := "vault://connections/" + created.ID + "/secret_access_key"
+	if _, ok := store.values[ref]; !ok {
+		t.Fatalf("registered store should retain saved test secret at %q", ref)
+	}
+
+	if err := manager.Delete(created.ID); err != nil {
+		t.Fatalf("Delete registered store connection: %v", err)
+	}
+	if len(store.deletes) != 1 {
+		t.Fatalf("registered store should delete persisted secret refs once, got %d calls", len(store.deletes))
+	}
+	if got := store.deletes[0].Refs["secret_access_key"]; got != ref {
+		t.Fatalf("registered store should delete persisted ref, got %q", got)
+	}
+	if _, ok := store.values[ref]; ok {
+		t.Fatalf("registered store should remove secret value for %q", ref)
+	}
+
+	listed, err := manager.List()
+	if err != nil {
+		t.Fatalf("List after registered store delete: %v", err)
+	}
+	if len(listed) != 0 {
+		t.Fatalf("deleted connection should be removed from persisted records: %#v", listed)
 	}
 }
 
