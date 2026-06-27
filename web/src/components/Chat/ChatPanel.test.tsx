@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 
 import { ChatPanel } from './ChatPanel';
 
@@ -15,6 +15,11 @@ describe('ChatPanel', () => {
 
   it('renders the empty-state hint when no messages are present', () => {
     render(<ChatPanel {...baseProps} />);
+    expect(screen.getByText('Agent Hub')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Codex' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Claude Code' })).toBeInTheDocument();
+    expect(screen.getByText('Read-only default')).toBeInTheDocument();
+    expect(screen.getByText('No secret prompts')).toBeInTheDocument();
     expect(screen.getByText(/Ask me to create infrastructure/)).toBeInTheDocument();
   });
 
@@ -45,5 +50,59 @@ describe('ChatPanel', () => {
     expect(input).toBeDisabled();
     expect(screen.getByLabelText('Send message')).toBeDisabled();
     expect(screen.getByText('✦ Thinking...')).toBeInTheDocument();
+  });
+
+  it('shows the Codex provider lane without requiring API keys by default', () => {
+    render(<ChatPanel {...baseProps} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    expect(screen.getAllByText('Codex CLI').length).toBeGreaterThan(0);
+    expect(screen.getByText('OpenAI API')).toBeInTheDocument();
+    expect(screen.getByText(/official CLI session/)).toBeInTheDocument();
+    expect(screen.getByText(/Platform API account/)).toBeInTheDocument();
+  });
+
+  it('links provider tabs to stable tabpanels and supports roving keyboard selection', () => {
+    render(<ChatPanel {...baseProps} />);
+
+    const chatTab = screen.getByRole('tab', { name: 'Chat' });
+    const codexTab = screen.getByRole('tab', { name: 'Codex' });
+    expect(chatTab).toHaveAttribute('id', 'agent-hub-tab-chat');
+    expect(chatTab).toHaveAttribute('aria-controls', 'agent-hub-panel-chat');
+    expect(codexTab).toHaveAttribute('aria-controls', 'agent-hub-panel-codex');
+    expect(chatTab).toHaveAttribute('tabindex', '0');
+    expect(codexTab).toHaveAttribute('tabindex', '-1');
+    expect(document.getElementById('agent-hub-panel-codex')).toHaveAttribute('role', 'tabpanel');
+    expect(screen.getByRole('tabpanel', { name: 'Chat' })).toHaveAttribute('id', 'agent-hub-panel-chat');
+
+    fireEvent.keyDown(chatTab, { key: 'ArrowDown' });
+
+    expect(codexTab).toHaveAttribute('aria-selected', 'true');
+    expect(codexTab).toHaveAttribute('tabindex', '0');
+    expect(screen.getByRole('tabpanel', { name: 'Codex' })).toHaveAttribute('id', 'agent-hub-panel-codex');
+  });
+
+  it('exposes task mode selection to assistive technology', () => {
+    render(<ChatPanel {...baseProps} />);
+
+    const taskModes = screen.getByRole('group', { name: 'Agent task modes' });
+    const reviewProject = within(taskModes).getByRole('button', { name: 'Review project' });
+    const generateIac = within(taskModes).getByRole('button', { name: 'Generate IaC' });
+    expect(reviewProject).toHaveAttribute('aria-pressed', 'true');
+    expect(generateIac).toHaveAttribute('aria-pressed', 'false');
+
+    fireEvent.click(generateIac);
+
+    expect(reviewProject).toHaveAttribute('aria-pressed', 'false');
+    expect(generateIac).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('keeps local model support visible as a first-class lane', () => {
+    render(<ChatPanel {...baseProps} providerLabel="Ollama" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Local' }));
+
+    expect(screen.getAllByText('Ollama').length).toBeGreaterThan(0);
+    expect(screen.getByText('LM Studio / vLLM')).toBeInTheDocument();
+    expect(screen.getByText(/without cloud egress/)).toBeInTheDocument();
   });
 });
