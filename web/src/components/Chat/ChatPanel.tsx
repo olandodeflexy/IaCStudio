@@ -28,13 +28,15 @@ export interface ChatPanelProps {
   providerLabel?: string;
 }
 
-type AgentHubTab = 'chat' | 'codex' | 'claude' | 'local' | 'mcp' | 'runs';
+type AgentHubTab = 'chat' | 'codex' | 'claude' | 'gemini' | 'copilot' | 'local' | 'mcp' | 'runs';
 type ProviderState = 'available' | 'setup' | 'planned' | 'guarded';
 
 const AGENT_TABS: { key: AgentHubTab; label: string }[] = [
   { key: 'chat', label: 'Chat' },
   { key: 'codex', label: 'Codex' },
   { key: 'claude', label: 'Claude Code' },
+  { key: 'gemini', label: 'Gemini' },
+  { key: 'copilot', label: 'Copilot' },
   { key: 'local', label: 'Local' },
   { key: 'mcp', label: 'MCP' },
   { key: 'runs', label: 'Runs' },
@@ -69,6 +71,24 @@ const PROVIDER_GROUPS: Record<Exclude<AgentHubTab, 'chat' | 'runs'>, {
       { name: 'Claude Code CLI', lane: 'Local agent', state: 'planned', note: 'Runs through the official local Claude Code login.' },
       { name: 'Anthropic API', lane: 'API', state: 'setup', note: 'Separate API billing for automation and hosted use.' },
       { name: 'Claude Team or Enterprise', lane: 'Enterprise', state: 'guarded', note: 'For managed access, policy, and audit controls.' },
+    ],
+  },
+  gemini: {
+    title: 'Gemini',
+    summary: 'Support Gemini CLI and API paths without forcing users into a separate hosted account flow first.',
+    providers: [
+      { name: 'Gemini CLI', lane: 'Local agent', state: 'planned', note: 'Use the local Gemini session when present.' },
+      { name: 'Gemini API', lane: 'API', state: 'setup', note: 'Explicit API billing path for automation and hosted workflows.' },
+      { name: 'Google Cloud enterprise controls', lane: 'Enterprise', state: 'guarded', note: 'For governed workspace use through organization policy.' },
+    ],
+  },
+  copilot: {
+    title: 'GitHub Copilot',
+    summary: 'Expose Copilot as a first-class assistant lane for teams already signed in through GitHub.',
+    providers: [
+      { name: 'GitHub Copilot CLI', lane: 'Local agent', state: 'planned', note: 'Use the local GitHub auth session and Copilot entitlement.' },
+      { name: 'Copilot coding agent', lane: 'Collaboration', state: 'guarded', note: 'Route issue and PR work through auditable GitHub workflows.' },
+      { name: 'Copilot Business or Enterprise', lane: 'Enterprise', state: 'setup', note: 'Use organization-managed access and policy controls.' },
     ],
   },
   local: {
@@ -191,6 +211,8 @@ export function ChatPanel({
   const activeProviderLabel = useMemo(() => {
     if (activeTab === 'codex') return 'Codex CLI';
     if (activeTab === 'claude') return 'Claude Code';
+    if (activeTab === 'gemini') return 'Gemini';
+    if (activeTab === 'copilot') return 'GitHub Copilot';
     if (activeTab === 'local') return providerLabel;
     if (activeTab === 'mcp') return 'MCP Airlock';
     if (activeTab === 'runs') return 'Run history';
@@ -347,7 +369,7 @@ export function ChatPanel({
             </div>
           </div>
 
-          {(['codex', 'claude', 'local', 'mcp'] as const).map(tab => (
+          {(['codex', 'claude', 'gemini', 'copilot', 'local', 'mcp'] as const).map(tab => (
             <ProviderGroup key={tab} tab={tab} active={activeTab === tab} />
           ))}
 

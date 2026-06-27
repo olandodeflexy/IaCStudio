@@ -19,6 +19,8 @@ describe('ChatPanel', () => {
     expect(screen.getByText('Agent Hub')).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Codex' })).toBeInTheDocument();
     expect(screen.getByRole('tab', { name: 'Claude Code' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Gemini' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Copilot' })).toBeInTheDocument();
     expect(screen.getByText('Read-only default')).toBeInTheDocument();
     expect(screen.getByText('No secret prompts')).toBeInTheDocument();
     expect(screen.getByText(/Ask me to create infrastructure/)).toBeInTheDocument();
@@ -109,6 +111,22 @@ describe('ChatPanel', () => {
     expect(within(localPanel).getByText('Ollama')).toBeInTheDocument();
     expect(within(localPanel).getByText('LM Studio / vLLM')).toBeInTheDocument();
     expect(within(localPanel).getByText(/without cloud egress/)).toBeInTheDocument();
+  });
+
+  it('shows Gemini and Copilot as first-class assistant lanes', () => {
+    render(<ChatPanel {...baseProps} />);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Gemini' }));
+    const geminiPanel = screen.getByRole('tabpanel', { name: 'Gemini' });
+    expect(within(geminiPanel).getByText('Gemini CLI')).toBeInTheDocument();
+    expect(within(geminiPanel).getByText('Gemini API')).toBeInTheDocument();
+    expect(within(geminiPanel).getByText(/local Gemini session/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Copilot' }));
+    const copilotPanel = screen.getByRole('tabpanel', { name: 'Copilot' });
+    expect(within(copilotPanel).getByText('GitHub Copilot CLI')).toBeInTheDocument();
+    expect(within(copilotPanel).getByText('Copilot coding agent')).toBeInTheDocument();
+    expect(within(copilotPanel).getByText(/GitHub auth session/)).toBeInTheDocument();
   });
 
   it('scrolls to the newest chat message when returning to the Chat tab', () => {
