@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react';
-import type { CSSProperties, RefObject } from 'react';
+import type { CSSProperties, KeyboardEvent, RefObject } from 'react';
 
 import { S } from '../../styles';
 
@@ -112,14 +112,19 @@ const stateBackgrounds: Record<ProviderState, string> = {
   guarded: 'rgba(138, 167, 255, 0.16)',
 };
 
+const tabId = (tab: AgentHubTab) => `agent-hub-tab-${tab}`;
+const panelId = (tab: AgentHubTab) => `agent-hub-panel-${tab}`;
+
 const hubStyles: Record<string, CSSProperties> = {
   shell: { flex: 1, display: 'flex', minWidth: 0, minHeight: 0 },
   rail: { width: 176, borderRight: '1px solid var(--border-soft)', background: 'rgba(23, 29, 27, 0.76)', display: 'flex', flexDirection: 'column', flexShrink: 0, overflowY: 'auto' },
   tabList: { display: 'flex', flexDirection: 'column', padding: 8, gap: 4 },
   tabButton: { width: '100%', border: 0, borderRadius: 6, background: 'transparent', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontWeight: 700, fontFamily: 'DM Sans', textAlign: 'left', padding: '7px 8px', textTransform: 'uppercase', letterSpacing: 0.4 },
   taskList: { borderTop: '1px solid var(--border-soft)', padding: '8px 8px 10px', display: 'flex', flexDirection: 'column', gap: 5, minHeight: 0 },
-  taskButton: { border: '1px solid var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-2)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', padding: '6px 7px', textAlign: 'left', whiteSpace: 'normal' },
+  taskButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-2)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', padding: '6px 7px', textAlign: 'left', whiteSpace: 'normal' },
   content: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
+  tabPanel: { flex: 1, display: 'flex', flexDirection: 'column', minWidth: 0, minHeight: 0 },
+  hiddenTabPanel: { display: 'none' },
   posture: { display: 'flex', alignItems: 'center', gap: 6, padding: '7px 12px', borderBottom: '1px solid var(--border-soft)', color: 'var(--text-muted)', fontSize: 11, fontFamily: 'JetBrains Mono', flexWrap: 'wrap' },
   badge: { padding: '2px 7px', borderRadius: 999, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', fontSize: 10, fontFamily: 'JetBrains Mono', whiteSpace: 'nowrap' },
   providerPanel: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '10px 12px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 8 },
@@ -176,6 +181,7 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<AgentHubTab>('chat');
   const [activeTask, setActiveTask] = useState(TASK_MODES[0]);
+
   const activeProviderLabel = useMemo(() => {
     if (activeTab === 'codex') return 'Codex CLI';
     if (activeTab === 'claude') return 'Claude Code';
@@ -184,6 +190,44 @@ export function ChatPanel({
     if (activeTab === 'runs') return 'Run history';
     return providerLabel;
   }, [activeTab, providerLabel]);
+
+  const panelStyle = (tab: AgentHubTab) => (
+    activeTab === tab ? hubStyles.tabPanel : hubStyles.hiddenTabPanel
+  );
+
+  const focusSelectedTab = (tab: AgentHubTab) => {
+    if (typeof document === 'undefined') return;
+    window.setTimeout(() => document.getElementById(tabId(tab))?.focus(), 0);
+  };
+
+  const selectTab = (tab: AgentHubTab, focus = false) => {
+    setActiveTab(tab);
+    if (focus) focusSelectedTab(tab);
+  };
+
+  const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
+    const lastIndex = AGENT_TABS.length - 1;
+    const moveToIndex = (index: number) => {
+      event.preventDefault();
+      selectTab(AGENT_TABS[index].key, true);
+    };
+
+    if (event.key === 'ArrowDown' || event.key === 'ArrowRight') {
+      moveToIndex(currentIndex === lastIndex ? 0 : currentIndex + 1);
+      return;
+    }
+    if (event.key === 'ArrowUp' || event.key === 'ArrowLeft') {
+      moveToIndex(currentIndex === 0 ? lastIndex : currentIndex - 1);
+      return;
+    }
+    if (event.key === 'Home') {
+      moveToIndex(0);
+      return;
+    }
+    if (event.key === 'End') {
+      moveToIndex(lastIndex);
+    }
+  };
 
   return (
     <div style={S.chat}>
@@ -196,29 +240,34 @@ export function ChatPanel({
       <div style={hubStyles.shell}>
         <div style={hubStyles.rail}>
           <div style={hubStyles.tabList} role="tablist" aria-label="Agent Hub providers">
-            {AGENT_TABS.map(tab => (
+            {AGENT_TABS.map((tab, index) => (
               <button
                 key={tab.key}
+                id={tabId(tab.key)}
                 type="button"
                 role="tab"
                 aria-selected={activeTab === tab.key}
+                aria-controls={panelId(tab.key)}
+                tabIndex={activeTab === tab.key ? 0 : -1}
                 style={{
                   ...hubStyles.tabButton,
                   ...(activeTab === tab.key
                     ? { background: 'var(--accent-action-soft)', color: 'var(--accent-action)' }
                     : {}),
                 }}
-                onClick={() => setActiveTab(tab.key)}
+                onClick={() => selectTab(tab.key)}
+                onKeyDown={(event) => handleTabKeyDown(event, index)}
               >
                 {tab.label}
               </button>
             ))}
           </div>
-          <div style={hubStyles.taskList} aria-label="Agent task modes">
+          <div style={hubStyles.taskList} role="group" aria-label="Agent task modes">
             {TASK_MODES.map(task => (
               <button
                 key={task}
                 type="button"
+                aria-pressed={activeTask === task}
                 style={{
                   ...hubStyles.taskButton,
                   ...(activeTask === task
@@ -242,7 +291,13 @@ export function ChatPanel({
             <span style={hubStyles.badge}>No secret prompts</span>
           </div>
 
-          {activeTab === 'chat' && (
+          <div
+            role="tabpanel"
+            id={panelId('chat')}
+            aria-labelledby={tabId('chat')}
+            hidden={activeTab !== 'chat'}
+            style={panelStyle('chat')}
+          >
             <div style={S.chatMsgs}>
               {messages.length === 0 && (
                 <div style={{ padding: '8px 0', color: '#888', fontSize: 13 }}>
@@ -274,13 +329,28 @@ export function ChatPanel({
               )}
               <div ref={scrollAnchorRef} />
             </div>
-          )}
+          </div>
 
-          {activeTab !== 'chat' && activeTab !== 'runs' && (
-            <ProviderGroup tab={activeTab} />
-          )}
+          {(['codex', 'claude', 'local', 'mcp'] as const).map(tab => (
+            <div
+              key={tab}
+              role="tabpanel"
+              id={panelId(tab)}
+              aria-labelledby={tabId(tab)}
+              hidden={activeTab !== tab}
+              style={panelStyle(tab)}
+            >
+              <ProviderGroup tab={tab} />
+            </div>
+          ))}
 
-          {activeTab === 'runs' && (
+          <div
+            role="tabpanel"
+            id={panelId('runs')}
+            aria-labelledby={tabId('runs')}
+            hidden={activeTab !== 'runs'}
+            style={panelStyle('runs')}
+          >
             <div style={hubStyles.runsEmpty}>
               <strong style={{ color: 'var(--text-main)' }}>No agent runs yet.</strong>
               <div style={{ marginTop: 6 }}>
@@ -290,7 +360,7 @@ export function ChatPanel({
                 This shell is UI-only; execution and approval gates land in the secure run lifecycle slice.
               </div>
             </div>
-          )}
+          </div>
         </div>
       </div>
 
