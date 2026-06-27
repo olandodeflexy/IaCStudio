@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, RefObject } from 'react';
 
 import { S } from '../../styles';
@@ -211,6 +211,11 @@ export function ChatPanel({
     if (focus) focusSelectedTab(tab);
   };
 
+  useEffect(() => {
+    if (activeTab !== 'chat') return;
+    scrollAnchorRef?.current?.scrollIntoView?.({ block: 'nearest' });
+  }, [activeTab, scrollAnchorRef]);
+
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
     const lastIndex = AGENT_TABS.length - 1;
     const moveToIndex = (index: number) => {
@@ -245,7 +250,12 @@ export function ChatPanel({
 
       <div style={hubStyles.shell}>
         <div style={hubStyles.rail}>
-          <div style={hubStyles.tabList} role="tablist" aria-label="Agent Hub providers">
+          <div
+            style={hubStyles.tabList}
+            role="tablist"
+            aria-label="Agent Hub providers"
+            aria-orientation="vertical"
+          >
             {AGENT_TABS.map((tab, index) => (
               <button
                 key={tab.key}
