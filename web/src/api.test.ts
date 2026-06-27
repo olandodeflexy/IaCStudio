@@ -214,6 +214,42 @@ describe('api.mcpAirlock', () => {
   });
 });
 
+describe('api.listLocalAgentProviders', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetches local agent provider statuses from Agent Hub', async () => {
+    const response = {
+      providers: [{
+        id: 'ollama',
+        name: 'Ollama',
+        category: 'local_model',
+        state: 'available',
+        installed: true,
+        command: 'ollama',
+        entrypoint: 'ollama',
+        candidates: ['ollama'],
+        version: 'unknown',
+        capabilities: ['chat', 'local_model', 'offline_runtime'],
+        credential_mode: 'none',
+        auth_hint: 'Uses local models and does not require cloud credentials.',
+      }],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.listLocalAgentProviders()).resolves.toEqual(response.providers);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/agent-hub/providers/local');
+  });
+});
+
 describe('api.listProjectStates', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
