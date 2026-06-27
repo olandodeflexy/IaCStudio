@@ -145,10 +145,16 @@ function providerStatus(state: ProviderState) {
   );
 }
 
-function ProviderGroup({ tab }: { tab: Exclude<AgentHubTab, 'chat' | 'runs'> }) {
+function ProviderGroup({ tab, active }: { tab: Exclude<AgentHubTab, 'chat' | 'runs'>; active: boolean }) {
   const group = PROVIDER_GROUPS[tab];
   return (
-    <div style={hubStyles.providerPanel}>
+    <div
+      role="tabpanel"
+      id={panelId(tab)}
+      aria-labelledby={tabId(tab)}
+      hidden={!active}
+      style={active ? hubStyles.providerPanel : hubStyles.hiddenTabPanel}
+    >
       <div style={hubStyles.providerIntro}>
         <strong style={{ color: 'var(--text-main)' }}>{group.title}</strong>
         <span> - {group.summary}</span>
@@ -332,16 +338,7 @@ export function ChatPanel({
           </div>
 
           {(['codex', 'claude', 'local', 'mcp'] as const).map(tab => (
-            <div
-              key={tab}
-              role="tabpanel"
-              id={panelId(tab)}
-              aria-labelledby={tabId(tab)}
-              hidden={activeTab !== tab}
-              style={panelStyle(tab)}
-            >
-              <ProviderGroup tab={tab} />
-            </div>
+            <ProviderGroup key={tab} tab={tab} active={activeTab === tab} />
           ))}
 
           <div
