@@ -101,7 +101,14 @@ export interface CatalogResource {
 
 export type CloudProvider = 'aws' | 'azure' | 'gcp';
 
-export type KnownCloudSecretStore = 'local_encrypted';
+export type KnownCloudSecretStore =
+  | 'local_encrypted'
+  | 'os_keychain'
+  | 'vault'
+  | 'aws_secrets_manager'
+  | 'aws_ssm_parameter_store'
+  | 'azure_key_vault'
+  | 'gcp_secret_manager';
 export type CloudSecretStore = KnownCloudSecretStore | (string & Record<never, never>);
 
 export type CloudAuthMethod =
