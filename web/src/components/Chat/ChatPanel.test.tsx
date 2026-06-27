@@ -15,6 +15,11 @@ describe('ChatPanel', () => {
 
   it('renders the empty-state hint when no messages are present', () => {
     render(<ChatPanel {...baseProps} />);
+    expect(screen.getByText('Agent Hub')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Codex' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Claude Code' })).toBeInTheDocument();
+    expect(screen.getByText('Read-only default')).toBeInTheDocument();
+    expect(screen.getByText('No secret prompts')).toBeInTheDocument();
     expect(screen.getByText(/Ask me to create infrastructure/)).toBeInTheDocument();
   });
 
@@ -45,5 +50,24 @@ describe('ChatPanel', () => {
     expect(input).toBeDisabled();
     expect(screen.getByLabelText('Send message')).toBeDisabled();
     expect(screen.getByText('✦ Thinking...')).toBeInTheDocument();
+  });
+
+  it('shows the Codex provider lane without requiring API keys by default', () => {
+    render(<ChatPanel {...baseProps} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    expect(screen.getAllByText('Codex CLI').length).toBeGreaterThan(0);
+    expect(screen.getByText('OpenAI API')).toBeInTheDocument();
+    expect(screen.getByText(/official CLI session/)).toBeInTheDocument();
+    expect(screen.getByText(/Platform API account/)).toBeInTheDocument();
+  });
+
+  it('keeps local model support visible as a first-class lane', () => {
+    render(<ChatPanel {...baseProps} providerLabel="Ollama" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Local' }));
+
+    expect(screen.getAllByText('Ollama').length).toBeGreaterThan(0);
+    expect(screen.getByText('LM Studio / vLLM')).toBeInTheDocument();
+    expect(screen.getByText(/without cloud egress/)).toBeInTheDocument();
   });
 });
