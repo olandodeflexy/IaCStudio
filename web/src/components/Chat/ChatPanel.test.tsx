@@ -1,3 +1,4 @@
+import { createRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 import { render, screen, fireEvent, within } from '@testing-library/react';
 
@@ -56,10 +57,11 @@ describe('ChatPanel', () => {
     render(<ChatPanel {...baseProps} />);
     fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
 
-    expect(screen.getAllByText('Codex CLI').length).toBeGreaterThan(0);
-    expect(screen.getByText('OpenAI API')).toBeInTheDocument();
-    expect(screen.getByText(/official CLI session/)).toBeInTheDocument();
-    expect(screen.getByText(/Platform API account/)).toBeInTheDocument();
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    expect(within(codexPanel).getByText('Codex CLI')).toBeInTheDocument();
+    expect(within(codexPanel).getByText('OpenAI API')).toBeInTheDocument();
+    expect(within(codexPanel).getByText(/official CLI session/)).toBeInTheDocument();
+    expect(within(codexPanel).getByText(/Platform API account/)).toBeInTheDocument();
   });
 
   it('links provider tabs to stable tabpanels and supports roving keyboard selection', () => {
@@ -67,6 +69,8 @@ describe('ChatPanel', () => {
 
     const chatTab = screen.getByRole('tab', { name: 'Chat' });
     const codexTab = screen.getByRole('tab', { name: 'Codex' });
+    const tabList = screen.getByRole('tablist', { name: 'Agent Hub providers' });
+    expect(tabList).toHaveAttribute('aria-orientation', 'vertical');
     expect(chatTab).toHaveAttribute('id', 'agent-hub-tab-chat');
     expect(chatTab).toHaveAttribute('aria-controls', 'agent-hub-panel-chat');
     expect(codexTab).toHaveAttribute('aria-controls', 'agent-hub-panel-codex');
@@ -101,8 +105,24 @@ describe('ChatPanel', () => {
     render(<ChatPanel {...baseProps} providerLabel="Ollama" />);
     fireEvent.click(screen.getByRole('tab', { name: 'Local' }));
 
-    expect(screen.getAllByText('Ollama').length).toBeGreaterThan(0);
-    expect(screen.getByText('LM Studio / vLLM')).toBeInTheDocument();
-    expect(screen.getByText(/without cloud egress/)).toBeInTheDocument();
+    const localPanel = screen.getByRole('tabpanel', { name: 'Local' });
+    expect(within(localPanel).getByText('Ollama')).toBeInTheDocument();
+    expect(within(localPanel).getByText('LM Studio / vLLM')).toBeInTheDocument();
+    expect(within(localPanel).getByText(/without cloud egress/)).toBeInTheDocument();
+  });
+
+  it('scrolls to the newest chat message when returning to the Chat tab', () => {
+    const scrollAnchorRef = createRef<HTMLDivElement>();
+    render(<ChatPanel {...baseProps} scrollAnchorRef={scrollAnchorRef} />);
+    const scrollIntoView = vi.fn();
+    Object.defineProperty(scrollAnchorRef.current, 'scrollIntoView', {
+      configurable: true,
+      value: scrollIntoView,
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
+
+    expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
   });
 });
