@@ -43,15 +43,19 @@ func (s *fakeSecretStore) Save(_ context.Context, scope SecretScope, secrets map
 func (s *fakeSecretStore) Load(_ context.Context, _ SecretScope, stored StoredSecrets) (LoadedSecrets, error) {
 	s.loads = append(s.loads, stored)
 	values := map[string]string{}
+	needsMigration := false
 	for key, ref := range stored.Refs {
+		if strings.Contains(ref, "://legacy/") {
+			needsMigration = true
+		}
 		if value := s.values[ref]; strings.TrimSpace(value) != "" {
 			values[key] = value
 		}
 	}
 	if len(values) == 0 {
-		return LoadedSecrets{}, nil
+		return LoadedSecrets{NeedsMigration: needsMigration}, nil
 	}
-	return LoadedSecrets{Values: values}, nil
+	return LoadedSecrets{Values: values, NeedsMigration: needsMigration}, nil
 }
 
 func (s *fakeSecretStore) Delete(context.Context, SecretScope, StoredSecrets) error {
@@ -230,6 +234,56 @@ func TestManagerLoadsSecretRefsWithRegisteredStore(t *testing.T) {
 	}
 	if got := store.loads[0].Refs["secret_access_key"]; got != ref {
 		t.Fatalf("registered store should receive persisted ref, got %q", got)
+	}
+}
+
+func TestManagerMigratesRegisteredStoreRefsForUse(t *testing.T) {
+	dir := t.TempDir()
+	oldRef := "vault://legacy/conn_external/secret_access_key"
+	newRef := "vault://connections/conn_external/secret_access_key"
+	store := &fakeSecretStore{
+		kind:   "vault",
+		values: map[string]string{oldRef: "super-secret"},
+	}
+	manager := NewManager(dir, WithSecretStore(store))
+	record := `[{
+		"id":"conn_external",
+		"name":"external",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"` + oldRef + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write registered store record: %v", err)
+	}
+
+	stored, err := manager.Get("conn_external")
+	if err != nil {
+		t.Fatalf("Get registered store record: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
+		t.Fatalf("registered store should resolve migrated secret refs, got %q", got)
+	}
+	if got := stored.SecretRefs["secret_access_key"]; got != newRef {
+		t.Fatalf("registered store should return migrated ref, got %q", got)
+	}
+	if len(store.saves) != 1 {
+		t.Fatalf("registered store should save migrated refs once, got %d saves", len(store.saves))
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read migrated registered store record: %v", err)
+	}
+	if contains(string(data), "super-secret") {
+		t.Fatalf("registered store migration should not persist plaintext: %s", string(data))
+	}
+	if contains(string(data), oldRef) || !contains(string(data), newRef) {
+		t.Fatalf("registered store migration should replace old ref with new ref: %s", string(data))
 	}
 }
 

@@ -361,16 +361,18 @@ func (m *Manager) loadForUse() ([]Connection, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	migrationConnections, needsMigration, err := m.loadUnlockedWithMigrationFlag(false)
+	connections, needsMigration, err = m.loadUnlockedWithMigrationFlag(true)
 	if err != nil {
 		return nil, err
 	}
-	if needsMigration {
-		if err := m.saveUnlocked(migrationConnections); err != nil {
-			return nil, err
-		}
+	if !needsMigration {
+		return connections, nil
 	}
-	return connections, nil
+	if err := m.saveUnlocked(connections); err != nil {
+		return nil, err
+	}
+	connections, _, err = m.loadUnlockedWithMigrationFlag(true)
+	return connections, err
 }
 
 func (m *Manager) loadUnlocked() ([]Connection, error) {
