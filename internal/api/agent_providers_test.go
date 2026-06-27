@@ -36,6 +36,8 @@ func TestAgentHubLocalProvidersRouteUsesConfiguredDiscovery(t *testing.T) {
 				Command:        "gemini",
 				Entrypoint:     "gemini",
 				Candidates:     []string{"gemini"},
+				Version:        agentproviders.VersionUnknown,
+				Capabilities:   []string{"chat", "local_cli"},
 				CredentialMode: agentproviders.CredentialExternalLogin,
 				AuthHint:       "Use the local Gemini session.",
 			}}
@@ -59,7 +61,7 @@ func TestAgentHubLocalProvidersRouteUsesConfiguredDiscovery(t *testing.T) {
 		t.Fatalf("providers = %+v", body.Providers)
 	}
 	got := body.Providers[0]
-	if got.ID != "gemini" || !got.Installed || got.Command != "gemini" || got.CredentialMode != agentproviders.CredentialExternalLogin {
+	if got.ID != "gemini" || !got.Installed || got.Command != "gemini" || got.Version != agentproviders.VersionUnknown || len(got.Capabilities) != 2 || got.CredentialMode != agentproviders.CredentialExternalLogin {
 		t.Fatalf("unexpected provider payload: %+v", got)
 	}
 }

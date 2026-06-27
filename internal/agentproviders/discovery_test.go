@@ -40,16 +40,16 @@ func TestDiscoverLocalUsesLookupWithoutLeakingPaths(t *testing.T) {
 		byID[status.ID] = status
 	}
 
-	if status := byID["codex"]; !status.Installed || status.Command != "codex" || status.Entrypoint != "codex" || status.CredentialMode != CredentialExternalLogin {
+	if status := byID["codex"]; !status.Installed || status.Command != "codex" || status.Entrypoint != "codex" || status.CredentialMode != CredentialExternalLogin || status.Version != VersionUnknown || !hasCapability(status, "local_cli") {
 		t.Fatalf("unexpected codex status: %+v", status)
 	}
 	if status := byID["claude"]; status.Installed || status.State != StateNotInstalled || status.Command != "" {
 		t.Fatalf("unexpected claude status: %+v", status)
 	}
-	if status := byID["copilot"]; !status.Installed || status.Command != "gh-copilot" || status.Entrypoint != "gh copilot" {
+	if status := byID["copilot"]; !status.Installed || status.Command != "gh-copilot" || status.Entrypoint != "gh-copilot" {
 		t.Fatalf("unexpected copilot status: %+v", status)
 	}
-	if status := byID["ollama"]; !status.Installed || status.Category != "local_model" || status.CredentialMode != CredentialNone {
+	if status := byID["ollama"]; !status.Installed || status.Category != "local_model" || status.CredentialMode != CredentialNone || !hasCapability(status, "offline_runtime") {
 		t.Fatalf("unexpected ollama status: %+v", status)
 	}
 
@@ -65,6 +65,15 @@ func TestDiscoverLocalUsesLookupWithoutLeakingPaths(t *testing.T) {
 func containsAny(s string, needles []string) bool {
 	for _, needle := range needles {
 		if len(needle) > 0 && strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func hasCapability(status LocalProviderStatus, want string) bool {
+	for _, capability := range status.Capabilities {
+		if capability == want {
 			return true
 		}
 	}
