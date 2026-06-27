@@ -1,6 +1,7 @@
 package cloudconnections
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"slices"
@@ -9,6 +10,53 @@ import (
 	"testing"
 	"time"
 )
+
+type fakeSecretStore struct {
+	kind   string
+	values map[string]string
+	saves  []StoredSecrets
+	loads  []StoredSecrets
+}
+
+func (s *fakeSecretStore) Kind() string {
+	return s.kind
+}
+
+func (s *fakeSecretStore) Save(_ context.Context, scope SecretScope, secrets map[string]string) (StoredSecrets, error) {
+	refs := map[string]string{}
+	for key, value := range secrets {
+		if strings.TrimSpace(value) == "" {
+			continue
+		}
+		ref := s.kind + "://connections/" + scope.ConnectionID + "/" + key
+		refs[key] = ref
+		if s.values == nil {
+			s.values = map[string]string{}
+		}
+		s.values[ref] = value
+	}
+	stored := StoredSecrets{Refs: refs}
+	s.saves = append(s.saves, stored)
+	return stored, nil
+}
+
+func (s *fakeSecretStore) Load(_ context.Context, _ SecretScope, stored StoredSecrets) (LoadedSecrets, error) {
+	s.loads = append(s.loads, stored)
+	values := map[string]string{}
+	for key, ref := range stored.Refs {
+		if value := s.values[ref]; strings.TrimSpace(value) != "" {
+			values[key] = value
+		}
+	}
+	if len(values) == 0 {
+		return LoadedSecrets{}, nil
+	}
+	return LoadedSecrets{Values: values}, nil
+}
+
+func (s *fakeSecretStore) Delete(context.Context, SecretScope, StoredSecrets) error {
+	return nil
+}
 
 func TestManagerRedactsStaticSecrets(t *testing.T) {
 	manager := NewManager(t.TempDir())
@@ -76,6 +124,112 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 	}
 	if got := stored.SecretRefs["secret_access_key"]; got != "local://connections/"+created.ID+"/secret_access_key" {
 		t.Fatalf("stored secret ref should point at local encrypted store, got %q", got)
+	}
+}
+
+func TestManagerRegistersLocalEncryptedStoreByDefault(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	stores := manager.SupportedSecretStores()
+	if len(stores) != 1 || stores[0] != SecretStoreLocalEncrypted {
+		t.Fatalf("default manager should only register local encrypted store, got %#v", stores)
+	}
+}
+
+func TestManagerSavesSecretsWithRegisteredStore(t *testing.T) {
+	store := &fakeSecretStore{kind: "vault"}
+	manager := NewManager(t.TempDir(), WithSecretStore(store))
+
+	created, err := manager.Save(Connection{
+		Name:        "external",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:     map[string]string{"secret_access_key": "super-secret"},
+		SecretStore: "vault",
+	})
+	if err != nil {
+		t.Fatalf("Save with registered secret store: %v", err)
+	}
+	if got := created.SecretStore; got != "vault" {
+		t.Fatalf("public connection should report registered secret store, got %q", got)
+	}
+	if !slices.Contains(created.SecretFields, "secret_access_key") {
+		t.Fatalf("public connection should expose referenced secret field: %#v", created.SecretFields)
+	}
+	if len(store.saves) != 1 {
+		t.Fatalf("registered store should save secrets once, got %d calls", len(store.saves))
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read persisted external record: %v", err)
+	}
+	if contains(string(data), "super-secret") || contains(string(data), "local://connections/") {
+		t.Fatalf("registered external store should persist refs without local plaintext or local refs: %s", string(data))
+	}
+	if !contains(string(data), `"secret_store": "vault"`) || !contains(string(data), `vault://connections/`) {
+		t.Fatalf("registered external store should persist external refs: %s", string(data))
+	}
+
+	stored, err := manager.Get(created.ID)
+	if err != nil {
+		t.Fatalf("Get registered store connection: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
+		t.Fatalf("registered store should resolve secret for runner use, got %q", got)
+	}
+	if len(store.loads) == 0 {
+		t.Fatal("registered store should load referenced secrets")
+	}
+}
+
+func TestManagerLoadsSecretRefsWithRegisteredStore(t *testing.T) {
+	dir := t.TempDir()
+	ref := "vault://connections/conn_external/secret_access_key"
+	store := &fakeSecretStore{
+		kind:   "vault",
+		values: map[string]string{ref: "super-secret"},
+	}
+	manager := NewManager(dir, WithSecretStore(store))
+	record := `[{
+		"id":"conn_external",
+		"name":"external",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"` + ref + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write registered store record: %v", err)
+	}
+
+	listed, err := manager.List()
+	if err != nil {
+		t.Fatalf("List registered store record: %v", err)
+	}
+	if len(listed) != 1 || !slices.Contains(listed[0].SecretFields, "secret_access_key") {
+		t.Fatalf("List should expose referenced secret field without resolving the value: %#v", listed)
+	}
+	if len(store.loads) != 0 {
+		t.Fatalf("List should not resolve external secret refs, got %d loads", len(store.loads))
+	}
+
+	stored, err := manager.Get("conn_external")
+	if err != nil {
+		t.Fatalf("Get registered store record: %v", err)
+	}
+	if got := stored.Secrets["secret_access_key"]; got != "super-secret" {
+		t.Fatalf("registered store should resolve secret refs, got %q", got)
+	}
+	if len(store.loads) != 1 {
+		t.Fatalf("registered store should load refs once, got %d calls", len(store.loads))
+	}
+	if got := store.loads[0].Refs["secret_access_key"]; got != ref {
+		t.Fatalf("registered store should receive persisted ref, got %q", got)
 	}
 }
 

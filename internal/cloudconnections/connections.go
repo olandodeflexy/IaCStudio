@@ -109,16 +109,25 @@ type Check struct {
 }
 
 type Manager struct {
-	path    string
-	keyPath string
-	mu      sync.RWMutex
+	path         string
+	keyPath      string
+	secretStores map[string]SecretStore
+	mu           sync.RWMutex
 }
 
-func NewManager(projectsDir string) *Manager {
-	return &Manager{
-		path:    filepath.Join(projectsDir, connectionsFileName),
-		keyPath: filepath.Join(projectsDir, connectionsKeyFileName),
+func NewManager(projectsDir string, opts ...Option) *Manager {
+	manager := &Manager{
+		path:         filepath.Join(projectsDir, connectionsFileName),
+		keyPath:      filepath.Join(projectsDir, connectionsKeyFileName),
+		secretStores: map[string]SecretStore{},
 	}
+	manager.registerSecretStore(newLocalEncryptedSecretStore(manager.encryptionKeyForEncrypt, manager.encryptionKeyForDecrypt))
+	for _, opt := range opts {
+		if opt != nil {
+			opt(manager)
+		}
+	}
+	return manager
 }
 
 func SupportedAuthMethods(provider string) []string {
@@ -198,7 +207,7 @@ func (m *Manager) List() ([]PublicConnection, error) {
 }
 
 func (m *Manager) Get(id string) (*Connection, error) {
-	connections, err := m.load()
+	connections, err := m.loadForUse()
 	if err != nil {
 		return nil, err
 	}
@@ -215,7 +224,7 @@ func (m *Manager) Get(id string) (*Connection, error) {
 }
 
 func (m *Manager) Save(input Connection) (PublicConnection, error) {
-	if err := normalizeAndValidate(&input); err != nil {
+	if err := m.normalizeAndValidate(&input); err != nil {
 		return PublicConnection{}, err
 	}
 
@@ -315,7 +324,7 @@ func (m *Manager) Test(id string) (TestResult, error) {
 
 func (m *Manager) load() ([]Connection, error) {
 	m.mu.RLock()
-	connections, needsMigration, err := m.loadUnlockedWithMigrationFlag()
+	connections, needsMigration, err := m.loadUnlockedWithMigrationFlag(false)
 	m.mu.RUnlock()
 	if err != nil {
 		return nil, err
@@ -326,7 +335,7 @@ func (m *Manager) load() ([]Connection, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	connections, needsMigration, err = m.loadUnlockedWithMigrationFlag()
+	connections, needsMigration, err = m.loadUnlockedWithMigrationFlag(false)
 	if err != nil {
 		return nil, err
 	}
@@ -339,12 +348,37 @@ func (m *Manager) load() ([]Connection, error) {
 	return connections, nil
 }
 
+func (m *Manager) loadForUse() ([]Connection, error) {
+	m.mu.RLock()
+	connections, needsMigration, err := m.loadUnlockedWithMigrationFlag(true)
+	m.mu.RUnlock()
+	if err != nil {
+		return nil, err
+	}
+	if !needsMigration {
+		return connections, nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	migrationConnections, needsMigration, err := m.loadUnlockedWithMigrationFlag(false)
+	if err != nil {
+		return nil, err
+	}
+	if needsMigration {
+		if err := m.saveUnlocked(migrationConnections); err != nil {
+			return nil, err
+		}
+	}
+	return connections, nil
+}
+
 func (m *Manager) loadUnlocked() ([]Connection, error) {
-	connections, _, err := m.loadUnlockedWithMigrationFlag()
+	connections, _, err := m.loadUnlockedWithMigrationFlag(false)
 	return connections, err
 }
 
-func (m *Manager) loadUnlockedWithMigrationFlag() ([]Connection, bool, error) {
+func (m *Manager) loadUnlockedWithMigrationFlag(resolveSecretRefs bool) ([]Connection, bool, error) {
 	data, err := os.ReadFile(m.path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -356,7 +390,7 @@ func (m *Manager) loadUnlockedWithMigrationFlag() ([]Connection, bool, error) {
 	if err := json.Unmarshal(data, &connections); err != nil {
 		return nil, false, fmt.Errorf("parse cloud connections: %w", err)
 	}
-	needsMigration, err := m.loadConnectionSecrets(connections)
+	needsMigration, err := m.loadConnectionSecrets(connections, resolveSecretRefs)
 	if err != nil {
 		return nil, false, err
 	}
@@ -386,14 +420,14 @@ func (m *Manager) saveUnlocked(connections []Connection) error {
 
 func (m *Manager) storeConnectionSecrets(connections []Connection) ([]Connection, error) {
 	out := make([]Connection, 0, len(connections))
-	store := m.localSecretStore()
 	for _, connection := range connections {
 		next := connection
 		next.Metadata = cloneMap(connection.Metadata)
 		next.Secrets = cloneMap(connection.Secrets)
 		next.SecretRefs = cloneMap(connection.SecretRefs)
 		next.SecretStore = strings.TrimSpace(next.SecretStore)
-		if next.SecretStore != "" && next.SecretStore != store.Kind() {
+		store, ok := m.secretStoreFor(next.SecretStore)
+		if !ok {
 			if hasNonEmptySecrets(next.Secrets) {
 				return nil, fmt.Errorf("connection %s uses unsupported secret store %q with local secret values", connectionLabel(next), next.SecretStore)
 			}
@@ -410,7 +444,7 @@ func (m *Manager) storeConnectionSecrets(connections []Connection) ([]Connection
 		}
 		next.Secrets = stored.Values
 		next.SecretRefs = stored.Refs
-		if len(next.Secrets) > 0 {
+		if len(next.Secrets) > 0 || len(next.SecretRefs) > 0 {
 			next.SecretStore = store.Kind()
 		}
 		out = append(out, next)
@@ -418,18 +452,20 @@ func (m *Manager) storeConnectionSecrets(connections []Connection) ([]Connection
 	return out, nil
 }
 
-func (m *Manager) loadConnectionSecrets(connections []Connection) (bool, error) {
+func (m *Manager) loadConnectionSecrets(connections []Connection, resolveSecretRefs bool) (bool, error) {
 	needsMigration := false
-	store := m.localSecretStore()
 	for index := range connections {
 		connections[index].SecretStore = strings.TrimSpace(connections[index].SecretStore)
-		if connections[index].SecretStore != "" && connections[index].SecretStore != store.Kind() {
+		store, ok := m.secretStoreFor(connections[index].SecretStore)
+		if !ok {
 			if hasNonEmptySecrets(connections[index].Secrets) {
 				return false, fmt.Errorf("connection %s uses unsupported secret store %q with local secret values", connectionLabel(connections[index]), connections[index].SecretStore)
 			}
 			continue
 		}
-		if len(connections[index].Secrets) == 0 {
+		hasStoredValues := len(connections[index].Secrets) > 0
+		hasResolvableRefs := resolveSecretRefs && store.Kind() != SecretStoreLocalEncrypted && len(connections[index].SecretRefs) > 0
+		if !hasStoredValues && !hasResolvableRefs {
 			continue
 		}
 		loaded, err := store.Load(context.Background(), secretScope(connections[index]), StoredSecrets{
@@ -445,10 +481,6 @@ func (m *Manager) loadConnectionSecrets(connections []Connection) (bool, error) 
 		}
 	}
 	return needsMigration, nil
-}
-
-func (m *Manager) localSecretStore() SecretStore {
-	return newLocalEncryptedSecretStore(m.encryptionKeyForEncrypt, m.encryptionKeyForDecrypt)
 }
 
 func secretScope(connection Connection) SecretScope {
@@ -723,7 +755,7 @@ func syncDirBestEffort(dir string) {
 	_ = handle.Sync()
 }
 
-func normalizeAndValidate(connection *Connection) error {
+func normalizeConnectionFields(connection *Connection) error {
 	connection.ID = strings.TrimSpace(connection.ID)
 	connection.Name = strings.TrimSpace(connection.Name)
 	connection.Provider = strings.TrimSpace(connection.Provider)
@@ -744,9 +776,6 @@ func normalizeAndValidate(connection *Connection) error {
 	connection.Metadata = trimMap(connection.Metadata)
 	connection.Secrets = trimMap(connection.Secrets)
 	connection.SecretRefs = trimMap(connection.SecretRefs)
-	if connection.SecretStore != "" && connection.SecretStore != SecretStoreLocalEncrypted {
-		return fmt.Errorf("unsupported secret store %q", connection.SecretStore)
-	}
 	return nil
 }
 
