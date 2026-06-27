@@ -23,6 +23,11 @@ function makeClient(initial: CloudConnection[] = []) {
       return connection;
     }),
     updateCloudConnection: vi.fn(async (id: string, input: CloudConnectionInput) => {
+      const current = connections.find(item => item.id === id);
+      const inputSecretFields = input.secrets ? Object.keys(input.secrets) : [];
+      const nextSecretFields = inputSecretFields.length > 0
+        ? inputSecretFields
+        : current?.secret_fields;
       const connection: CloudConnection = {
         id,
         name: input.name,
@@ -30,8 +35,10 @@ function makeClient(initial: CloudConnection[] = []) {
         auth_method: input.auth_method,
         region: input.region,
         metadata: input.metadata,
-        secret_fields: initial.find(item => item.id === id)?.secret_fields,
-        secret_store: initial.find(item => item.id === id)?.secret_store,
+        secret_fields: nextSecretFields,
+        secret_store: inputSecretFields.length > 0
+          ? 'local_encrypted'
+          : current?.secret_store,
       };
       connections = connections.map(item => item.id === id ? connection : item);
       return connection;
@@ -56,7 +63,8 @@ describe('CloudConnectionsPanel', () => {
     const client = makeClient();
     render(<CloudConnectionsPanel client={client} />);
 
-    expect(screen.getByText(/Secrets are encrypted and stored locally on this machine/)).toBeInTheDocument();
+    expect(screen.getByText(/No secrets are stored for this connection yet/)).toBeInTheDocument();
+    expect(screen.queryByText(/Secrets are encrypted and stored locally on this machine/)).not.toBeInTheDocument();
     expect(screen.getByText('No stored secrets')).toBeInTheDocument();
     await screen.findByText('0 connections');
   });
@@ -151,6 +159,30 @@ describe('CloudConnectionsPanel', () => {
     await waitFor(() => {
       expect(screen.getByText('prod-admin')).toBeInTheDocument();
     });
+  });
+
+  it('preserves current secret storage metadata when updating a created connection', async () => {
+    const client = makeClient();
+    render(<CloudConnectionsPanel client={client} />);
+
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'break-glass' } });
+    fireEvent.change(screen.getByLabelText('Auth'), { target: { value: 'aws_static' } });
+    fireEvent.change(screen.getByLabelText('Access key ID'), { target: { value: 'AKIAEXAMPLE' } });
+    fireEvent.change(screen.getByLabelText('Secret access key'), { target: { value: 'secret-value' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Save connection' }));
+
+    await screen.findByText('break-glass');
+    expect(screen.getAllByText('Local encrypted').length).toBeGreaterThanOrEqual(1);
+
+    fireEvent.click(screen.getByText('break-glass'));
+    fireEvent.change(screen.getByLabelText('Region'), { target: { value: 'us-west-2' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Update connection' }));
+
+    await waitFor(() => {
+      expect(client.updateCloudConnection).toHaveBeenCalled();
+    });
+    await screen.findByText('aws_static / us-west-2');
+    expect(screen.getAllByText('Local encrypted').length).toBeGreaterThanOrEqual(1);
   });
 
   it('does not render stored secret values when editing', async () => {

@@ -121,7 +121,10 @@ function secretStoreBadgeClass(store?: CloudSecretStore) {
 
 function secretStoreMessage(store?: CloudSecretStore) {
   const value = store?.trim();
-  if (!value || value === 'local_encrypted') {
+  if (!value) {
+    return 'No secrets are stored for this connection yet. Add only scoped, revocable credentials when an auth method requires them.';
+  }
+  if (value === 'local_encrypted') {
     return 'Secrets are encrypted and stored locally on this machine in the IaC Studio projects directory. Use scoped, revocable credentials.';
   }
   return 'Secrets are stored using this connection’s configured secret store. Use scoped, revocable credentials.';
