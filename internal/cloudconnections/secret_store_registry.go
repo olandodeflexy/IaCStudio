@@ -36,7 +36,7 @@ func (m *Manager) normalizeAndValidate(connection *Connection) error {
 	if err := normalizeConnectionFields(connection); err != nil {
 		return err
 	}
-	if connection.SecretStore != "" && !m.supportsSecretStore(connection.SecretStore) {
+	if connection.SecretStore != "" && !m.supportsSecretStore(connection.SecretStore) && hasNonEmptyUnmaskedSecrets(connection.Secrets) {
 		return unsupportedSecretStoreError(connection.SecretStore)
 	}
 	return nil

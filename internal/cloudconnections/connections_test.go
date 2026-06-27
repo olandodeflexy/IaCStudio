@@ -2,6 +2,7 @@ package cloudconnections
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -124,7 +125,7 @@ func TestManagerRedactsStaticSecrets(t *testing.T) {
 		t.Fatalf("expected persisted local secret refs: %s", string(data))
 	}
 
-	stored, err := manager.Get(created.ID)
+	stored, err := manager.GetForUse(created.ID)
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
@@ -181,7 +182,7 @@ func TestManagerSavesSecretsWithRegisteredStore(t *testing.T) {
 		t.Fatalf("registered external store should persist external refs: %s", string(data))
 	}
 
-	stored, err := manager.Get(created.ID)
+	stored, err := manager.GetForUse(created.ID)
 	if err != nil {
 		t.Fatalf("Get registered store connection: %v", err)
 	}
@@ -227,7 +228,7 @@ func TestManagerLoadsSecretRefsWithRegisteredStore(t *testing.T) {
 		t.Fatalf("List should not resolve external secret refs, got %d loads", len(store.loads))
 	}
 
-	stored, err := manager.Get("conn_external")
+	stored, err := manager.GetForUse("conn_external")
 	if err != nil {
 		t.Fatalf("Get registered store record: %v", err)
 	}
@@ -239,6 +240,44 @@ func TestManagerLoadsSecretRefsWithRegisteredStore(t *testing.T) {
 	}
 	if got := store.loads[0].Refs["secret_access_key"]; got != ref {
 		t.Fatalf("registered store should receive persisted ref, got %q", got)
+	}
+}
+
+func TestManagerGetDoesNotResolveRegisteredSecretRefs(t *testing.T) {
+	dir := t.TempDir()
+	ref := "vault://connections/conn_external/secret_access_key"
+	store := &fakeSecretStore{
+		kind:   "vault",
+		values: map[string]string{ref: "super-secret"},
+	}
+	manager := NewManager(dir, WithSecretStore(store))
+	record := `[{
+		"id":"conn_external",
+		"name":"external",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"` + ref + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write registered store record: %v", err)
+	}
+
+	stored, err := manager.Get("conn_external")
+	if err != nil {
+		t.Fatalf("Get registered store metadata: %v", err)
+	}
+	if got := stored.SecretRefs["secret_access_key"]; got != ref {
+		t.Fatalf("Get should preserve refs without resolving them, got %q", got)
+	}
+	if len(stored.Secrets) != 0 {
+		t.Fatalf("Get should not resolve external secret values: %#v", stored.Secrets)
+	}
+	if len(store.loads) != 0 {
+		t.Fatalf("Get should not contact external store, got %d loads", len(store.loads))
 	}
 }
 
@@ -279,7 +318,7 @@ func TestManagerGetResolvesOnlyRequestedRegisteredStore(t *testing.T) {
 		t.Fatalf("write registered store records: %v", err)
 	}
 
-	stored, err := manager.Get("conn_second")
+	stored, err := manager.GetForUse("conn_second")
 	if err != nil {
 		t.Fatalf("Get requested registered store record: %v", err)
 	}
@@ -336,7 +375,7 @@ func TestManagerPreservesRegisteredStoreRefsOnPartialSecretUpdate(t *testing.T) 
 		t.Fatalf("partial update should only write submitted secret values, got refs %#v", store.saves[1].Refs)
 	}
 
-	stored, err := manager.Get(created.ID)
+	stored, err := manager.GetForUse(created.ID)
 	if err != nil {
 		t.Fatalf("Get partial registered store secret update: %v", err)
 	}
@@ -389,7 +428,7 @@ func TestManagerMigratesRegisteredStoreRefsForUse(t *testing.T) {
 		t.Fatalf("write registered store record: %v", err)
 	}
 
-	stored, err := manager.Get("conn_external")
+	stored, err := manager.GetForUse("conn_external")
 	if err != nil {
 		t.Fatalf("Get registered store record: %v", err)
 	}
@@ -412,6 +451,111 @@ func TestManagerMigratesRegisteredStoreRefsForUse(t *testing.T) {
 	}
 	if contains(string(data), oldRef) || !contains(string(data), newRef) {
 		t.Fatalf("registered store migration should replace old ref with new ref: %s", string(data))
+	}
+}
+
+func TestManagerSkipsRegisteredStoreMigrationWithoutResolvedValues(t *testing.T) {
+	dir := t.TempDir()
+	oldRef := "vault://legacy/conn_external/secret_access_key"
+	store := &fakeSecretStore{kind: "vault", values: map[string]string{}}
+	manager := NewManager(dir, WithSecretStore(store))
+	record := `[{
+		"id":"conn_external",
+		"name":"external",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"` + oldRef + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write registered store record: %v", err)
+	}
+
+	stored, err := manager.GetForUse("conn_external")
+	if err != nil {
+		t.Fatalf("GetForUse registered store record: %v", err)
+	}
+	if len(stored.Secrets) != 0 {
+		t.Fatalf("missing external secret should not produce resolved values: %#v", stored.Secrets)
+	}
+	if len(store.saves) != 0 {
+		t.Fatalf("missing external secret should not trigger migration save, got %d saves", len(store.saves))
+	}
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read registered store record: %v", err)
+	}
+	if !contains(string(data), oldRef) {
+		t.Fatalf("unresolved legacy ref should remain unchanged: %s", string(data))
+	}
+}
+
+func TestManagerSingleConnectionMigrationDoesNotRewriteOtherSecrets(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	first, err := manager.Save(Connection{
+		Name:       "first",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIAFIRST"},
+		Secrets:    map[string]string{"secret_access_key": "legacy-first"},
+	})
+	if err != nil {
+		t.Fatalf("Save first connection: %v", err)
+	}
+	second, err := manager.Save(Connection{
+		Name:       "second",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIASECOND"},
+		Secrets:    map[string]string{"secret_access_key": "second-secret"},
+	})
+	if err != nil {
+		t.Fatalf("Save second connection: %v", err)
+	}
+
+	data, err := os.ReadFile(manager.path)
+	if err != nil {
+		t.Fatalf("read persisted records: %v", err)
+	}
+	var records []Connection
+	if err := json.Unmarshal(data, &records); err != nil {
+		t.Fatalf("parse persisted records: %v", err)
+	}
+	for index := range records {
+		if records[index].ID == first.ID {
+			records[index].Secrets = map[string]string{"secret_access_key": "legacy-first"}
+			records[index].SecretRefs = nil
+			records[index].SecretStore = ""
+		}
+	}
+	rewritten, err := json.MarshalIndent(records, "", "  ")
+	if err != nil {
+		t.Fatalf("marshal legacy records: %v", err)
+	}
+	if err := os.WriteFile(manager.path, rewritten, 0o600); err != nil {
+		t.Fatalf("write legacy records: %v", err)
+	}
+
+	migrated, err := manager.GetForUse(first.ID)
+	if err != nil {
+		t.Fatalf("GetForUse first connection: %v", err)
+	}
+	if got := migrated.Secrets["secret_access_key"]; got != "legacy-first" {
+		t.Fatalf("first secret should resolve before migration, got %q", got)
+	}
+	storedSecond, err := manager.GetForUse(second.ID)
+	if err != nil {
+		t.Fatalf("GetForUse second connection: %v", err)
+	}
+	if got := storedSecond.Secrets["secret_access_key"]; got != "second-secret" {
+		t.Fatalf("second secret should not be re-encrypted during first migration, got %q", got)
+	}
+	if isEncryptedSecret(storedSecond.Secrets["secret_access_key"]) {
+		t.Fatalf("second secret was returned as an encrypted envelope after unrelated migration")
 	}
 }
 
@@ -457,6 +601,41 @@ func TestManagerDeletesRegisteredStoreSecrets(t *testing.T) {
 	}
 }
 
+func TestManagerDeleteRejectsUnsupportedStoreSecretRefs(t *testing.T) {
+	dir := t.TempDir()
+	manager := NewManager(dir)
+	ref := "vault://connections/conn_external/secret_access_key"
+	record := `[{
+		"id":"conn_external",
+		"name":"external",
+		"provider":"aws",
+		"auth_method":"aws_static",
+		"metadata":{"access_key_id":"AKIAEXAMPLE"},
+		"secret_store":"vault",
+		"secret_refs":{"secret_access_key":"` + ref + `"},
+		"created_at":"2026-06-18T00:00:00Z",
+		"updated_at":"2026-06-18T00:00:00Z"
+	}]`
+	if err := os.WriteFile(manager.path, []byte(record), 0o600); err != nil {
+		t.Fatalf("write unsupported store record: %v", err)
+	}
+
+	err := manager.Delete("conn_external")
+	if err == nil {
+		t.Fatal("Delete should fail closed for unsupported external secret refs")
+	}
+	if !strings.Contains(err.Error(), `secret store "vault"`) || !strings.Contains(err.Error(), "register the store before deleting") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	listed, listErr := manager.List()
+	if listErr != nil {
+		t.Fatalf("List after failed delete: %v", listErr)
+	}
+	if len(listed) != 1 {
+		t.Fatalf("failed delete should keep connection metadata, got %#v", listed)
+	}
+}
+
 func TestManagerRejectsUnsupportedSecretStore(t *testing.T) {
 	manager := NewManager(t.TempDir())
 
@@ -473,6 +652,51 @@ func TestManagerRejectsUnsupportedSecretStore(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported secret store") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestManagerAllowsUnsupportedSecretStoreWithRefsOnly(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	ref := "vault://connections/conn_external/secret_access_key"
+
+	created, err := manager.Save(Connection{
+		ID:          "conn_external",
+		Name:        "external",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		SecretStore: "vault",
+		SecretRefs:  map[string]string{"secret_access_key": ref},
+	})
+	if err != nil {
+		t.Fatalf("Save unsupported store refs-only connection: %v", err)
+	}
+	if got := created.SecretStore; got != "vault" {
+		t.Fatalf("refs-only unsupported store should be preserved, got %q", got)
+	}
+	if !slices.Contains(created.SecretFields, "secret_access_key") {
+		t.Fatalf("public connection should expose referenced secret field: %#v", created.SecretFields)
+	}
+
+	updated, err := manager.Save(Connection{
+		ID:         "conn_external",
+		Name:       "external-renamed",
+		Provider:   ProviderAWS,
+		AuthMethod: "aws_static",
+		Metadata:   map[string]string{"access_key_id": "AKIARENAMED"},
+	})
+	if err != nil {
+		t.Fatalf("Save metadata update for unsupported refs-only connection: %v", err)
+	}
+	if got := updated.SecretStore; got != "vault" {
+		t.Fatalf("metadata update should preserve unsupported refs-only store, got %q", got)
+	}
+	stored, err := manager.Get("conn_external")
+	if err != nil {
+		t.Fatalf("Get unsupported refs-only connection: %v", err)
+	}
+	if got := stored.SecretRefs["secret_access_key"]; got != ref {
+		t.Fatalf("metadata update should preserve unsupported ref, got %q", got)
 	}
 }
 

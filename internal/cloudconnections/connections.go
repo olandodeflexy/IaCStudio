@@ -207,8 +207,18 @@ func (m *Manager) List() ([]PublicConnection, error) {
 	return out, nil
 }
 
+// Get returns a saved connection without resolving external secret refs. This
+// is safe for metadata/existence checks because registered stores are not
+// contacted just to resolve refs; persisted local values can still be loaded
+// when a record needs migration.
 func (m *Manager) Get(id string) (*Connection, error) {
-	return m.loadOneForUse(id)
+	return m.loadOne(id, false)
+}
+
+// GetForUse returns a saved connection with registered external secret refs
+// resolved for command execution, readiness checks, and MCP runner workflows.
+func (m *Manager) GetForUse(id string) (*Connection, error) {
+	return m.loadOne(id, true)
 }
 
 func (m *Manager) Save(input Connection) (PublicConnection, error) {
@@ -290,7 +300,7 @@ func (m *Manager) Delete(id string) error {
 }
 
 func (m *Manager) Test(id string) (TestResult, error) {
-	connection, err := m.Get(id)
+	connection, err := m.GetForUse(id)
 	if err != nil {
 		return TestResult{}, err
 	}
@@ -340,9 +350,9 @@ func (m *Manager) load() ([]Connection, error) {
 	return connections, nil
 }
 
-func (m *Manager) loadOneForUse(id string) (*Connection, error) {
+func (m *Manager) loadOne(id string, resolveSecretRefs bool) (*Connection, error) {
 	m.mu.RLock()
-	connections, index, needsMigration, err := m.loadOneUnlockedWithMigrationFlag(id, true)
+	connections, index, needsMigration, err := m.loadOneUnlockedWithMigrationFlag(id, resolveSecretRefs)
 	m.mu.RUnlock()
 	if err != nil {
 		return nil, err
@@ -356,7 +366,7 @@ func (m *Manager) loadOneForUse(id string) (*Connection, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	connections, index, needsMigration, err = m.loadOneUnlockedWithMigrationFlag(id, true)
+	connections, index, needsMigration, err = m.loadOneUnlockedWithMigrationFlag(id, resolveSecretRefs)
 	if err != nil {
 		return nil, err
 	}
@@ -366,10 +376,10 @@ func (m *Manager) loadOneForUse(id string) (*Connection, error) {
 	if !needsMigration {
 		return cloneConnection(connections[index]), nil
 	}
-	if err := m.saveUnlocked(connections); err != nil {
+	if err := m.saveOneUnlocked(connections, index); err != nil {
 		return nil, err
 	}
-	connections, index, _, err = m.loadOneUnlockedWithMigrationFlag(id, true)
+	connections, index, _, err = m.loadOneUnlockedWithMigrationFlag(id, resolveSecretRefs)
 	if err != nil {
 		return nil, err
 	}
@@ -443,6 +453,26 @@ func (m *Manager) saveUnlocked(connections []Connection) error {
 	if err != nil {
 		return err
 	}
+	return m.writeConnectionsUnlocked(persisted)
+}
+
+func (m *Manager) saveOneUnlocked(connections []Connection, index int) error {
+	if index < 0 || index >= len(connections) {
+		return os.ErrNotExist
+	}
+	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
+		return fmt.Errorf("create cloud connections directory: %w", err)
+	}
+	persistedOne, err := m.storeConnectionSecrets([]Connection{connections[index]})
+	if err != nil {
+		return err
+	}
+	persisted := slices.Clone(connections)
+	persisted[index] = persistedOne[0]
+	return m.writeConnectionsUnlocked(persisted)
+}
+
+func (m *Manager) writeConnectionsUnlocked(persisted []Connection) error {
 	data, err := json.MarshalIndent(persisted, "", "  ")
 	if err != nil {
 		return fmt.Errorf("marshal cloud connections: %w", err)
@@ -511,7 +541,7 @@ func (m *Manager) loadConnectionSecrets(connections []Connection, resolveSecretR
 			return false, err
 		}
 		connections[index].Secrets = loaded.Values
-		if loaded.NeedsMigration {
+		if loaded.NeedsMigration && hasNonEmptySecrets(loaded.Values) {
 			needsMigration = true
 		}
 	}
@@ -524,6 +554,9 @@ func (m *Manager) deleteConnectionSecrets(connection Connection) error {
 	if !ok {
 		if hasNonEmptySecrets(connection.Secrets) {
 			return fmt.Errorf("connection %s uses unsupported secret store %q with local secret values", connectionLabel(connection), connection.SecretStore)
+		}
+		if hasNonEmptySecrets(connection.SecretRefs) {
+			return fmt.Errorf("connection %s uses unsupported secret store %q with external secret refs; register the store before deleting", connectionLabel(connection), connection.SecretStore)
 		}
 		return nil
 	}
@@ -1023,6 +1056,15 @@ func mergeSecretRefs(existing, submitted map[string]string) map[string]string {
 func hasNonEmptySecrets(secrets map[string]string) bool {
 	for _, value := range secrets {
 		if strings.TrimSpace(value) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func hasNonEmptyUnmaskedSecrets(secrets map[string]string) bool {
+	for _, value := range secrets {
+		if value = strings.TrimSpace(value); value != "" && !isMasked(value) {
 			return true
 		}
 	}

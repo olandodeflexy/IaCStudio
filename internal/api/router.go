@@ -1577,7 +1577,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		var connectionSummary cloudconnections.PublicConnection
 		if req.ConnectionID != "" {
 			scopedConnection = true
-			connection, connErr := cloudConnections.Get(req.ConnectionID)
+			connection, connErr := cloudConnections.GetForUse(req.ConnectionID)
 			if connErr != nil {
 				if errors.Is(connErr, os.ErrNotExist) {
 					http.Error(w, "connection not found", 404)
