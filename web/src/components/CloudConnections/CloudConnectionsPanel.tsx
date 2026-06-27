@@ -6,6 +6,7 @@ import {
   type CloudAuthMethod,
   type CloudConnection,
   type CloudConnectionInput,
+  type CloudSecretStore,
   type CloudConnectionTestResult,
   type CloudProvider,
 } from '../../api';
@@ -88,6 +89,54 @@ const defaultInput = (): CloudConnectionInput => ({
   secrets: {},
 });
 
+const secretStoreLabels: Record<string, string> = {
+  local_encrypted: 'Local encrypted',
+  os_keychain: 'OS keychain',
+  vault: 'Vault',
+  aws_secrets_manager: 'AWS Secrets Manager',
+  aws_ssm_parameter_store: 'AWS SSM Parameter Store',
+  azure_key_vault: 'Azure Key Vault',
+  gcp_secret_manager: 'GCP Secret Manager',
+};
+
+function secretStoreLabel(store?: CloudSecretStore) {
+  const value = store?.trim();
+  if (!value) return 'No stored secrets';
+  return (
+    secretStoreLabels[value]
+    || value
+      .split(/[_-]+/)
+      .filter(Boolean)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1))
+      .join(' ')
+  );
+}
+
+function secretStoreBadgeClass(store?: CloudSecretStore) {
+  const value = store?.trim();
+  if (!value) return 'border-border bg-muted/30 text-muted-foreground';
+  if (value === 'local_encrypted') return 'border-amber-500/40 bg-amber-500/10 text-amber-100';
+  return 'border-primary/40 bg-primary/10 text-primary';
+}
+
+function SecretStoreBadge({ store }: { store?: CloudSecretStore }) {
+  const label = secretStoreLabel(store);
+  return (
+    <span
+      className={`max-w-44 shrink-0 truncate rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${secretStoreBadgeClass(store)}`}
+      title={label}
+    >
+      {label}
+    </span>
+  );
+}
+
+function connectionSecretStore(
+  connection?: Pick<CloudConnection, 'secret_fields' | 'secret_store'>,
+): CloudSecretStore | undefined {
+  return connection?.secret_store || (connection?.secret_fields?.length ? 'local_encrypted' : undefined);
+}
+
 function splitFields(input: CloudConnectionInput) {
   const metadata: Record<string, string> = {};
   const secrets: Record<string, string> = {};
@@ -130,6 +179,8 @@ export function CloudConnectionsPanel({
     () => connections.find(connection => connection.id === form.id),
     [connections, form.id],
   );
+  const formSecretStore = connectionSecretStore(selected)
+    || (Object.keys(form.secrets || {}).length > 0 ? 'local_encrypted' : undefined);
 
   const load = async () => {
     setLoading(true);
@@ -238,8 +289,11 @@ export function CloudConnectionsPanel({
       )}
 
       <section className="grid gap-2">
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
-          Secrets are encrypted and stored locally on this machine in the IaC Studio projects directory. Use scoped, revocable credentials.
+        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+          <span className="min-w-0 flex-1">
+            Secrets are encrypted and stored locally on this machine in the IaC Studio projects directory. Use scoped, revocable credentials.
+          </span>
+          <SecretStoreBadge store={formSecretStore} />
         </div>
 
         <label className="grid gap-1 text-xs text-muted-foreground">
@@ -351,8 +405,11 @@ export function CloudConnectionsPanel({
                 <span className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{connection.name}</span>
                 <span className="rounded bg-primary/10 px-2 py-0.5 font-mono text-[10px] uppercase text-primary">{connection.provider}</span>
               </button>
-              <div className="mb-3 font-mono text-[11px] text-muted-foreground">
-                {connection.auth_method}{connection.region ? ` / ${connection.region}` : ''}
+              <div className="mb-3 flex items-center gap-2">
+                <div className="min-w-0 flex-1 truncate font-mono text-[11px] text-muted-foreground">
+                  {connection.auth_method}{connection.region ? ` / ${connection.region}` : ''}
+                </div>
+                <SecretStoreBadge store={connectionSecretStore(connection)} />
               </div>
               <div className="flex gap-2">
                 <Button

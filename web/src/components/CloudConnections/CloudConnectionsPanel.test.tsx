@@ -17,6 +17,7 @@ function makeClient(initial: CloudConnection[] = []) {
         region: input.region,
         metadata: input.metadata,
         secret_fields: input.secrets && Object.keys(input.secrets).length > 0 ? Object.keys(input.secrets) : undefined,
+        secret_store: input.secrets && Object.keys(input.secrets).length > 0 ? 'local_encrypted' : undefined,
       };
       connections = [connection];
       return connection;
@@ -30,6 +31,7 @@ function makeClient(initial: CloudConnection[] = []) {
         region: input.region,
         metadata: input.metadata,
         secret_fields: initial.find(item => item.id === id)?.secret_fields,
+        secret_store: initial.find(item => item.id === id)?.secret_store,
       };
       connections = connections.map(item => item.id === id ? connection : item);
       return connection;
@@ -55,7 +57,76 @@ describe('CloudConnectionsPanel', () => {
     render(<CloudConnectionsPanel client={client} />);
 
     expect(screen.getByText(/Secrets are encrypted and stored locally on this machine/)).toBeInTheDocument();
+    expect(screen.getByText('No stored secrets')).toBeInTheDocument();
     await screen.findByText('0 connections');
+  });
+
+  it('shows storage badges for saved connection secret stores', async () => {
+    const client = makeClient([
+      {
+        id: 'conn_1',
+        name: 'break-glass',
+        provider: 'aws',
+        auth_method: 'aws_static',
+        metadata: { access_key_id: 'AKIAEXAMPLE' },
+        secret_fields: ['secret_access_key'],
+        secret_store: 'local_encrypted',
+      },
+      {
+        id: 'conn_2',
+        name: 'desktop',
+        provider: 'azure',
+        auth_method: 'azure_service_principal',
+        metadata: { tenant_id: 'tenant-1', client_id: 'client-1' },
+        secret_fields: ['client_secret'],
+        secret_store: 'os_keychain',
+      },
+      {
+        id: 'conn_3',
+        name: 'platform',
+        provider: 'gcp',
+        auth_method: 'gcp_service_account',
+        metadata: { project_id: 'prod' },
+        secret_fields: ['service_account_json'],
+        secret_store: 'vault',
+      },
+      {
+        id: 'conn_4',
+        name: 'future',
+        provider: 'aws',
+        auth_method: 'aws_static',
+        metadata: { access_key_id: 'AKIAFUTURE' },
+        secret_fields: ['secret_access_key'],
+        secret_store: 'custom_secret_store',
+      },
+    ]);
+    render(<CloudConnectionsPanel client={client} />);
+
+    await screen.findByText('break-glass');
+    expect(screen.getByText('Local encrypted')).toBeInTheDocument();
+    expect(screen.getByText('OS keychain')).toBeInTheDocument();
+    expect(screen.getByText('Vault')).toBeInTheDocument();
+    expect(screen.getByText('Custom Secret Store')).toBeInTheDocument();
+  });
+
+  it('shows the selected connection secret store near the form', async () => {
+    const client = makeClient([
+      {
+        id: 'conn_1',
+        name: 'prod-admin',
+        provider: 'aws',
+        auth_method: 'aws_static',
+        metadata: { access_key_id: 'AKIAEXAMPLE' },
+        secret_fields: ['secret_access_key'],
+        secret_store: 'aws_secrets_manager',
+      },
+    ]);
+    render(<CloudConnectionsPanel client={client} />);
+
+    await screen.findByText('prod-admin');
+    fireEvent.click(screen.getByText('prod-admin'));
+
+    expect(screen.getAllByText('AWS Secrets Manager').length).toBeGreaterThanOrEqual(1);
   });
 
   it('creates an AWS profile connection and refreshes the list', async () => {
@@ -95,6 +166,7 @@ describe('CloudConnectionsPanel', () => {
     render(<CloudConnectionsPanel client={client} />);
 
     await screen.findByText('break-glass');
+    expect(screen.getByText('Local encrypted')).toBeInTheDocument();
     fireEvent.click(screen.getByText('break-glass'));
 
     expect(screen.getByLabelText('Secret access key')).toHaveValue('');
