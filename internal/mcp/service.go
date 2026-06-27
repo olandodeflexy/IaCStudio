@@ -135,7 +135,7 @@ func (s *Server) handleInspectConnectionScope(_ context.Context, raw json.RawMes
 	if err := requireNonEmpty("connection_id", args.ConnectionID); err != nil {
 		return errResponse("inspect_connection_scope", err, AuditDecision{Tool: "inspect_connection_scope", ConnectionID: args.ConnectionID})
 	}
-	connection, err := s.cloudConnections.Get(args.ConnectionID)
+	connection, err := s.cloudConnections.GetForUse(args.ConnectionID)
 	if err != nil {
 		return errResponse("inspect_connection_scope", err, AuditDecision{Tool: "inspect_connection_scope", ConnectionID: args.ConnectionID})
 	}
@@ -819,7 +819,7 @@ func (s *Server) commandEnvironment(connectionID string) (map[string]string, any
 	if strings.TrimSpace(connectionID) == "" {
 		return nil, nil, nil
 	}
-	connection, err := s.cloudConnections.Get(connectionID)
+	connection, err := s.cloudConnections.GetForUse(connectionID)
 	if err != nil {
 		return nil, nil, err
 	}
