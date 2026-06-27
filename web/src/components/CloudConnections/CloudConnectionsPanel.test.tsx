@@ -127,6 +127,7 @@ describe('CloudConnectionsPanel', () => {
     fireEvent.click(screen.getByText('prod-admin'));
 
     expect(screen.getAllByText('AWS Secrets Manager').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Secrets are stored using this connection/)).toBeInTheDocument();
   });
 
   it('creates an AWS profile connection and refreshes the list', async () => {

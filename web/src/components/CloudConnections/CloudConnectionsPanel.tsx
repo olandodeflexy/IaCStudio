@@ -119,6 +119,14 @@ function secretStoreBadgeClass(store?: CloudSecretStore) {
   return 'border-primary/40 bg-primary/10 text-primary';
 }
 
+function secretStoreMessage(store?: CloudSecretStore) {
+  const value = store?.trim();
+  if (!value || value === 'local_encrypted') {
+    return 'Secrets are encrypted and stored locally on this machine in the IaC Studio projects directory. Use scoped, revocable credentials.';
+  }
+  return 'Secrets are stored using this connection’s configured secret store. Use scoped, revocable credentials.';
+}
+
 function SecretStoreBadge({ store }: { store?: CloudSecretStore }) {
   const label = secretStoreLabel(store);
   return (
@@ -289,11 +297,13 @@ export function CloudConnectionsPanel({
       )}
 
       <section className="grid gap-2">
-        <div className="flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100">
+        <div className="flex flex-col gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-100 sm:flex-row sm:items-start">
           <span className="min-w-0 flex-1">
-            Secrets are encrypted and stored locally on this machine in the IaC Studio projects directory. Use scoped, revocable credentials.
+            {secretStoreMessage(formSecretStore)}
           </span>
-          <SecretStoreBadge store={formSecretStore} />
+          <div className="self-start">
+            <SecretStoreBadge store={formSecretStore} />
+          </div>
         </div>
 
         <label className="grid gap-1 text-xs text-muted-foreground">
