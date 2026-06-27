@@ -226,6 +226,41 @@ export interface MCPAirlockToolInventory {
   checks: MCPAirlockCheck[];
 }
 
+export type LocalAgentProviderState =
+  | 'available'
+  | 'not_installed'
+  | (string & Record<never, never>);
+
+export type LocalAgentProviderCategory =
+  | 'local_agent'
+  | 'local_model'
+  | (string & Record<never, never>);
+
+export type LocalAgentProviderCredentialMode =
+  | 'external_login'
+  | 'none'
+  | (string & Record<never, never>);
+
+export interface LocalAgentProviderStatus {
+  id: string;
+  name: string;
+  category: LocalAgentProviderCategory;
+  state: LocalAgentProviderState;
+  installed: boolean;
+  command?: string;
+  entrypoint: string;
+  candidates: string[];
+  version: string;
+  capabilities: string[];
+  credential_mode: LocalAgentProviderCredentialMode;
+  auth_hint: string;
+  install_hint?: string;
+}
+
+export interface LocalAgentProvidersResponse {
+  providers: LocalAgentProviderStatus[];
+}
+
 export type PlanRiskLevel = 'safe' | 'risky' | 'destructive' | 'unknown';
 
 export interface PlanFieldChange {
@@ -511,6 +546,14 @@ export const api = {
       body: JSON.stringify({ tool_name: toolName, project, allowed }),
     });
     return (await check(res)).json();
+  },
+
+  async listLocalAgentProviders(): Promise<LocalAgentProviderStatus[]> {
+    const res = await fetch(`${BASE}/api/agent-hub/providers/local`);
+    const body = (await (await check(res)).json()) as unknown;
+    if (!body || typeof body !== 'object') return [];
+    const providers = (body as Partial<LocalAgentProvidersResponse>).providers;
+    return Array.isArray(providers) ? providers : [];
   },
 
   async listCloudConnections(): Promise<CloudConnection[]> {
