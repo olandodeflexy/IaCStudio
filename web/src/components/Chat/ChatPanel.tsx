@@ -42,6 +42,7 @@ type ProviderLane =
   | 'Local model'
   | 'Offline'
   | 'OpenAI-compatible';
+type ProviderActionLabel = 'Configure API' | 'Use enterprise policy' | 'Use local CLI';
 type ProviderDefinition = { name: string; lane: ProviderLane; state: ProviderState; note: string; localProviderId?: string };
 
 const AGENT_TABS: { key: AgentHubTab; label: string }[] = [
@@ -148,6 +149,18 @@ const stateBackgrounds: Record<ProviderState, string> = {
   setup: 'rgba(217, 177, 92, 0.16)',
   planned: 'rgba(147, 163, 154, 0.14)',
   guarded: 'rgba(138, 167, 255, 0.16)',
+};
+
+const providerActionByLane: Record<ProviderLane, ProviderActionLabel> = {
+  API: 'Configure API',
+  'Cloud tools': 'Use enterprise policy',
+  Collaboration: 'Use enterprise policy',
+  Enterprise: 'Use enterprise policy',
+  'IaC tools': 'Use enterprise policy',
+  'Local agent': 'Use local CLI',
+  'Local model': 'Use local CLI',
+  Offline: 'Use local CLI',
+  'OpenAI-compatible': 'Configure API',
 };
 
 const tabId = (tab: AgentHubTab) => `agent-hub-tab-${tab}`;
@@ -270,13 +283,7 @@ function localStatusDetails(localProviderId?: string, status?: LocalAgentProvide
 }
 
 function providerActionLabel(provider: ProviderDefinition) {
-  if (provider.localProviderId || provider.lane === 'Local agent' || provider.lane === 'Local model' || provider.lane === 'Offline') {
-    return 'Use local CLI';
-  }
-  if (provider.lane === 'API' || provider.lane === 'OpenAI-compatible') {
-    return 'Configure API';
-  }
-  return 'Use enterprise policy';
+  return providerActionByLane[provider.lane];
 }
 
 function ProviderDetails({
