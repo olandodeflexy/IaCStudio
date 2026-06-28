@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, RefObject } from 'react';
 
+import { api, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
 
 export interface ChatMessage {
@@ -53,13 +54,13 @@ const TASK_MODES = [
 const PROVIDER_GROUPS: Record<Exclude<AgentHubTab, 'chat' | 'runs'>, {
   title: string;
   summary: string;
-  providers: { name: string; lane: string; state: ProviderState; note: string }[];
+  providers: { name: string; lane: string; state: ProviderState; note: string; localProviderId?: string }[];
 }> = {
   codex: {
     title: 'Codex',
     summary: 'Use local Codex login first, then API or enterprise routing when teams need central controls.',
     providers: [
-      { name: 'Codex CLI', lane: 'Local agent', state: 'planned', note: 'Use the official CLI session the user already owns.' },
+      { name: 'Codex CLI', lane: 'Local agent', state: 'planned', note: 'Use the official CLI session the user already owns.', localProviderId: 'codex' },
       { name: 'OpenAI API', lane: 'API', state: 'setup', note: 'Usage is billed through the Platform API account.' },
       { name: 'Managed Codex token', lane: 'Enterprise', state: 'guarded', note: 'For workspace policy, audit, and non-interactive runs.' },
     ],
@@ -68,7 +69,7 @@ const PROVIDER_GROUPS: Record<Exclude<AgentHubTab, 'chat' | 'runs'>, {
     title: 'Claude Code',
     summary: 'Prefer Claude Code CLI for subscription-backed local work, with API and enterprise paths as explicit choices.',
     providers: [
-      { name: 'Claude Code CLI', lane: 'Local agent', state: 'planned', note: 'Runs through the official local Claude Code login.' },
+      { name: 'Claude Code CLI', lane: 'Local agent', state: 'planned', note: 'Runs through the official local Claude Code login.', localProviderId: 'claude' },
       { name: 'Anthropic API', lane: 'API', state: 'setup', note: 'Separate API billing for automation and hosted use.' },
       { name: 'Claude Team or Enterprise', lane: 'Enterprise', state: 'guarded', note: 'For managed access, policy, and audit controls.' },
     ],
@@ -77,7 +78,7 @@ const PROVIDER_GROUPS: Record<Exclude<AgentHubTab, 'chat' | 'runs'>, {
     title: 'Gemini',
     summary: 'Support Gemini CLI and API paths without forcing users into a separate hosted account flow first.',
     providers: [
-      { name: 'Gemini CLI', lane: 'Local agent', state: 'planned', note: 'Use the local Gemini session when present.' },
+      { name: 'Gemini CLI', lane: 'Local agent', state: 'planned', note: 'Use the local Gemini session when present.', localProviderId: 'gemini' },
       { name: 'Gemini API', lane: 'API', state: 'setup', note: 'Explicit API billing path for automation and hosted workflows.' },
       { name: 'Google Cloud enterprise controls', lane: 'Enterprise', state: 'guarded', note: 'For governed workspace use through organization policy.' },
     ],
@@ -86,7 +87,7 @@ const PROVIDER_GROUPS: Record<Exclude<AgentHubTab, 'chat' | 'runs'>, {
     title: 'GitHub Copilot',
     summary: 'Expose Copilot as a first-class assistant lane for teams already signed in through GitHub.',
     providers: [
-      { name: 'GitHub Copilot CLI', lane: 'Local agent', state: 'planned', note: 'Use the local GitHub auth session and Copilot entitlement.' },
+      { name: 'GitHub Copilot CLI', lane: 'Local agent', state: 'planned', note: 'Use the local GitHub auth session and Copilot entitlement.', localProviderId: 'copilot' },
       { name: 'Copilot coding agent', lane: 'Collaboration', state: 'guarded', note: 'Route issue and PR work through auditable GitHub workflows.' },
       { name: 'Copilot Business or Enterprise', lane: 'Enterprise', state: 'setup', note: 'Use organization-managed access and policy controls.' },
     ],
@@ -95,7 +96,7 @@ const PROVIDER_GROUPS: Record<Exclude<AgentHubTab, 'chat' | 'runs'>, {
     title: 'Local models',
     summary: 'Keep offline and private model workflows first-class for demos, sensitive reviews, and no-token-cost usage.',
     providers: [
-      { name: 'Ollama', lane: 'Local model', state: 'available', note: 'Current default local model path.' },
+      { name: 'Ollama', lane: 'Local model', state: 'available', note: 'Current default local model path.', localProviderId: 'ollama' },
       { name: 'LM Studio / vLLM', lane: 'OpenAI-compatible', state: 'planned', note: 'Use local endpoints without cloud egress.' },
       { name: 'llama.cpp', lane: 'Offline', state: 'planned', note: 'Small local reviews and explain-only workflows.' },
     ],
@@ -154,6 +155,8 @@ const hubStyles: Record<string, CSSProperties> = {
   providerName: { color: 'var(--text-main)', fontWeight: 700, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   providerLane: { color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
   providerNote: { color: '#77847d', fontSize: 11, lineHeight: 1.4 },
+  providerMeta: { display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8 },
+  providerCapabilityList: { display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 },
   runsEmpty: { flex: 1, minHeight: 0, padding: 16, color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.55 },
 };
 
@@ -165,7 +168,32 @@ function providerStatus(state: ProviderState) {
   );
 }
 
-function ProviderGroup({ tab, active }: { tab: Exclude<AgentHubTab, 'chat' | 'runs'>; active: boolean }) {
+function credentialLabel(mode: string) {
+  if (mode === 'none') return 'No credentials';
+  if (mode === 'external_login') return 'External login';
+  return mode;
+}
+
+function providerDisplay(provider: { state: ProviderState; note: string; localProviderId?: string }, status?: LocalAgentProviderStatus) {
+  if (!status) {
+    return { state: provider.state, note: provider.note };
+  }
+  const state: ProviderState = status.installed ? 'available' : 'setup';
+  return {
+    state,
+    note: status.installed ? status.auth_hint : status.install_hint || status.auth_hint,
+  };
+}
+
+function ProviderGroup({
+  tab,
+  active,
+  localProviders,
+}: {
+  tab: Exclude<AgentHubTab, 'chat' | 'runs'>;
+  active: boolean;
+  localProviders: Record<string, LocalAgentProviderStatus>;
+}) {
   const group = PROVIDER_GROUPS[tab];
   return (
     <div
@@ -179,16 +207,38 @@ function ProviderGroup({ tab, active }: { tab: Exclude<AgentHubTab, 'chat' | 'ru
         <strong style={{ color: 'var(--text-main)' }}>{group.title}</strong>
         <span> - {group.summary}</span>
       </div>
-      {group.providers.map(provider => (
-        <div key={provider.name} style={hubStyles.providerCard}>
-          <div style={hubStyles.providerHead}>
-            <span style={{ ...hubStyles.providerName, flex: 1 }}>{provider.name}</span>
-            {providerStatus(provider.state)}
+      {group.providers.map(provider => {
+        const localStatus = provider.localProviderId ? localProviders[provider.localProviderId] : undefined;
+        const display = providerDisplay(provider, localStatus);
+        return (
+          <div key={provider.name} style={hubStyles.providerCard}>
+            <div style={hubStyles.providerHead}>
+              <span style={{ ...hubStyles.providerName, flex: 1 }}>{provider.name}</span>
+              {providerStatus(display.state)}
+            </div>
+            <div style={hubStyles.providerLane}>{provider.lane}</div>
+            <div style={hubStyles.providerNote}>{display.note}</div>
+            {localStatus && (
+              <>
+                <div style={hubStyles.providerMeta}>
+                  <span style={hubStyles.badge}>
+                    {localStatus.installed ? `Detected: ${localStatus.command || localStatus.entrypoint}` : 'Not installed'}
+                  </span>
+                  <span style={hubStyles.badge}>{credentialLabel(localStatus.credential_mode)}</span>
+                  <span style={hubStyles.badge}>Version {localStatus.version}</span>
+                </div>
+                {localStatus.capabilities.length > 0 && (
+                  <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} capabilities`}>
+                    {localStatus.capabilities.slice(0, 4).map(capability => (
+                      <span key={capability} style={hubStyles.badge}>{capability.replaceAll('_', ' ')}</span>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
           </div>
-          <div style={hubStyles.providerLane}>{provider.lane}</div>
-          <div style={hubStyles.providerNote}>{provider.note}</div>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -207,6 +257,22 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<AgentHubTab>('chat');
   const [activeTask, setActiveTask] = useState(TASK_MODES[0]);
+  const [localProviders, setLocalProviders] = useState<Record<string, LocalAgentProviderStatus>>({});
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listLocalAgentProviders()
+      .then(providers => {
+        if (cancelled) return;
+        setLocalProviders(Object.fromEntries(providers.map(provider => [provider.id, provider])));
+      })
+      .catch(() => {
+        if (!cancelled) setLocalProviders({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const activeProviderLabel = useMemo(() => {
     if (activeTab === 'codex') return 'Codex CLI';
@@ -370,7 +436,7 @@ export function ChatPanel({
           </div>
 
           {(['codex', 'claude', 'gemini', 'copilot', 'local', 'mcp'] as const).map(tab => (
-            <ProviderGroup key={tab} tab={tab} active={activeTab === tab} />
+            <ProviderGroup key={tab} tab={tab} active={activeTab === tab} localProviders={localProviders} />
           ))}
 
           <div
