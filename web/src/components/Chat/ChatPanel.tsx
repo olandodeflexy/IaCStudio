@@ -115,7 +115,7 @@ const PROVIDER_GROUPS: Record<ProviderTab, {
     summary: 'Keep offline and private model workflows first-class for demos, sensitive reviews, and no-token-cost usage.',
     providers: [
       { name: 'Ollama', lane: 'Local model', state: 'available', note: 'Current default local model path.', localProviderId: 'ollama' },
-      { name: 'LM Studio / vLLM', lane: 'OpenAI-compatible', state: 'planned', note: 'Use local endpoints without cloud egress.' },
+      { name: 'LM Studio / vLLM', lane: 'OpenAI-compatible', state: 'planned', note: 'Use local endpoints without cloud egress.', localProviderId: 'openai-compatible-local' },
       { name: 'llama.cpp', lane: 'Offline', state: 'planned', note: 'Small local reviews and explain-only workflows.' },
     ],
   },

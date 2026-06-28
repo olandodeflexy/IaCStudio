@@ -271,6 +271,37 @@ describe('ChatPanel', () => {
     expect(within(localPanel).getByText(/without cloud egress/)).toBeInTheDocument();
   });
 
+  it('shows detected OpenAI-compatible local endpoint details', async () => {
+    listLocalAgentProvidersMock.mockResolvedValueOnce([{
+      id: 'openai-compatible-local',
+      name: 'LM Studio / vLLM',
+      category: 'local_model',
+      state: 'available',
+      installed: true,
+      entrypoint: 'http://127.0.0.1:1234/v1',
+      candidates: [],
+      version: 'unknown',
+      capabilities: ['chat', 'openai_compatible', 'local_model'],
+      credential_mode: 'none',
+      auth_hint: 'Uses a local OpenAI-compatible endpoint.',
+    }]);
+
+    render(<ChatPanel {...baseProps} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Local' }));
+    const localPanel = screen.getByRole('tabpanel', { name: 'Local' });
+
+    await waitFor(() => {
+      expect(within(localPanel).getByText('Detected: http://127.0.0.1:1234/v1')).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(localPanel).getByRole('button', { name: /LM Studio \/ vLLM/ }));
+    const details = within(localPanel).getByRole('region', { name: 'LM Studio / vLLM details' });
+    expect(within(details).getByText('No credentials')).toBeInTheDocument();
+    expect(within(details).getByText('http://127.0.0.1:1234/v1')).toBeInTheDocument();
+    expect(within(details).getByText('openai compatible')).toBeInTheDocument();
+    expect(within(details).getByRole('button', { name: 'Configure API' })).toBeDisabled();
+  });
+
   it('shows Gemini and Copilot as first-class assistant lanes', () => {
     render(<ChatPanel {...baseProps} />);
 
