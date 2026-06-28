@@ -74,9 +74,9 @@ describe('ChatPanel', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
 
     const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
-    expect(within(codexPanel).getByText('Codex CLI')).toBeInTheDocument();
-    expect(within(codexPanel).getByText('OpenAI API')).toBeInTheDocument();
-    expect(within(codexPanel).getByText(/official CLI session/)).toBeInTheDocument();
+    expect(within(codexPanel).getByRole('button', { name: /Codex CLI/ })).toBeInTheDocument();
+    expect(within(codexPanel).getByRole('button', { name: /OpenAI API/ })).toBeInTheDocument();
+    expect(within(codexPanel).getAllByText(/official CLI session/).length).toBeGreaterThan(0);
     expect(within(codexPanel).getByText(/Platform API account/)).toBeInTheDocument();
   });
 
@@ -103,9 +103,61 @@ describe('ChatPanel', () => {
     await waitFor(() => {
       expect(within(codexPanel).getByText('Detected: codex')).toBeInTheDocument();
     });
-    expect(within(codexPanel).getByText('External login')).toBeInTheDocument();
+    expect(within(codexPanel).getAllByText('External login').length).toBeGreaterThan(0);
     expect(within(codexPanel).getByText('Version unknown')).toBeInTheDocument();
-    expect(within(codexPanel).getByText('local cli')).toBeInTheDocument();
+    expect(within(codexPanel).getAllByText('local cli').length).toBeGreaterThan(0);
+  });
+
+  it('shows read-only details for the selected provider card', () => {
+    render(<ChatPanel {...baseProps} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const codexCli = within(codexPanel).getByRole('button', { name: /Codex CLI/ });
+    const openAiApi = within(codexPanel).getByRole('button', { name: /OpenAI API/ });
+    expect(codexCli).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.click(openAiApi);
+
+    expect(codexCli).toHaveAttribute('aria-pressed', 'false');
+    expect(openAiApi).toHaveAttribute('aria-pressed', 'true');
+    const details = within(codexPanel).getByLabelText('OpenAI API details');
+    expect(within(details).getByText('Credential')).toBeInTheDocument();
+    expect(within(details).getByText('Not connected')).toBeInTheDocument();
+    expect(within(details).getByText('Entrypoint')).toBeInTheDocument();
+    expect(within(details).getByText('Pending')).toBeInTheDocument();
+  });
+
+  it('includes detected local provider details in the selected provider panel', async () => {
+    listLocalAgentProvidersMock.mockResolvedValueOnce([{
+      id: 'codex',
+      name: 'Codex CLI',
+      category: 'local_agent',
+      state: 'available',
+      installed: true,
+      command: 'codex',
+      entrypoint: 'codex',
+      candidates: ['codex'],
+      version: 'unknown',
+      capabilities: ['chat', 'local_cli'],
+      credential_mode: 'external_login',
+      auth_hint: 'Use the official local Codex sign-in.',
+    }]);
+
+    render(<ChatPanel {...baseProps} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+
+    await waitFor(() => {
+      expect(within(codexPanel).getByText('Detected: codex')).toBeInTheDocument();
+    });
+
+    const details = within(codexPanel).getByLabelText('Codex CLI details');
+    expect(within(details).getByText('Entrypoint')).toBeInTheDocument();
+    expect(within(details).getByText('codex')).toBeInTheDocument();
+    const selectedCapabilities = within(details).getByLabelText('Codex CLI selected capabilities');
+    expect(within(selectedCapabilities).getByText('chat')).toBeInTheDocument();
+    expect(within(selectedCapabilities).getByText('local cli')).toBeInTheDocument();
   });
 
   it('links provider tabs to stable tabpanels and supports roving keyboard selection', () => {
@@ -208,8 +260,8 @@ describe('ChatPanel', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Local' }));
 
     const localPanel = screen.getByRole('tabpanel', { name: 'Local' });
-    expect(within(localPanel).getByText('Ollama')).toBeInTheDocument();
-    expect(within(localPanel).getByText('LM Studio / vLLM')).toBeInTheDocument();
+    expect(within(localPanel).getByRole('button', { name: /Ollama/ })).toBeInTheDocument();
+    expect(within(localPanel).getByRole('button', { name: /LM Studio \/ vLLM/ })).toBeInTheDocument();
     expect(within(localPanel).getByText(/without cloud egress/)).toBeInTheDocument();
   });
 
@@ -218,15 +270,15 @@ describe('ChatPanel', () => {
 
     fireEvent.click(screen.getByRole('tab', { name: 'Gemini' }));
     const geminiPanel = screen.getByRole('tabpanel', { name: 'Gemini' });
-    expect(within(geminiPanel).getByText('Gemini CLI')).toBeInTheDocument();
-    expect(within(geminiPanel).getByText('Gemini API')).toBeInTheDocument();
-    expect(within(geminiPanel).getByText(/local Gemini session/)).toBeInTheDocument();
+    expect(within(geminiPanel).getByRole('button', { name: /Gemini CLI/ })).toBeInTheDocument();
+    expect(within(geminiPanel).getByRole('button', { name: /Gemini API/ })).toBeInTheDocument();
+    expect(within(geminiPanel).getAllByText(/local Gemini session/).length).toBeGreaterThan(0);
 
     fireEvent.click(screen.getByRole('tab', { name: 'Copilot' }));
     const copilotPanel = screen.getByRole('tabpanel', { name: 'Copilot' });
-    expect(within(copilotPanel).getByText('GitHub Copilot CLI')).toBeInTheDocument();
-    expect(within(copilotPanel).getByText('Copilot coding agent')).toBeInTheDocument();
-    expect(within(copilotPanel).getByText(/GitHub auth session/)).toBeInTheDocument();
+    expect(within(copilotPanel).getByRole('button', { name: /GitHub Copilot CLI/ })).toBeInTheDocument();
+    expect(within(copilotPanel).getByRole('button', { name: /Copilot coding agent/ })).toBeInTheDocument();
+    expect(within(copilotPanel).getAllByText(/GitHub auth session/).length).toBeGreaterThan(0);
   });
 
   it('scrolls to the newest chat message when returning to the Chat tab', () => {

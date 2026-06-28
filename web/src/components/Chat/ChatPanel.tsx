@@ -31,6 +31,8 @@ export interface ChatPanelProps {
 
 type AgentHubTab = 'chat' | 'codex' | 'claude' | 'gemini' | 'copilot' | 'local' | 'mcp' | 'runs';
 type ProviderState = 'available' | 'setup' | 'planned' | 'guarded';
+type ProviderTab = Exclude<AgentHubTab, 'chat' | 'runs'>;
+type ProviderDefinition = { name: string; lane: string; state: ProviderState; note: string; localProviderId?: string };
 
 const AGENT_TABS: { key: AgentHubTab; label: string }[] = [
   { key: 'chat', label: 'Chat' },
@@ -56,10 +58,10 @@ const AGENT_HUB_STORAGE_KEYS = {
   activeTask: 'iac-studio.agentHub.activeTask',
 };
 
-const PROVIDER_GROUPS: Record<Exclude<AgentHubTab, 'chat' | 'runs'>, {
+const PROVIDER_GROUPS: Record<ProviderTab, {
   title: string;
   summary: string;
-  providers: { name: string; lane: string; state: ProviderState; note: string; localProviderId?: string }[];
+  providers: ProviderDefinition[];
 }> = {
   codex: {
     title: 'Codex',
@@ -190,13 +192,17 @@ const hubStyles: Record<string, CSSProperties> = {
   badge: { padding: '2px 7px', borderRadius: 999, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', fontSize: 10, fontFamily: 'JetBrains Mono', whiteSpace: 'nowrap' },
   providerPanel: { flex: 1, minHeight: 0, overflowY: 'auto', padding: '10px 12px', display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(190px, 1fr))', gap: 8 },
   providerIntro: { gridColumn: '1 / -1', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45, marginBottom: 2 },
-  providerCard: { border: '1px solid var(--border-main)', borderRadius: 8, background: 'var(--bg-elev-2)', padding: 10, minWidth: 0 },
+  providerCard: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-main)', borderRadius: 8, background: 'var(--bg-elev-2)', padding: 10, minWidth: 0, color: 'inherit', cursor: 'pointer', textAlign: 'left', font: 'inherit' },
   providerHead: { display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 },
   providerName: { color: 'var(--text-main)', fontWeight: 700, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   providerLane: { color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 5 },
   providerNote: { color: '#77847d', fontSize: 11, lineHeight: 1.4 },
   providerMeta: { display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8 },
   providerCapabilityList: { display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 6 },
+  providerDetails: { gridColumn: '1 / -1', borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-main)', borderRadius: 8, background: 'rgba(23, 29, 27, 0.84)', padding: 10, minWidth: 0 },
+  providerDetailsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, marginTop: 8 },
+  providerDetailLabel: { color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
+  providerDetailValue: { color: 'var(--text-main)', fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   runsEmpty: { flex: 1, minHeight: 0, padding: 16, color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.55 },
 };
 
@@ -214,7 +220,7 @@ function credentialLabel(mode: string) {
   return mode;
 }
 
-function providerDisplay(provider: { state: ProviderState; note: string; localProviderId?: string }, status?: LocalAgentProviderStatus) {
+function providerDisplay(provider: Pick<ProviderDefinition, 'state' | 'note'>, status?: LocalAgentProviderStatus) {
   if (!status) {
     return { state: provider.state, note: provider.note };
   }
@@ -225,16 +231,88 @@ function providerDisplay(provider: { state: ProviderState; note: string; localPr
   };
 }
 
+function localStatusDetails(status?: LocalAgentProviderStatus) {
+  if (!status) {
+    return {
+      credential: 'Not connected',
+      entrypoint: 'Pending',
+      version: 'Unknown',
+      capabilities: [] as string[],
+    };
+  }
+  return {
+    credential: credentialLabel(status.credential_mode),
+    entrypoint: status.command || status.entrypoint || 'Detected',
+    version: status.version || 'Unknown',
+    capabilities: status.capabilities,
+  };
+}
+
+function ProviderDetails({
+  provider,
+  displayState,
+  displayNote,
+  localStatus,
+}: {
+  provider: ProviderDefinition;
+  displayState: ProviderState;
+  displayNote: string;
+  localStatus?: LocalAgentProviderStatus;
+}) {
+  const details = localStatusDetails(localStatus);
+  return (
+    <div style={hubStyles.providerDetails} aria-label={`${provider.name} details`} aria-live="polite">
+      <div style={hubStyles.providerHead}>
+        <span style={{ ...hubStyles.providerName, flex: 1 }}>{provider.name}</span>
+        {providerStatus(displayState)}
+      </div>
+      <div style={hubStyles.providerNote}>{displayNote}</div>
+      <div style={hubStyles.providerDetailsGrid}>
+        <div>
+          <div style={hubStyles.providerDetailLabel}>Lane</div>
+          <div style={hubStyles.providerDetailValue}>{provider.lane}</div>
+        </div>
+        <div>
+          <div style={hubStyles.providerDetailLabel}>Credential</div>
+          <div style={hubStyles.providerDetailValue}>{details.credential}</div>
+        </div>
+        <div>
+          <div style={hubStyles.providerDetailLabel}>Entrypoint</div>
+          <div style={hubStyles.providerDetailValue}>{details.entrypoint}</div>
+        </div>
+        <div>
+          <div style={hubStyles.providerDetailLabel}>Version</div>
+          <div style={hubStyles.providerDetailValue}>{details.version}</div>
+        </div>
+      </div>
+      {details.capabilities.length > 0 && (
+        <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} selected capabilities`}>
+          {details.capabilities.map(capability => (
+            <span key={capability} style={hubStyles.badge}>{capability.replaceAll('_', ' ')}</span>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ProviderGroup({
   tab,
   active,
   localProviders,
+  selectedProviderName,
+  onSelectProvider,
 }: {
-  tab: Exclude<AgentHubTab, 'chat' | 'runs'>;
+  tab: ProviderTab;
   active: boolean;
   localProviders: Record<string, LocalAgentProviderStatus>;
+  selectedProviderName?: string;
+  onSelectProvider: (tab: ProviderTab, providerName: string) => void;
 }) {
   const group = PROVIDER_GROUPS[tab];
+  const selectedProvider = group.providers.find(provider => provider.name === selectedProviderName) ?? group.providers[0];
+  const selectedLocalStatus = selectedProvider.localProviderId ? localProviders[selectedProvider.localProviderId] : undefined;
+  const selectedDisplay = providerDisplay(selectedProvider, selectedLocalStatus);
   return (
     <div
       role="tabpanel"
@@ -250,8 +328,18 @@ function ProviderGroup({
       {group.providers.map(provider => {
         const localStatus = provider.localProviderId ? localProviders[provider.localProviderId] : undefined;
         const display = providerDisplay(provider, localStatus);
+        const selected = provider.name === selectedProvider.name;
         return (
-          <div key={provider.name} style={hubStyles.providerCard}>
+          <button
+            key={provider.name}
+            type="button"
+            aria-pressed={selected}
+            style={{
+              ...hubStyles.providerCard,
+              ...(selected ? { borderColor: stateColors[display.state], boxShadow: `inset 0 0 0 1px ${stateColors[display.state]}` } : {}),
+            }}
+            onClick={() => onSelectProvider(tab, provider.name)}
+          >
             <div style={hubStyles.providerHead}>
               <span style={{ ...hubStyles.providerName, flex: 1 }}>{provider.name}</span>
               {providerStatus(display.state)}
@@ -276,9 +364,15 @@ function ProviderGroup({
                 )}
               </>
             )}
-          </div>
+          </button>
         );
       })}
+      <ProviderDetails
+        provider={selectedProvider}
+        displayState={selectedDisplay.state}
+        displayNote={selectedDisplay.note}
+        localStatus={selectedLocalStatus}
+      />
     </div>
   );
 }
@@ -297,6 +391,7 @@ export function ChatPanel({
 }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<AgentHubTab>(() => readStoredAgentHubTab());
   const [activeTask, setActiveTask] = useState<typeof TASK_MODES[number]>(() => readStoredTaskMode());
+  const [selectedProviders, setSelectedProviders] = useState<Partial<Record<ProviderTab, string>>>({});
   const [localProviders, setLocalProviders] = useState<Record<string, LocalAgentProviderStatus>>({});
 
   useEffect(() => {
@@ -343,6 +438,10 @@ export function ChatPanel({
   const selectTask = (task: typeof TASK_MODES[number]) => {
     setActiveTask(task);
     writeStoredAgentHubValue(AGENT_HUB_STORAGE_KEYS.activeTask, task);
+  };
+
+  const selectProvider = (tab: ProviderTab, providerName: string) => {
+    setSelectedProviders(current => ({ ...current, [tab]: providerName }));
   };
 
   useEffect(() => {
@@ -482,7 +581,14 @@ export function ChatPanel({
           </div>
 
           {(['codex', 'claude', 'gemini', 'copilot', 'local', 'mcp'] as const).map(tab => (
-            <ProviderGroup key={tab} tab={tab} active={activeTab === tab} localProviders={localProviders} />
+            <ProviderGroup
+              key={tab}
+              tab={tab}
+              active={activeTab === tab}
+              localProviders={localProviders}
+              selectedProviderName={selectedProviders[tab]}
+              onSelectProvider={selectProvider}
+            />
           ))}
 
           <div
