@@ -231,8 +231,16 @@ function providerDisplay(provider: Pick<ProviderDefinition, 'state' | 'note'>, s
   };
 }
 
-function localStatusDetails(status?: LocalAgentProviderStatus) {
+function localStatusDetails(localProviderId?: string, status?: LocalAgentProviderStatus) {
   if (!status) {
+    if (!localProviderId) {
+      return {
+        credential: 'Provider managed',
+        entrypoint: 'Not applicable',
+        version: 'Not applicable',
+        capabilities: [] as string[],
+      };
+    }
     return {
       credential: 'Not connected',
       entrypoint: 'Pending',
@@ -259,9 +267,14 @@ function ProviderDetails({
   displayNote: string;
   localStatus?: LocalAgentProviderStatus;
 }) {
-  const details = localStatusDetails(localStatus);
+  const details = localStatusDetails(provider.localProviderId, localStatus);
   return (
-    <div style={hubStyles.providerDetails} aria-label={`${provider.name} details`} aria-live="polite">
+    <div
+      role="region"
+      style={hubStyles.providerDetails}
+      aria-label={`${provider.name} details`}
+      aria-live="polite"
+    >
       <div style={hubStyles.providerHead}>
         <span style={{ ...hubStyles.providerName, flex: 1 }}>{provider.name}</span>
         {providerStatus(displayState)}

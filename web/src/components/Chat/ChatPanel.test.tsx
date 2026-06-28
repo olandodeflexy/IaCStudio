@@ -121,11 +121,11 @@ describe('ChatPanel', () => {
 
     expect(codexCli).toHaveAttribute('aria-pressed', 'false');
     expect(openAiApi).toHaveAttribute('aria-pressed', 'true');
-    const details = within(codexPanel).getByLabelText('OpenAI API details');
+    const details = within(codexPanel).getByRole('region', { name: 'OpenAI API details' });
     expect(within(details).getByText('Credential')).toBeInTheDocument();
-    expect(within(details).getByText('Not connected')).toBeInTheDocument();
+    expect(within(details).getByText('Provider managed')).toBeInTheDocument();
     expect(within(details).getByText('Entrypoint')).toBeInTheDocument();
-    expect(within(details).getByText('Pending')).toBeInTheDocument();
+    expect(within(details).getAllByText('Not applicable')).toHaveLength(2);
   });
 
   it('includes detected local provider details in the selected provider panel', async () => {
@@ -152,7 +152,7 @@ describe('ChatPanel', () => {
       expect(within(codexPanel).getByText('Detected: codex')).toBeInTheDocument();
     });
 
-    const details = within(codexPanel).getByLabelText('Codex CLI details');
+    const details = within(codexPanel).getByRole('region', { name: 'Codex CLI details' });
     expect(within(details).getByText('Entrypoint')).toBeInTheDocument();
     expect(within(details).getByText('codex')).toBeInTheDocument();
     const selectedCapabilities = within(details).getByLabelText('Codex CLI selected capabilities');
