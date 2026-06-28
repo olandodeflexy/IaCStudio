@@ -32,7 +32,17 @@ export interface ChatPanelProps {
 type AgentHubTab = 'chat' | 'codex' | 'claude' | 'gemini' | 'copilot' | 'local' | 'mcp' | 'runs';
 type ProviderState = 'available' | 'setup' | 'planned' | 'guarded';
 type ProviderTab = Exclude<AgentHubTab, 'chat' | 'runs'>;
-type ProviderDefinition = { name: string; lane: string; state: ProviderState; note: string; localProviderId?: string };
+type ProviderLane =
+  | 'API'
+  | 'Cloud tools'
+  | 'Collaboration'
+  | 'Enterprise'
+  | 'IaC tools'
+  | 'Local agent'
+  | 'Local model'
+  | 'Offline'
+  | 'OpenAI-compatible';
+type ProviderDefinition = { name: string; lane: ProviderLane; state: ProviderState; note: string; localProviderId?: string };
 
 const AGENT_TABS: { key: AgentHubTab; label: string }[] = [
   { key: 'chat', label: 'Chat' },
