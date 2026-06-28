@@ -32,7 +32,18 @@ export interface ChatPanelProps {
 type AgentHubTab = 'chat' | 'codex' | 'claude' | 'gemini' | 'copilot' | 'local' | 'mcp' | 'runs';
 type ProviderState = 'available' | 'setup' | 'planned' | 'guarded';
 type ProviderTab = Exclude<AgentHubTab, 'chat' | 'runs'>;
-type ProviderDefinition = { name: string; lane: string; state: ProviderState; note: string; localProviderId?: string };
+type ProviderLane =
+  | 'API'
+  | 'Cloud tools'
+  | 'Collaboration'
+  | 'Enterprise'
+  | 'IaC tools'
+  | 'Local agent'
+  | 'Local model'
+  | 'Offline'
+  | 'OpenAI-compatible';
+type ProviderActionLabel = 'Configure API' | 'Use enterprise policy' | 'Use local CLI';
+type ProviderDefinition = { name: string; lane: ProviderLane; state: ProviderState; note: string; localProviderId?: string };
 
 const AGENT_TABS: { key: AgentHubTab; label: string }[] = [
   { key: 'chat', label: 'Chat' },
@@ -140,6 +151,18 @@ const stateBackgrounds: Record<ProviderState, string> = {
   guarded: 'rgba(138, 167, 255, 0.16)',
 };
 
+const providerActionByLane: Record<ProviderLane, ProviderActionLabel> = {
+  API: 'Configure API',
+  'Cloud tools': 'Use enterprise policy',
+  Collaboration: 'Use enterprise policy',
+  Enterprise: 'Use enterprise policy',
+  'IaC tools': 'Use enterprise policy',
+  'Local agent': 'Use local CLI',
+  'Local model': 'Use local CLI',
+  Offline: 'Use local CLI',
+  'OpenAI-compatible': 'Configure API',
+};
+
 const tabId = (tab: AgentHubTab) => `agent-hub-tab-${tab}`;
 const panelId = (tab: AgentHubTab) => `agent-hub-panel-${tab}`;
 const isAgentHubTab = (value: string | null): value is AgentHubTab => (
@@ -203,6 +226,9 @@ const hubStyles: Record<string, CSSProperties> = {
   providerDetailsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, marginTop: 8 },
   providerDetailLabel: { color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
   providerDetailValue: { color: 'var(--text-main)', fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  providerActions: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 },
+  providerActionButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', cursor: 'not-allowed', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '6px 9px', opacity: 0.72 },
+  providerActionHint: { color: '#77847d', fontSize: 11 },
   runsEmpty: { flex: 1, minHeight: 0, padding: 16, color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.55 },
 };
 
@@ -256,6 +282,10 @@ function localStatusDetails(localProviderId?: string, status?: LocalAgentProvide
   };
 }
 
+function providerActionLabel(provider: ProviderDefinition) {
+  return providerActionByLane[provider.lane];
+}
+
 function ProviderDetails({
   provider,
   displayState,
@@ -305,6 +335,16 @@ function ProviderDetails({
           ))}
         </div>
       )}
+      <div role="group" style={hubStyles.providerActions} aria-label={`${provider.name} actions`}>
+        <button
+          type="button"
+          disabled
+          style={hubStyles.providerActionButton}
+        >
+          {providerActionLabel(provider)}
+        </button>
+        <span style={hubStyles.providerActionHint}>Preview only</span>
+      </div>
     </div>
   );
 }
