@@ -25,6 +25,7 @@ describe('ChatPanel', () => {
   beforeEach(() => {
     listLocalAgentProvidersMock.mockReset();
     listLocalAgentProvidersMock.mockReturnValue(new Promise(() => {}));
+    window.localStorage.clear();
   });
 
   it('renders the empty-state hint when no messages are present', () => {
@@ -142,6 +143,22 @@ describe('ChatPanel', () => {
 
     expect(reviewProject).toHaveAttribute('aria-pressed', 'false');
     expect(generateIac).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('persists the selected provider tab and task mode locally', () => {
+    const firstRender = render(<ChatPanel {...baseProps} />);
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Gemini' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Generate IaC' }));
+
+    expect(window.localStorage.getItem('iac-studio.agentHub.activeTab')).toBe('gemini');
+    expect(window.localStorage.getItem('iac-studio.agentHub.activeTask')).toBe('Generate IaC');
+
+    firstRender.unmount();
+    render(<ChatPanel {...baseProps} />);
+
+    expect(screen.getByRole('tab', { name: 'Gemini' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: 'Generate IaC' })).toHaveAttribute('aria-pressed', 'true');
   });
 
   it('keeps local model support visible as a first-class lane', () => {

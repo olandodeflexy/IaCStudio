@@ -49,7 +49,12 @@ const TASK_MODES = [
   'Explain plan',
   'Fix policy',
   'Prepare deploy',
-];
+] as const;
+
+const AGENT_HUB_STORAGE_KEYS = {
+  activeTab: 'iac-studio.agentHub.activeTab',
+  activeTask: 'iac-studio.agentHub.activeTask',
+};
 
 const PROVIDER_GROUPS: Record<Exclude<AgentHubTab, 'chat' | 'runs'>, {
   title: string;
@@ -135,6 +140,41 @@ const stateBackgrounds: Record<ProviderState, string> = {
 
 const tabId = (tab: AgentHubTab) => `agent-hub-tab-${tab}`;
 const panelId = (tab: AgentHubTab) => `agent-hub-panel-${tab}`;
+const isAgentHubTab = (value: string | null): value is AgentHubTab => (
+  AGENT_TABS.some(tab => tab.key === value)
+);
+const isTaskMode = (value: string | null): value is typeof TASK_MODES[number] => (
+  TASK_MODES.some(task => task === value)
+);
+
+function readStoredAgentHubTab(): AgentHubTab {
+  if (typeof window === 'undefined') return 'chat';
+  try {
+    const storedTab = window.localStorage.getItem(AGENT_HUB_STORAGE_KEYS.activeTab);
+    return isAgentHubTab(storedTab) ? storedTab : 'chat';
+  } catch {
+    return 'chat';
+  }
+}
+
+function readStoredTaskMode(): typeof TASK_MODES[number] {
+  if (typeof window === 'undefined') return TASK_MODES[0];
+  try {
+    const storedTask = window.localStorage.getItem(AGENT_HUB_STORAGE_KEYS.activeTask);
+    return isTaskMode(storedTask) ? storedTask : TASK_MODES[0];
+  } catch {
+    return TASK_MODES[0];
+  }
+}
+
+function writeStoredAgentHubValue(key: string, value: string) {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Browser privacy settings can disable localStorage; the UI should remain usable.
+  }
+}
 
 const hubStyles: Record<string, CSSProperties> = {
   shell: { flex: 1, display: 'flex', minWidth: 0, minHeight: 0 },
@@ -255,8 +295,8 @@ export function ChatPanel({
   scrollAnchorRef,
   providerLabel = 'Ollama',
 }: ChatPanelProps) {
-  const [activeTab, setActiveTab] = useState<AgentHubTab>('chat');
-  const [activeTask, setActiveTask] = useState(TASK_MODES[0]);
+  const [activeTab, setActiveTab] = useState<AgentHubTab>(() => readStoredAgentHubTab());
+  const [activeTask, setActiveTask] = useState<typeof TASK_MODES[number]>(() => readStoredTaskMode());
   const [localProviders, setLocalProviders] = useState<Record<string, LocalAgentProviderStatus>>({});
 
   useEffect(() => {
@@ -296,7 +336,13 @@ export function ChatPanel({
 
   const selectTab = (tab: AgentHubTab, focus = false) => {
     setActiveTab(tab);
+    writeStoredAgentHubValue(AGENT_HUB_STORAGE_KEYS.activeTab, tab);
     if (focus) focusSelectedTab(tab);
+  };
+
+  const selectTask = (task: typeof TASK_MODES[number]) => {
+    setActiveTask(task);
+    writeStoredAgentHubValue(AGENT_HUB_STORAGE_KEYS.activeTask, task);
   };
 
   useEffect(() => {
@@ -378,7 +424,7 @@ export function ChatPanel({
                     ? { borderColor: toolColor, color: 'var(--text-main)', background: `${toolColor}1f` }
                     : {}),
                 }}
-                onClick={() => setActiveTask(task)}
+                onClick={() => selectTask(task)}
               >
                 {task}
               </button>
