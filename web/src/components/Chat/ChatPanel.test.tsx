@@ -161,6 +161,48 @@ describe('ChatPanel', () => {
     expect(screen.getByRole('button', { name: 'Generate IaC' })).toHaveAttribute('aria-pressed', 'true');
   });
 
+  it('falls back to defaults when persisted provider selection is invalid', () => {
+    window.localStorage.setItem('iac-studio.agentHub.activeTab', 'missing-provider');
+    window.localStorage.setItem('iac-studio.agentHub.activeTask', 'Unsupported task');
+
+    render(<ChatPanel {...baseProps} />);
+
+    expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: 'Review project' })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('keeps the UI usable when localStorage reads are blocked', () => {
+    const getItemSpy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
+      throw new Error('localStorage read blocked');
+    });
+
+    try {
+      render(<ChatPanel {...baseProps} />);
+
+      expect(screen.getByRole('tab', { name: 'Chat' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('button', { name: 'Review project' })).toHaveAttribute('aria-pressed', 'true');
+    } finally {
+      getItemSpy.mockRestore();
+    }
+  });
+
+  it('keeps provider and task selection usable when localStorage writes are blocked', () => {
+    const setItemSpy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(() => {
+      throw new Error('localStorage write blocked');
+    });
+
+    try {
+      render(<ChatPanel {...baseProps} />);
+
+      expect(() => fireEvent.click(screen.getByRole('tab', { name: 'Gemini' }))).not.toThrow();
+      expect(() => fireEvent.click(screen.getByRole('button', { name: 'Generate IaC' }))).not.toThrow();
+      expect(screen.getByRole('tab', { name: 'Gemini' })).toHaveAttribute('aria-selected', 'true');
+      expect(screen.getByRole('button', { name: 'Generate IaC' })).toHaveAttribute('aria-pressed', 'true');
+    } finally {
+      setItemSpy.mockRestore();
+    }
+  });
+
   it('keeps local model support visible as a first-class lane', () => {
     render(<ChatPanel {...baseProps} providerLabel="Ollama" />);
     fireEvent.click(screen.getByRole('tab', { name: 'Local' }));
