@@ -1,8 +1,16 @@
 import { createRef } from 'react';
-import { describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 import { ChatPanel } from './ChatPanel';
+
+const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
+
+vi.mock('../../api', () => ({
+  api: {
+    listLocalAgentProviders: listLocalAgentProvidersMock,
+  },
+}));
 
 describe('ChatPanel', () => {
   const baseProps = {
@@ -13,6 +21,11 @@ describe('ChatPanel', () => {
     loading: false,
     toolColor: '#2FB5A8',
   };
+
+  beforeEach(() => {
+    listLocalAgentProvidersMock.mockReset();
+    listLocalAgentProvidersMock.mockReturnValue(new Promise(() => {}));
+  });
 
   it('renders the empty-state hint when no messages are present', () => {
     render(<ChatPanel {...baseProps} />);
@@ -64,6 +77,34 @@ describe('ChatPanel', () => {
     expect(within(codexPanel).getByText('OpenAI API')).toBeInTheDocument();
     expect(within(codexPanel).getByText(/official CLI session/)).toBeInTheDocument();
     expect(within(codexPanel).getByText(/Platform API account/)).toBeInTheDocument();
+  });
+
+  it('shows detected local provider status in provider lanes', async () => {
+    listLocalAgentProvidersMock.mockResolvedValueOnce([{
+      id: 'codex',
+      name: 'Codex CLI',
+      category: 'local_agent',
+      state: 'available',
+      installed: true,
+      command: 'codex',
+      entrypoint: 'codex',
+      candidates: ['codex'],
+      version: 'unknown',
+      capabilities: ['chat', 'local_cli'],
+      credential_mode: 'external_login',
+      auth_hint: 'Use the official local Codex sign-in.',
+    }]);
+
+    render(<ChatPanel {...baseProps} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+
+    await waitFor(() => {
+      expect(within(codexPanel).getByText('Detected: codex')).toBeInTheDocument();
+    });
+    expect(within(codexPanel).getByText('External login')).toBeInTheDocument();
+    expect(within(codexPanel).getByText('Version unknown')).toBeInTheDocument();
+    expect(within(codexPanel).getByText('local cli')).toBeInTheDocument();
   });
 
   it('links provider tabs to stable tabpanels and supports roving keyboard selection', () => {
