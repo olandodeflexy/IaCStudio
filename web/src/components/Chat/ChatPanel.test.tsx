@@ -126,6 +126,11 @@ describe('ChatPanel', () => {
     expect(within(details).getByText('Provider managed')).toBeInTheDocument();
     expect(within(details).getByText('Entrypoint')).toBeInTheDocument();
     expect(within(details).getAllByText('Not applicable')).toHaveLength(2);
+    expect(within(details).getByRole('button', { name: 'Configure API' })).toBeDisabled();
+
+    fireEvent.click(within(codexPanel).getByRole('button', { name: /Managed Codex token/ }));
+    const enterpriseDetails = within(codexPanel).getByRole('region', { name: 'Managed Codex token details' });
+    expect(within(enterpriseDetails).getByRole('button', { name: 'Use enterprise policy' })).toBeDisabled();
   });
 
   it('includes detected local provider details in the selected provider panel', async () => {
@@ -158,6 +163,7 @@ describe('ChatPanel', () => {
     const selectedCapabilities = within(details).getByLabelText('Codex CLI selected capabilities');
     expect(within(selectedCapabilities).getByText('chat')).toBeInTheDocument();
     expect(within(selectedCapabilities).getByText('local cli')).toBeInTheDocument();
+    expect(within(details).getByRole('button', { name: 'Use local CLI' })).toBeDisabled();
   });
 
   it('links provider tabs to stable tabpanels and supports roving keyboard selection', () => {

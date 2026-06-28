@@ -203,6 +203,9 @@ const hubStyles: Record<string, CSSProperties> = {
   providerDetailsGrid: { display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: 8, marginTop: 8 },
   providerDetailLabel: { color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', fontSize: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
   providerDetailValue: { color: 'var(--text-main)', fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  providerActions: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 },
+  providerActionButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', cursor: 'not-allowed', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '6px 9px', opacity: 0.72 },
+  providerActionHint: { color: '#77847d', fontSize: 11 },
   runsEmpty: { flex: 1, minHeight: 0, padding: 16, color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.55 },
 };
 
@@ -256,6 +259,16 @@ function localStatusDetails(localProviderId?: string, status?: LocalAgentProvide
   };
 }
 
+function providerActionLabel(provider: ProviderDefinition) {
+  if (provider.localProviderId || provider.lane === 'Local model' || provider.lane === 'Offline') {
+    return 'Use local CLI';
+  }
+  if (provider.lane === 'API' || provider.lane === 'OpenAI-compatible') {
+    return 'Configure API';
+  }
+  return 'Use enterprise policy';
+}
+
 function ProviderDetails({
   provider,
   displayState,
@@ -305,6 +318,16 @@ function ProviderDetails({
           ))}
         </div>
       )}
+      <div style={hubStyles.providerActions} aria-label={`${provider.name} actions`}>
+        <button
+          type="button"
+          disabled
+          style={hubStyles.providerActionButton}
+        >
+          {providerActionLabel(provider)}
+        </button>
+        <span style={hubStyles.providerActionHint}>Preview only</span>
+      </div>
     </div>
   );
 }
