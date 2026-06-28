@@ -260,7 +260,7 @@ function localStatusDetails(localProviderId?: string, status?: LocalAgentProvide
 }
 
 function providerActionLabel(provider: ProviderDefinition) {
-  if (provider.localProviderId || provider.lane === 'Local model' || provider.lane === 'Offline') {
+  if (provider.localProviderId || provider.lane === 'Local agent' || provider.lane === 'Local model' || provider.lane === 'Offline') {
     return 'Use local CLI';
   }
   if (provider.lane === 'API' || provider.lane === 'OpenAI-compatible') {
@@ -318,7 +318,7 @@ function ProviderDetails({
           ))}
         </div>
       )}
-      <div style={hubStyles.providerActions} aria-label={`${provider.name} actions`}>
+      <div role="group" style={hubStyles.providerActions} aria-label={`${provider.name} actions`}>
         <button
           type="button"
           disabled
