@@ -150,7 +150,13 @@ func (d Discoverer) status(definition LocalProviderDefinition) LocalProviderStat
 
 func defaultEndpointProbe(probeURL string) bool {
 	parsed, err := url.Parse(probeURL)
-	if err != nil || parsed.Scheme != "http" || !isLoopbackHost(parsed.Hostname()) {
+	if err != nil ||
+		parsed.Scheme != "http" ||
+		parsed.User != nil ||
+		parsed.Path != "/v1/models" ||
+		parsed.RawQuery != "" ||
+		parsed.Fragment != "" ||
+		!isLoopbackHost(parsed.Hostname()) {
 		return false
 	}
 
@@ -166,6 +172,10 @@ func defaultEndpointProbe(probeURL string) bool {
 		Timeout: localEndpointProbeTimeout,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
 			return http.ErrUseLastResponse
+		},
+		Jar: nil,
+		Transport: &http.Transport{
+			Proxy: nil,
 		},
 	}
 	resp, err := client.Do(req)

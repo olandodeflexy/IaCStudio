@@ -3,10 +3,12 @@ package agentproviders
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -94,11 +96,25 @@ func TestDiscoverLocalDetectsOpenAICompatibleEndpoint(t *testing.T) {
 
 func TestDefaultEndpointProbeOnlyAllowsLoopbackModelLists(t *testing.T) {
 	var sawAuthorization bool
+	var sawCookie bool
+	var bodySize int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet {
+			t.Fatalf("probe method = %s, want GET", r.Method)
+		}
 		if r.URL.Path != "/v1/models" {
 			t.Fatalf("probe path = %s, want /v1/models", r.URL.Path)
 		}
+		if r.URL.RawQuery != "" {
+			t.Fatalf("probe query = %q, want empty", r.URL.RawQuery)
+		}
 		sawAuthorization = r.Header.Get("Authorization") != ""
+		sawCookie = r.Header.Get("Cookie") != ""
+		payload, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatalf("read probe body: %v", err)
+		}
+		bodySize = len(payload)
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"data":[]}`))
 	}))
@@ -110,8 +126,49 @@ func TestDefaultEndpointProbeOnlyAllowsLoopbackModelLists(t *testing.T) {
 	if sawAuthorization {
 		t.Fatal("probe should not send authorization headers")
 	}
+	if sawCookie {
+		t.Fatal("probe should not send cookies")
+	}
+	if bodySize != 0 {
+		t.Fatalf("probe should not send a request body, got %d bytes", bodySize)
+	}
 	if defaultEndpointProbe("https://example.com/v1/models") {
 		t.Fatal("non-loopback endpoint should not be probed")
+	}
+}
+
+func TestDefaultEndpointProbeRejectsCredentialAndModelSpecificURLs(t *testing.T) {
+	for _, probeURL := range []string{
+		"http://" + "user:pass@" + "127.0.0.1:1234/v1/models",
+		"http://127.0.0.1:1234/v1/models?model=secret",
+		"http://127.0.0.1:1234/v1/models#fragment",
+		"http://127.0.0.1:1234/v1/chat/completions",
+	} {
+		if defaultEndpointProbe(probeURL) {
+			t.Fatalf("probe should reject URL %q", probeURL)
+		}
+	}
+}
+
+func TestDefaultEndpointProbeDoesNotFollowRedirects(t *testing.T) {
+	var redirectTargetHits atomic.Int32
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		redirectTargetHits.Add(1)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":[]}`))
+	}))
+	t.Cleanup(target.Close)
+
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+"/v1/models", http.StatusFound)
+	}))
+	t.Cleanup(redirector.Close)
+
+	if defaultEndpointProbe(redirector.URL + "/v1/models") {
+		t.Fatal("redirect responses should not be treated as available")
+	}
+	if redirectTargetHits.Load() != 0 {
+		t.Fatalf("probe followed redirect %d times", redirectTargetHits.Load())
 	}
 }
 
