@@ -304,7 +304,9 @@ func DefaultLocalProviders() []LocalProviderDefinition {
 			Entrypoint: "OpenAI-compatible local endpoint",
 			Endpoints: []EndpointCandidate{
 				{Entrypoint: "http://127.0.0.1:1234/v1", ProbeURL: "http://127.0.0.1:1234/v1/models"},
+				{Entrypoint: "http://[::1]:1234/v1", ProbeURL: "http://[::1]:1234/v1/models"},
 				{Entrypoint: "http://127.0.0.1:8000/v1", ProbeURL: "http://127.0.0.1:8000/v1/models"},
+				{Entrypoint: "http://[::1]:8000/v1", ProbeURL: "http://[::1]:8000/v1/models"},
 			},
 			Capabilities: []string{
 				"chat",

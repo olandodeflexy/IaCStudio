@@ -26,6 +26,26 @@ func TestDefaultLocalProviderOrder(t *testing.T) {
 	}
 }
 
+func TestDefaultOpenAICompatibleLocalEndpointCandidates(t *testing.T) {
+	definitions := DefaultLocalProviders()
+	var endpoints []EndpointCandidate
+	for _, definition := range definitions {
+		if definition.ID == "openai-compatible-local" {
+			endpoints = definition.Endpoints
+			break
+		}
+	}
+	want := []EndpointCandidate{
+		{Entrypoint: "http://127.0.0.1:1234/v1", ProbeURL: "http://127.0.0.1:1234/v1/models"},
+		{Entrypoint: "http://[::1]:1234/v1", ProbeURL: "http://[::1]:1234/v1/models"},
+		{Entrypoint: "http://127.0.0.1:8000/v1", ProbeURL: "http://127.0.0.1:8000/v1/models"},
+		{Entrypoint: "http://[::1]:8000/v1", ProbeURL: "http://[::1]:8000/v1/models"},
+	}
+	if !reflect.DeepEqual(endpoints, want) {
+		t.Fatalf("openai-compatible-local endpoints = %#v, want %#v", endpoints, want)
+	}
+}
+
 func TestDiscoverLocalUsesLookupWithoutLeakingPaths(t *testing.T) {
 	installed := map[string]string{
 		"codex":      "/private/bin/codex",
