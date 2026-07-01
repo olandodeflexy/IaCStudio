@@ -1,6 +1,8 @@
 package agentruns
 
 import (
+	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -17,6 +19,7 @@ const (
 	maxPromptPreviewLen = 240
 	maxLogMessageLen    = 2000
 	maxPatchDiffLen     = 20000
+	promptHashKeyLen    = 32
 )
 
 type Status string
@@ -126,6 +129,7 @@ type Store struct {
 	next    uint64
 	runs    map[string]*Run
 	order   []string
+	hashKey []byte
 }
 
 type Option func(*Store)
@@ -146,6 +150,16 @@ func WithMaxRuns(maxRun int) Option {
 	}
 }
 
+// WithPromptHashKey overrides the per-store HMAC key used for prompt
+// fingerprints. It is primarily intended for deterministic tests.
+func WithPromptHashKey(key []byte) Option {
+	return func(s *Store) {
+		if len(key) > 0 {
+			s.hashKey = append([]byte(nil), key...)
+		}
+	}
+}
+
 func NewStore(opts ...Option) *Store {
 	s := &Store{
 		now:     func() time.Time { return time.Now().UTC() },
@@ -154,6 +168,9 @@ func NewStore(opts ...Option) *Store {
 	}
 	for _, opt := range opts {
 		opt(s)
+	}
+	if len(s.hashKey) == 0 {
+		s.hashKey = newPromptHashKey()
 	}
 	return s
 }
@@ -187,7 +204,7 @@ func (s *Store) Create(req CreateRequest) (Run, error) {
 		Mode:          mode,
 		Status:        StatusQueued,
 		PromptPreview: truncate(redactText(req.Prompt), maxPromptPreviewLen),
-		PromptHash:    hashText(req.Prompt),
+		PromptHash:    hashText(req.Prompt, s.hashKey),
 		CreatedBy:     req.CreatedBy,
 		CreatedAt:     now,
 		UpdatedAt:     now,
@@ -346,11 +363,23 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 				run.Approvals[i].Status = decision
 				run.Approvals[i].DecidedAt = timePtr(now)
 				run.Approvals[i].DecidedBy = truncate(redactText(decidedBy), maxLogMessageLen)
+				if run.Status == StatusWaitingApproval && !hasPendingApprovals(run.Approvals) {
+					run.Status = StatusRunning
+				}
 				return nil
 			}
 		}
 		return ErrApprovalNotFound
 	})
+}
+
+func hasPendingApprovals(approvals []ApprovalGate) bool {
+	for _, approval := range approvals {
+		if approval.Status == ApprovalPending {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePatchPath(raw string) (string, error) {
@@ -452,9 +481,18 @@ func validApprovalKind(kind ApprovalKind) bool {
 	}
 }
 
-func hashText(text string) string {
-	sum := sha256.Sum256([]byte(text))
-	return hex.EncodeToString(sum[:])
+func newPromptHashKey() []byte {
+	key := make([]byte, promptHashKeyLen)
+	if _, err := rand.Read(key); err != nil {
+		panic(fmt.Sprintf("generate prompt hash key: %v", err))
+	}
+	return key
+}
+
+func hashText(text string, key []byte) string {
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(text))
+	return hex.EncodeToString(mac.Sum(nil))
 }
 
 var secretPatterns = []*regexp.Regexp{

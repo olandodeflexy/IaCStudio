@@ -1,6 +1,8 @@
 package agentruns
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -8,9 +10,11 @@ import (
 	"unicode/utf8"
 )
 
+var testPromptHashKey = []byte("01234567890123456789012345678901")
+
 func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	now := fixedClock()
-	store := NewStore(WithClock(now.now))
+	store := NewStore(WithClock(now.now), WithPromptHashKey(testPromptHashKey))
 	prompt := "rotate password=supersecret for AKIA1234567890ABCDEF"
 
 	run, err := store.Create(CreateRequest{
@@ -38,7 +42,7 @@ func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	if strings.Contains(run.PromptPreview, "supersecret") || strings.Contains(run.PromptPreview, "AKIA1234567890ABCDEF") {
 		t.Fatalf("prompt preview leaked secret: %q", run.PromptPreview)
 	}
-	if want := hashText(prompt); run.PromptHash != want {
+	if want := hashText(prompt, testPromptHashKey); run.PromptHash != want {
 		t.Fatalf("prompt hash = %q, want %q", run.PromptHash, want)
 	}
 	if run.CreatedAt != now.current || run.UpdatedAt != now.current {
@@ -46,6 +50,37 @@ func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	}
 	if run.Logs == nil || run.Patches == nil || run.Approvals == nil {
 		t.Fatalf("list fields should be initialized: %+v", run)
+	}
+}
+
+func TestStorePromptHashUsesStoreKey(t *testing.T) {
+	prompt := "short secret"
+	store := NewStore(WithClock(fixedClock().now), WithPromptHashKey(testPromptHashKey))
+
+	first, err := store.Create(CreateRequest{Project: "prod", Prompt: prompt})
+	if err != nil {
+		t.Fatalf("Create first returned error: %v", err)
+	}
+	second, err := store.Create(CreateRequest{Project: "prod", Prompt: prompt})
+	if err != nil {
+		t.Fatalf("Create second returned error: %v", err)
+	}
+	if first.PromptHash != second.PromptHash {
+		t.Fatalf("same prompt in one store produced different hashes: %q/%q", first.PromptHash, second.PromptHash)
+	}
+
+	otherStore := NewStore(WithClock(fixedClock().now), WithPromptHashKey([]byte("another-test-key-for-prompt-hmac")))
+	other, err := otherStore.Create(CreateRequest{Project: "prod", Prompt: prompt})
+	if err != nil {
+		t.Fatalf("Create other returned error: %v", err)
+	}
+	if first.PromptHash == other.PromptHash {
+		t.Fatalf("different store keys produced identical prompt hash: %q", first.PromptHash)
+	}
+
+	plain := sha256.Sum256([]byte(prompt))
+	if first.PromptHash == hex.EncodeToString(plain[:]) {
+		t.Fatal("prompt hash should not be a plain SHA-256 digest")
 	}
 }
 
@@ -409,6 +444,9 @@ func TestStoreDecideApproval(t *testing.T) {
 	if a.Status != ApprovalApproved {
 		t.Fatalf("approval status = %q, want %q", a.Status, ApprovalApproved)
 	}
+	if run.Status != StatusRunning {
+		t.Fatalf("run status after final approval = %q, want %q", run.Status, StatusRunning)
+	}
 	if strings.Contains(a.DecidedBy, "abc123") {
 		t.Fatalf("decided_by leaked token: %q", a.DecidedBy)
 	}
@@ -429,6 +467,40 @@ func TestStoreDecideApproval(t *testing.T) {
 	// Invalid decision value should error before hitting the store.
 	if _, err := store.DecideApproval(run.ID, approvalID, "maybe", "alice"); err == nil {
 		t.Fatal("expected error for invalid approval decision value")
+	}
+}
+
+func TestStoreDecideApprovalWaitsForAllPendingGates(t *testing.T) {
+	store := NewStore(WithClock(fixedClock().now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	run, err = store.AddApproval(run.ID, ApprovalGate{Kind: ApprovalCommand, Summary: "first"})
+	if err != nil {
+		t.Fatalf("AddApproval first returned error: %v", err)
+	}
+	firstID := run.Approvals[0].ID
+	run, err = store.AddApproval(run.ID, ApprovalGate{Kind: ApprovalFileWrite, Summary: "second"})
+	if err != nil {
+		t.Fatalf("AddApproval second returned error: %v", err)
+	}
+	secondID := run.Approvals[1].ID
+
+	run, err = store.DecideApproval(run.ID, firstID, ApprovalApproved, "alice")
+	if err != nil {
+		t.Fatalf("DecideApproval first returned error: %v", err)
+	}
+	if run.Status != StatusWaitingApproval {
+		t.Fatalf("run status with remaining pending gate = %q, want %q", run.Status, StatusWaitingApproval)
+	}
+
+	run, err = store.DecideApproval(run.ID, secondID, ApprovalRejected, "bob")
+	if err != nil {
+		t.Fatalf("DecideApproval second returned error: %v", err)
+	}
+	if run.Status != StatusRunning {
+		t.Fatalf("run status after all gates decided = %q, want %q", run.Status, StatusRunning)
 	}
 }
 
