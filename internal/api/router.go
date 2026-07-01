@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/iac-studio/iac-studio/internal/agentproviders"
+	"github.com/iac-studio/iac-studio/internal/agentruns"
 	"github.com/iac-studio/iac-studio/internal/ai"
 	"github.com/iac-studio/iac-studio/internal/ai/providers"
 	"github.com/iac-studio/iac-studio/internal/catalog"
@@ -1036,6 +1037,7 @@ func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool
 // explicit ownership outside the router.
 type RouterOptions struct {
 	MCPAirlock          *mcpairlock.Manager
+	AgentRuns           *agentruns.Store
 	AppVersion          string
 	LocalAgentProviders func() []agentproviders.LocalProviderStatus
 }
@@ -1066,6 +1068,10 @@ func NewRouter(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runn
 func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client, run *runner.SafeRunner, projectsDir string, opts RouterOptions) *http.ServeMux {
 	mux := http.NewServeMux()
 	appVersion := opts.appVersion()
+	agentRuns := opts.AgentRuns
+	if agentRuns == nil {
+		agentRuns = agentruns.NewStore()
+	}
 	if fw != nil {
 		fw.OnChange(func(file, _ string) {
 			invalidatePlanForChangedFile(projectsDir, file)
@@ -1092,6 +1098,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			"providers": opts.localAgentProviders(),
 		})
 	})
+	registerAgentRunRoutes(mux, projectsDir, agentRuns)
 
 	// Resource catalog — returns all resources for a tool, optionally filtered by provider
 	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) {
