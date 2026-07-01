@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 
@@ -65,6 +66,34 @@ func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agent
 		run, ok := store.Get(r.PathValue("id"))
 		if !ok || run.Project != name {
 			http.Error(w, "agent run not found", http.StatusNotFound)
+			return
+		}
+		setAgentRunJSONHeader(w)
+		_ = json.NewEncoder(w).Encode(run)
+	})
+
+	mux.HandleFunc("POST /api/projects/{name}/agent-runs/{id}/cancel", func(w http.ResponseWriter, r *http.Request) {
+		name := r.PathValue("name")
+		if !requireExistingAgentRunProject(w, projectsDir, name) {
+			return
+		}
+		id := r.PathValue("id")
+		run, ok := store.Get(id)
+		if !ok || run.Project != name {
+			http.Error(w, "agent run not found", http.StatusNotFound)
+			return
+		}
+		run, err := store.Cancel(id)
+		if err != nil {
+			if errors.Is(err, agentruns.ErrTerminated) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			if errors.Is(err, agentruns.ErrNotFound) {
+				http.Error(w, "agent run not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, "cancel agent run: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		setAgentRunJSONHeader(w)
