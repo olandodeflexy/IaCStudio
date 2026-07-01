@@ -20,8 +20,8 @@ func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	run, err := store.Create(CreateRequest{
 		Project:    " prod ",
 		Prompt:     prompt,
-		ProviderID: "codex",
-		CreatedBy:  "alice",
+		ProviderID: " codex token=provider-secret ",
+		CreatedBy:  " alice token=creator-secret ",
 	})
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
@@ -32,6 +32,12 @@ func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	}
 	if run.Project != "prod" {
 		t.Fatalf("project = %q, want prod", run.Project)
+	}
+	if run.ProviderID != "codex token= [REDACTED]" {
+		t.Fatalf("provider ID = %q, want sanitized provider metadata", run.ProviderID)
+	}
+	if run.CreatedBy != "alice token= [REDACTED]" {
+		t.Fatalf("created by = %q, want sanitized creator metadata", run.CreatedBy)
 	}
 	if run.Mode != ModeReadOnly {
 		t.Fatalf("mode = %q, want %q", run.Mode, ModeReadOnly)
@@ -495,12 +501,42 @@ func TestStoreDecideApprovalWaitsForAllPendingGates(t *testing.T) {
 		t.Fatalf("run status with remaining pending gate = %q, want %q", run.Status, StatusWaitingApproval)
 	}
 
-	run, err = store.DecideApproval(run.ID, secondID, ApprovalRejected, "bob")
+	run, err = store.DecideApproval(run.ID, secondID, ApprovalApproved, "bob")
 	if err != nil {
 		t.Fatalf("DecideApproval second returned error: %v", err)
 	}
 	if run.Status != StatusRunning {
-		t.Fatalf("run status after all gates decided = %q, want %q", run.Status, StatusRunning)
+		t.Fatalf("run status after all gates approved = %q, want %q", run.Status, StatusRunning)
+	}
+}
+
+func TestStoreDecideApprovalRejectsRun(t *testing.T) {
+	clock := fixedClock()
+	store := NewStore(WithClock(clock.now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	run, err = store.AddApproval(run.ID, ApprovalGate{Kind: ApprovalCommand, Summary: "run apply"})
+	if err != nil {
+		t.Fatalf("AddApproval returned error: %v", err)
+	}
+	approvalID := run.Approvals[0].ID
+
+	clock.tick(time.Second)
+	rejectTime := clock.current
+	run, err = store.DecideApproval(run.ID, approvalID, ApprovalRejected, "bob")
+	if err != nil {
+		t.Fatalf("DecideApproval returned error: %v", err)
+	}
+	if run.Status != StatusFailed {
+		t.Fatalf("run status after rejected approval = %q, want %q", run.Status, StatusFailed)
+	}
+	if run.Error != "approval gate rejected" {
+		t.Fatalf("run error after rejected approval = %q", run.Error)
+	}
+	if run.CompletedAt == nil || *run.CompletedAt != rejectTime {
+		t.Fatalf("completed_at = %v, want %s", run.CompletedAt, rejectTime)
 	}
 }
 

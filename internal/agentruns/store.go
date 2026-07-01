@@ -200,12 +200,12 @@ func (s *Store) Create(req CreateRequest) (Run, error) {
 	run := &Run{
 		ID:            id,
 		Project:       project,
-		ProviderID:    req.ProviderID,
+		ProviderID:    sanitizeMetadata(req.ProviderID),
 		Mode:          mode,
 		Status:        StatusQueued,
 		PromptPreview: truncate(redactText(req.Prompt), maxPromptPreviewLen),
 		PromptHash:    hashText(req.Prompt, s.hashKey),
-		CreatedBy:     req.CreatedBy,
+		CreatedBy:     sanitizeMetadata(req.CreatedBy),
 		CreatedAt:     now,
 		UpdatedAt:     now,
 		Logs:          []LogEntry{},
@@ -363,6 +363,14 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 				run.Approvals[i].Status = decision
 				run.Approvals[i].DecidedAt = timePtr(now)
 				run.Approvals[i].DecidedBy = truncate(redactText(decidedBy), maxLogMessageLen)
+				if decision == ApprovalRejected {
+					run.Status = StatusFailed
+					run.Error = "approval gate rejected"
+					if run.CompletedAt == nil {
+						run.CompletedAt = timePtr(now)
+					}
+					return nil
+				}
 				if run.Status == StatusWaitingApproval && !hasPendingApprovals(run.Approvals) {
 					run.Status = StatusRunning
 				}
@@ -380,6 +388,10 @@ func hasPendingApprovals(approvals []ApprovalGate) bool {
 		}
 	}
 	return false
+}
+
+func sanitizeMetadata(text string) string {
+	return truncate(redactText(strings.TrimSpace(text)), maxLogMessageLen)
 }
 
 func normalizePatchPath(raw string) (string, error) {
