@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
@@ -80,6 +81,47 @@ func TestStoreRedactsQuotedSecretsWithSpaces(t *testing.T) {
 	if strings.Contains(run.Patches[0].Diff, "quoted cloud secret") ||
 		strings.Contains(run.Patches[0].Diff, "quoted aws secret") {
 		t.Fatalf("patch leaked quoted secret: %q", run.Patches[0].Diff)
+	}
+}
+
+func TestStoreRedactsShortAssignmentSecrets(t *testing.T) {
+	store := NewStore(WithClock(fixedClock().now))
+	run, err := store.Create(CreateRequest{
+		Project: "prod",
+		Prompt:  `run with token := "short assignment secret"`,
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if strings.Contains(run.PromptPreview, "short assignment secret") {
+		t.Fatalf("prompt preview leaked short assignment secret: %q", run.PromptPreview)
+	}
+	if !strings.Contains(run.PromptPreview, "token := [REDACTED]") {
+		t.Fatalf("prompt preview did not preserve short assignment delimiter: %q", run.PromptPreview)
+	}
+
+	run, err = store.AddLog(run.ID, LogInfo, `password := 'operator supplied secret'`)
+	if err != nil {
+		t.Fatalf("AddLog returned error: %v", err)
+	}
+	if strings.Contains(run.Logs[0].Message, "operator supplied secret") {
+		t.Fatalf("log leaked short assignment secret: %q", run.Logs[0].Message)
+	}
+	if !strings.Contains(run.Logs[0].Message, "password := [REDACTED]") {
+		t.Fatalf("log did not preserve short assignment delimiter: %q", run.Logs[0].Message)
+	}
+}
+
+func TestTruncatePreservesUTF8(t *testing.T) {
+	got := truncate("世界🙂terraform", 8)
+	if got != "世..." {
+		t.Fatalf("truncate = %q, want %q", got, "世...")
+	}
+	if len(got) > 8 {
+		t.Fatalf("truncate length = %d, want at most 8 bytes", len(got))
+	}
+	if !utf8.ValidString(got) {
+		t.Fatalf("truncate returned invalid UTF-8: %q", got)
 	}
 }
 

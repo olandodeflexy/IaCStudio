@@ -427,7 +427,7 @@ func hashText(text string) string {
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?:AKIA|ASIA)[0-9A-Z]{16}`),
-	regexp.MustCompile(`(?i)(secret|token|password|api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|session[_-]?token)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s]+)`),
+	regexp.MustCompile(`(?i)(secret|token|password|api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|session[_-]?token)\s*(?::=|[:=])\s*(?:"[^"]*"|'[^']*'|[^\s]+)`),
 }
 
 func redactText(text string) string {
@@ -438,8 +438,8 @@ func redactText(text string) string {
 			if strings.HasPrefix(upper, "AKIA") || strings.HasPrefix(upper, "ASIA") {
 				return "[REDACTED]"
 			}
-			if idx := strings.IndexAny(match, ":="); idx >= 0 {
-				return match[:idx+1] + "[REDACTED]"
+			if replacement := redactKeyValue(match); replacement != "" {
+				return replacement
 			}
 			return "[REDACTED]"
 		})
@@ -447,14 +447,58 @@ func redactText(text string) string {
 	return redacted
 }
 
+func redactKeyValue(match string) string {
+	end := redactionPrefixEnd(match)
+	if end < 0 {
+		return ""
+	}
+	prefix := strings.TrimRight(match[:end], " \t")
+	if strings.HasSuffix(prefix, ":=") {
+		return prefix + " [REDACTED]"
+	}
+	return prefix + "[REDACTED]"
+}
+
+func redactionPrefixEnd(match string) int {
+	for i := 0; i < len(match); i++ {
+		switch match[i] {
+		case ':':
+			if i+1 < len(match) && match[i+1] == '=' {
+				return i + 2
+			}
+			return i + 1
+		case '=':
+			return i + 1
+		}
+	}
+	return -1
+}
+
 func truncate(text string, limit int) string {
 	if limit <= 0 || len(text) <= limit {
 		return text
 	}
 	if limit <= 3 {
-		return text[:limit]
+		return text[:safeUTF8PrefixLen(text, limit)]
 	}
-	return text[:limit-3] + "..."
+	return text[:safeUTF8PrefixLen(text, limit-3)] + "..."
+}
+
+func safeUTF8PrefixLen(text string, limit int) int {
+	if limit <= 0 {
+		return 0
+	}
+	if limit >= len(text) {
+		return len(text)
+	}
+	last := 0
+	for i := range text {
+		if i > limit {
+			break
+		}
+		last = i
+	}
+	return last
 }
 
 func cloneRun(run Run) Run {
