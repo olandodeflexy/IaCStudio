@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, RefObject } from 'react';
 
-import { api, type LocalAgentProviderStatus } from '../../api';
+import { api, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
 
 export interface ChatMessage {
@@ -27,6 +27,8 @@ export interface ChatPanelProps {
   scrollAnchorRef?: RefObject<HTMLDivElement>;
   // Provider name shown in the header badge. Defaults to "Ollama".
   providerLabel?: string;
+  // Current project used to fetch agent run audit summaries.
+  projectName?: string;
 }
 
 type AgentHubTab = 'chat' | 'codex' | 'claude' | 'gemini' | 'copilot' | 'local' | 'mcp' | 'runs';
@@ -229,7 +231,13 @@ const hubStyles: Record<string, CSSProperties> = {
   providerActions: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 },
   providerActionButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', cursor: 'not-allowed', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '6px 9px', opacity: 0.72 },
   providerActionHint: { color: '#77847d', fontSize: 11 },
+  runsPanel: { flex: 1, minHeight: 0, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   runsEmpty: { flex: 1, minHeight: 0, padding: 16, color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.55 },
+  runCard: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-main)', borderRadius: 8, background: 'var(--bg-elev-2)', padding: 10, minWidth: 0 },
+  runCardHead: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
+  runTitle: { flex: 1, minWidth: 0, color: 'var(--text-main)', fontWeight: 700, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
+  runPreview: { color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45, marginTop: 7, overflowWrap: 'anywhere' },
+  runMeta: { display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8 },
 };
 
 function providerStatus(state: ProviderState) {
@@ -430,6 +438,91 @@ function ProviderGroup({
   );
 }
 
+function runStatusColor(status: AgentRunSummary['status']) {
+  if (status === 'completed') return 'var(--accent-action)';
+  if (status === 'failed' || status === 'canceled') return 'var(--accent-danger)';
+  if (status === 'waiting_approval') return '#8aa7ff';
+  return 'var(--accent-warn)';
+}
+
+function runModeLabel(mode: AgentRunSummary['mode']) {
+  return mode.replaceAll('_', ' ');
+}
+
+function RunSummaryCard({ run }: { run: AgentRunSummary }) {
+  return (
+    <div style={hubStyles.runCard}>
+      <div style={hubStyles.runCardHead}>
+        <span style={hubStyles.runTitle}>{run.id}</span>
+        <span style={{ ...hubStyles.badge, color: runStatusColor(run.status) }}>{run.status.replaceAll('_', ' ')}</span>
+      </div>
+      <div style={hubStyles.runPreview}>
+        {run.prompt_preview || 'Prompt preview unavailable'}
+      </div>
+      <div style={hubStyles.runMeta}>
+        <span style={hubStyles.badge}>{runModeLabel(run.mode)}</span>
+        {run.provider_id && <span style={hubStyles.badge}>{run.provider_id}</span>}
+        <span style={hubStyles.badge}>{run.log_count} logs</span>
+        <span style={hubStyles.badge}>{run.patch_count} patches</span>
+        <span style={hubStyles.badge}>{run.approval_count} approvals</span>
+        {run.pending_approval_count > 0 && (
+          <span style={{ ...hubStyles.badge, color: '#8aa7ff' }}>{run.pending_approval_count} pending</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function RunsPanel({
+  projectName,
+  runs,
+  loading,
+  error,
+}: {
+  projectName?: string;
+  runs: AgentRunSummary[];
+  loading: boolean;
+  error: string | null;
+}) {
+  if (!projectName) {
+    return (
+      <div style={hubStyles.runsEmpty}>
+        <strong style={{ color: 'var(--text-main)' }}>Open a project to see agent runs.</strong>
+        <div style={{ marginTop: 6 }}>Run history is scoped to the active project.</div>
+      </div>
+    );
+  }
+  if (loading) {
+    return <div style={hubStyles.runsEmpty}>Loading agent runs...</div>;
+  }
+  if (error) {
+    return (
+      <div style={hubStyles.runsEmpty}>
+        <strong style={{ color: 'var(--text-main)' }}>Could not load agent runs.</strong>
+        <div style={{ marginTop: 6 }}>{error}</div>
+      </div>
+    );
+  }
+  if (runs.length === 0) {
+    return (
+      <div style={hubStyles.runsEmpty}>
+        <strong style={{ color: 'var(--text-main)' }}>No agent runs yet.</strong>
+        <div style={{ marginTop: 6 }}>
+          Future runs will show provider, task mode, approvals, proposed patches, and deployment actions in one audit trail.
+        </div>
+        <div style={{ marginTop: 10, color: '#77847d' }}>
+          This view is read-only; execution and approval gates remain behind the secure run lifecycle.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div style={hubStyles.runsPanel} aria-label={`${projectName} agent runs`}>
+      {runs.map(run => <RunSummaryCard key={run.id} run={run} />)}
+    </div>
+  );
+}
+
 // Self-contained Agent Hub panel: AI message stream + provider/task shell.
 // The parent still owns messages and provider calls, so this stays UI-only.
 export function ChatPanel({
@@ -441,11 +534,15 @@ export function ChatPanel({
   toolColor,
   scrollAnchorRef,
   providerLabel = 'Ollama',
+  projectName,
 }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<AgentHubTab>(() => readStoredAgentHubTab());
   const [activeTask, setActiveTask] = useState<typeof TASK_MODES[number]>(() => readStoredTaskMode());
   const [selectedProviders, setSelectedProviders] = useState<Partial<Record<ProviderTab, string>>>({});
   const [localProviders, setLocalProviders] = useState<Record<string, LocalAgentProviderStatus>>({});
+  const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
+  const [agentRunsLoading, setAgentRunsLoading] = useState(false);
+  const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -501,6 +598,29 @@ export function ChatPanel({
     if (activeTab !== 'chat') return;
     scrollAnchorRef?.current?.scrollIntoView?.({ block: 'nearest' });
   }, [activeTab, scrollAnchorRef]);
+
+  useEffect(() => {
+    if (activeTab !== 'runs' || !projectName) return;
+    let cancelled = false;
+    setAgentRunsLoading(true);
+    setAgentRunsError(null);
+    api.listAgentRuns(projectName)
+      .then(runs => {
+        if (cancelled) return;
+        setAgentRuns(runs);
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setAgentRuns([]);
+        setAgentRunsError(err instanceof Error ? err.message : 'agent run list failed');
+      })
+      .finally(() => {
+        if (!cancelled) setAgentRunsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, projectName]);
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
     const lastIndex = AGENT_TABS.length - 1;
@@ -651,15 +771,12 @@ export function ChatPanel({
             hidden={activeTab !== 'runs'}
             style={panelStyle('runs')}
           >
-            <div style={hubStyles.runsEmpty}>
-              <strong style={{ color: 'var(--text-main)' }}>No agent runs yet.</strong>
-              <div style={{ marginTop: 6 }}>
-                Future runs will show provider, task mode, approvals, proposed patches, and deployment actions in one audit trail.
-              </div>
-              <div style={{ marginTop: 10, color: '#77847d' }}>
-                This shell is UI-only; execution and approval gates land in the secure run lifecycle slice.
-              </div>
-            </div>
+            <RunsPanel
+              projectName={projectName}
+              runs={agentRuns}
+              loading={agentRunsLoading}
+              error={agentRunsError}
+            />
           </div>
         </div>
       </div>
