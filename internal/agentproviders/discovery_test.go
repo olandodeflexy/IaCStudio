@@ -98,6 +98,7 @@ func TestDiscoverLocalDetectsOpenAICompatibleEndpoint(t *testing.T) {
 func TestDefaultEndpointProbeOnlyAllowsLoopbackModelLists(t *testing.T) {
 	var sawAuthorization bool
 	var sawCookie bool
+	var sawAcceptEncoding bool
 	var bodySize int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -111,6 +112,7 @@ func TestDefaultEndpointProbeOnlyAllowsLoopbackModelLists(t *testing.T) {
 		}
 		sawAuthorization = r.Header.Get("Authorization") != ""
 		sawCookie = r.Header.Get("Cookie") != ""
+		sawAcceptEncoding = r.Header.Get("Accept-Encoding") != ""
 		payload, err := io.ReadAll(r.Body)
 		if err != nil {
 			t.Fatalf("read probe body: %v", err)
@@ -129,6 +131,9 @@ func TestDefaultEndpointProbeOnlyAllowsLoopbackModelLists(t *testing.T) {
 	}
 	if sawCookie {
 		t.Fatal("probe should not send cookies")
+	}
+	if sawAcceptEncoding {
+		t.Fatal("probe should not request compressed responses")
 	}
 	if bodySize != 0 {
 		t.Fatalf("probe should not send a request body, got %d bytes", bodySize)

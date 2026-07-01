@@ -175,8 +175,9 @@ func defaultEndpointProbe(probeURL string) bool {
 		},
 		Jar: nil,
 		Transport: &http.Transport{
-			DisableKeepAlives: true,
-			Proxy:             nil,
+			DisableCompression: true,
+			DisableKeepAlives:  true,
+			Proxy:              nil,
 		},
 	}
 	resp, err := client.Do(req)
