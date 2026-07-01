@@ -97,6 +97,26 @@ type Run struct {
 	Approvals     []ApprovalGate  `json:"approvals"`
 }
 
+type RunSummary struct {
+	ID                   string     `json:"id"`
+	Project              string     `json:"project"`
+	ProviderID           string     `json:"provider_id,omitempty"`
+	Mode                 Mode       `json:"mode"`
+	Status               Status     `json:"status"`
+	PromptPreview        string     `json:"prompt_preview"`
+	PromptHash           string     `json:"prompt_hash"`
+	CreatedAt            time.Time  `json:"created_at"`
+	UpdatedAt            time.Time  `json:"updated_at"`
+	StartedAt            *time.Time `json:"started_at,omitempty"`
+	CompletedAt          *time.Time `json:"completed_at,omitempty"`
+	Canceled             bool       `json:"canceled"`
+	Error                string     `json:"error,omitempty"`
+	LogCount             int        `json:"log_count"`
+	PatchCount           int        `json:"patch_count"`
+	ApprovalCount        int        `json:"approval_count"`
+	PendingApprovalCount int        `json:"pending_approval_count"`
+}
+
 type LogEntry struct {
 	ID      string    `json:"id"`
 	At      time.Time `json:"at"`
@@ -238,6 +258,21 @@ func (s *Store) List() []Run {
 		}
 	}
 	return runs
+}
+
+func (s *Store) ListProjectSummaries(project string) []RunSummary {
+	project = strings.TrimSpace(project)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	summaries := make([]RunSummary, 0, len(s.order))
+	for _, id := range s.order {
+		run, ok := s.runs[id]
+		if !ok || run.Project != project {
+			continue
+		}
+		summaries = append(summaries, summarizeRun(run))
+	}
+	return summaries
 }
 
 func (s *Store) SetStatus(id string, status Status) (Run, error) {
@@ -391,6 +426,33 @@ func hasPendingApprovals(approvals []ApprovalGate) bool {
 		}
 	}
 	return false
+}
+
+func summarizeRun(run *Run) RunSummary {
+	summary := RunSummary{
+		ID:            run.ID,
+		Project:       run.Project,
+		ProviderID:    run.ProviderID,
+		Mode:          run.Mode,
+		Status:        run.Status,
+		PromptPreview: run.PromptPreview,
+		PromptHash:    run.PromptHash,
+		CreatedAt:     run.CreatedAt,
+		UpdatedAt:     run.UpdatedAt,
+		StartedAt:     cloneTimePtr(run.StartedAt),
+		CompletedAt:   cloneTimePtr(run.CompletedAt),
+		Canceled:      run.Canceled,
+		Error:         run.Error,
+		LogCount:      len(run.Logs),
+		PatchCount:    len(run.Patches),
+		ApprovalCount: len(run.Approvals),
+	}
+	for _, approval := range run.Approvals {
+		if approval.Status == ApprovalPending {
+			summary.PendingApprovalCount++
+		}
+	}
+	return summary
 }
 
 func sanitizeMetadata(text string) string {
