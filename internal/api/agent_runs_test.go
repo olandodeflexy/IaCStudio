@@ -21,8 +21,10 @@ func agentRunMux(projectsDir string, store *agentruns.Store) *http.ServeMux {
 func scaffoldAgentRunProject(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, "demo"), 0o755); err != nil {
-		t.Fatalf("mkdir project: %v", err)
+	for _, name := range []string{"demo", "other"} {
+		if err := os.MkdirAll(filepath.Join(root, name), 0o755); err != nil {
+			t.Fatalf("mkdir project %s: %v", name, err)
+		}
 	}
 	return root
 }
@@ -69,7 +71,7 @@ func TestAgentRunRoutesCreateListAndGetSanitizedRun(t *testing.T) {
 		}
 	}
 
-	getReq := httptest.NewRequest(http.MethodGet, "/api/agent-runs/"+created.ID, nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/api/projects/demo/agent-runs/"+created.ID, nil)
 	getRec := httptest.NewRecorder()
 	router.ServeHTTP(getRec, getReq)
 	if getRec.Code != http.StatusOK {
@@ -83,7 +85,7 @@ func TestAgentRunRoutesCreateListAndGetSanitizedRun(t *testing.T) {
 		t.Fatalf("fetched run mismatch: got %+v want %+v", fetched, created)
 	}
 
-	listReq := httptest.NewRequest(http.MethodGet, "/api/agent-runs", nil)
+	listReq := httptest.NewRequest(http.MethodGet, "/api/projects/demo/agent-runs", nil)
 	listRec := httptest.NewRecorder()
 	router.ServeHTTP(listRec, listReq)
 	if listRec.Code != http.StatusOK {
@@ -115,6 +117,7 @@ func TestAgentRunRoutesRejectBadRequests(t *testing.T) {
 		{"missing prompt", "/api/projects/demo/agent-runs", `{}`, http.StatusBadRequest},
 		{"invalid mode", "/api/projects/demo/agent-runs", `{"prompt":"x","mode":"write_everything"}`, http.StatusBadRequest},
 		{"project traversal", "/api/projects/%2e%2e%2fetc/agent-runs", `{"prompt":"x"}`, http.StatusBadRequest},
+		{"missing project", "/api/projects/missing/agent-runs", `{"prompt":"x"}`, http.StatusNotFound},
 	}
 
 	for _, tc := range cases {
@@ -136,11 +139,48 @@ func TestAgentRunRoutesReturn404ForMissingRun(t *testing.T) {
 	root := scaffoldAgentRunProject(t)
 	router := agentRunMux(root, agentruns.NewStore())
 
-	req := httptest.NewRequest(http.MethodGet, "/api/agent-runs/missing", nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/projects/demo/agent-runs/missing", nil)
 	rec := httptest.NewRecorder()
 	router.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}
+
+func TestAgentRunRoutesDoNotExposeRunsAcrossProjects(t *testing.T) {
+	root := scaffoldAgentRunProject(t)
+	store := agentruns.NewStore()
+	router := agentRunMux(root, store)
+
+	run, err := store.Create(agentruns.CreateRequest{
+		Project: "demo",
+		Prompt:  "create a VPC",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/projects/other/agent-runs/"+run.ID, nil)
+	getRec := httptest.NewRecorder()
+	router.ServeHTTP(getRec, getReq)
+	if getRec.Code != http.StatusNotFound {
+		t.Fatalf("cross-project get status = %d, want %d, body = %s", getRec.Code, http.StatusNotFound, getRec.Body.String())
+	}
+
+	listReq := httptest.NewRequest(http.MethodGet, "/api/projects/other/agent-runs", nil)
+	listRec := httptest.NewRecorder()
+	router.ServeHTTP(listRec, listReq)
+	if listRec.Code != http.StatusOK {
+		t.Fatalf("cross-project list status = %d, body = %s", listRec.Code, listRec.Body.String())
+	}
+	var listed struct {
+		Runs []agentruns.Run `json:"runs"`
+	}
+	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode listed runs: %v", err)
+	}
+	if len(listed.Runs) != 0 {
+		t.Fatalf("cross-project list leaked runs: %+v", listed.Runs)
 	}
 }
