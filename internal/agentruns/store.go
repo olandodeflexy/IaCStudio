@@ -225,7 +225,10 @@ func (s *Store) SetStatus(id string, status Status) (Run, error) {
 	if !validStatus(status) {
 		return Run{}, fmt.Errorf("invalid agent run status: %s", status)
 	}
-	return s.update(id, func(run *Run, now time.Time) {
+	return s.update(id, func(run *Run, now time.Time) error {
+		if terminalStatus(run.Status) {
+			return ErrTerminated
+		}
 		run.Status = status
 		if status == StatusRunning && run.StartedAt == nil {
 			run.StartedAt = timePtr(now)
@@ -233,26 +236,35 @@ func (s *Store) SetStatus(id string, status Status) (Run, error) {
 		if terminalStatus(status) && run.CompletedAt == nil {
 			run.CompletedAt = timePtr(now)
 		}
+		return nil
 	})
 }
 
 func (s *Store) Cancel(id string) (Run, error) {
-	return s.update(id, func(run *Run, now time.Time) {
+	return s.update(id, func(run *Run, now time.Time) error {
+		if terminalStatus(run.Status) {
+			return ErrTerminated
+		}
 		run.Canceled = true
 		run.Status = StatusCanceled
 		if run.CompletedAt == nil {
 			run.CompletedAt = timePtr(now)
 		}
+		return nil
 	})
 }
 
 func (s *Store) Fail(id string, message string) (Run, error) {
-	return s.update(id, func(run *Run, now time.Time) {
+	return s.update(id, func(run *Run, now time.Time) error {
+		if terminalStatus(run.Status) {
+			return ErrTerminated
+		}
 		run.Status = StatusFailed
 		run.Error = truncate(redactText(message), maxLogMessageLen)
 		if run.CompletedAt == nil {
 			run.CompletedAt = timePtr(now)
 		}
+		return nil
 	})
 }
 
@@ -260,13 +272,14 @@ func (s *Store) AddLog(id string, level LogLevel, message string) (Run, error) {
 	if !validLogLevel(level) {
 		return Run{}, fmt.Errorf("invalid agent log level: %s", level)
 	}
-	return s.update(id, func(run *Run, now time.Time) {
+	return s.update(id, func(run *Run, now time.Time) error {
 		run.Logs = append(run.Logs, LogEntry{
 			ID:      fmt.Sprintf("log_%06d", len(run.Logs)+1),
 			At:      now,
 			Level:   level,
 			Message: truncate(redactText(message), maxLogMessageLen),
 		})
+		return nil
 	})
 }
 
@@ -274,12 +287,16 @@ func (s *Store) AddPatch(id string, patch ProposedPatch) (Run, error) {
 	if strings.TrimSpace(patch.Path) == "" {
 		return Run{}, errors.New("patch path is required")
 	}
-	return s.update(id, func(run *Run, now time.Time) {
+	return s.update(id, func(run *Run, now time.Time) error {
+		if terminalStatus(run.Status) {
+			return ErrTerminated
+		}
 		patch.ID = fmt.Sprintf("patch_%06d", len(run.Patches)+1)
 		patch.Summary = truncate(redactText(patch.Summary), maxLogMessageLen)
 		patch.Diff = truncate(redactText(patch.Diff), maxPatchDiffLen)
 		patch.CreatedAt = now
 		run.Patches = append(run.Patches, patch)
+		return nil
 	})
 }
 
@@ -287,17 +304,41 @@ func (s *Store) AddApproval(id string, gate ApprovalGate) (Run, error) {
 	if !validApprovalKind(gate.Kind) {
 		return Run{}, fmt.Errorf("invalid approval kind: %s", gate.Kind)
 	}
-	return s.update(id, func(run *Run, now time.Time) {
+	return s.update(id, func(run *Run, now time.Time) error {
+		if terminalStatus(run.Status) {
+			return ErrTerminated
+		}
 		gate.ID = fmt.Sprintf("approval_%06d", len(run.Approvals)+1)
 		gate.Status = ApprovalPending
 		gate.Summary = truncate(redactText(gate.Summary), maxLogMessageLen)
 		gate.CreatedAt = now
 		run.Approvals = append(run.Approvals, gate)
 		run.Status = StatusWaitingApproval
+		return nil
 	})
 }
 
-func (s *Store) update(id string, mutate func(*Run, time.Time)) (Run, error) {
+func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, decidedBy string) (Run, error) {
+	if decision != ApprovalApproved && decision != ApprovalRejected {
+		return Run{}, fmt.Errorf("invalid approval decision: %s", decision)
+	}
+	return s.update(id, func(run *Run, now time.Time) error {
+		for i := range run.Approvals {
+			if run.Approvals[i].ID == approvalID {
+				if run.Approvals[i].Status != ApprovalPending {
+					return fmt.Errorf("approval gate %q is already decided", approvalID)
+				}
+				run.Approvals[i].Status = decision
+				run.Approvals[i].DecidedAt = timePtr(now)
+				run.Approvals[i].DecidedBy = decidedBy
+				return nil
+			}
+		}
+		return ErrApprovalNotFound
+	})
+}
+
+func (s *Store) update(id string, mutate func(*Run, time.Time) error) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	run, ok := s.runs[id]
@@ -305,7 +346,9 @@ func (s *Store) update(id string, mutate func(*Run, time.Time)) (Run, error) {
 		return Run{}, ErrNotFound
 	}
 	now := s.now()
-	mutate(run, now)
+	if err := mutate(run, now); err != nil {
+		return Run{}, err
+	}
 	run.UpdatedAt = now
 	return cloneRun(*run), nil
 }
@@ -318,7 +361,11 @@ func (s *Store) evictLocked() {
 	}
 }
 
-var ErrNotFound = errors.New("agent run not found")
+var (
+	ErrNotFound        = errors.New("agent run not found")
+	ErrTerminated      = errors.New("agent run is already in a terminal state")
+	ErrApprovalNotFound = errors.New("approval gate not found")
+)
 
 func validMode(mode Mode) bool {
 	switch mode {
@@ -405,6 +452,8 @@ func cloneRun(run Run) Run {
 	run.Logs = cloneLogs(run.Logs)
 	run.Patches = clonePatches(run.Patches)
 	run.Approvals = cloneApprovals(run.Approvals)
+	run.StartedAt = cloneTimePtr(run.StartedAt)
+	run.CompletedAt = cloneTimePtr(run.CompletedAt)
 	return run
 }
 
@@ -426,7 +475,20 @@ func cloneApprovals(approvals []ApprovalGate) []ApprovalGate {
 	if approvals == nil {
 		return nil
 	}
-	return append([]ApprovalGate{}, approvals...)
+	out := make([]ApprovalGate, len(approvals))
+	for i, a := range approvals {
+		a.DecidedAt = cloneTimePtr(a.DecidedAt)
+		out[i] = a
+	}
+	return out
+}
+
+func cloneTimePtr(t *time.Time) *time.Time {
+	if t == nil {
+		return nil
+	}
+	copied := *t
+	return &copied
 }
 
 func timePtr(t time.Time) *time.Time {
