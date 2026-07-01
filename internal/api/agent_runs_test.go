@@ -237,6 +237,103 @@ func TestAgentRunRoutesDoNotExposeRunsAcrossProjects(t *testing.T) {
 	}
 }
 
+func TestAgentRunRoutesCancelRun(t *testing.T) {
+	root := scaffoldAgentRunProject(t)
+	store := agentruns.NewStore()
+	router := agentRunMux(root, store)
+
+	run, err := store.Create(agentruns.CreateRequest{
+		Project: "demo",
+		Prompt:  "review this project",
+		Mode:    agentruns.ModeProposeOnly,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/agent-runs/"+run.ID+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("cancel status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	requireJSONResponse(t, rec)
+	var canceled agentruns.Run
+	if err := json.Unmarshal(rec.Body.Bytes(), &canceled); err != nil {
+		t.Fatalf("decode canceled run: %v", err)
+	}
+	if canceled.ID != run.ID || canceled.Project != "demo" || canceled.Status != agentruns.StatusCanceled || !canceled.Canceled || canceled.CompletedAt == nil {
+		t.Fatalf("unexpected canceled run: %+v", canceled)
+	}
+
+	got, ok := store.Get(run.ID)
+	if !ok {
+		t.Fatal("expected canceled run to remain in store")
+	}
+	if got.Status != agentruns.StatusCanceled || !got.Canceled {
+		t.Fatalf("store did not persist canceled state: %+v", got)
+	}
+}
+
+func TestAgentRunRoutesDoNotCancelRunsAcrossProjects(t *testing.T) {
+	root := scaffoldAgentRunProject(t)
+	store := agentruns.NewStore()
+	router := agentRunMux(root, store)
+
+	run, err := store.Create(agentruns.CreateRequest{
+		Project: "demo",
+		Prompt:  "review this project",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/other/agent-runs/"+run.ID+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-project cancel status = %d, want %d, body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	got, ok := store.Get(run.ID)
+	if !ok {
+		t.Fatal("expected original run to remain in store")
+	}
+	if got.Status != agentruns.StatusQueued || got.Canceled {
+		t.Fatalf("cross-project cancel mutated run: %+v", got)
+	}
+}
+
+func TestAgentRunRoutesReturnConflictWhenCancelingTerminalRun(t *testing.T) {
+	root := scaffoldAgentRunProject(t)
+	store := agentruns.NewStore()
+	router := agentRunMux(root, store)
+
+	run, err := store.Create(agentruns.CreateRequest{
+		Project: "demo",
+		Prompt:  "review this project",
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	if _, err := store.SetStatus(run.ID, agentruns.StatusCompleted); err != nil {
+		t.Fatalf("complete run: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/projects/demo/agent-runs/"+run.ID+"/cancel", nil)
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("terminal cancel status = %d, want %d, body = %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	got, ok := store.Get(run.ID)
+	if !ok {
+		t.Fatal("expected completed run to remain in store")
+	}
+	if got.Status != agentruns.StatusCompleted || got.Canceled {
+		t.Fatalf("terminal cancel mutated run: %+v", got)
+	}
+}
+
 func rawString(t *testing.T, raw map[string]json.RawMessage, field string) string {
 	t.Helper()
 	value, ok := raw[field]
