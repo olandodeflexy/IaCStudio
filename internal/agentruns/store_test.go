@@ -477,7 +477,8 @@ func TestStoreDecideApproval(t *testing.T) {
 }
 
 func TestStoreDecideApprovalWaitsForAllPendingGates(t *testing.T) {
-	store := NewStore(WithClock(fixedClock().now))
+	clock := fixedClock()
+	store := NewStore(WithClock(clock.now))
 	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
@@ -500,13 +501,21 @@ func TestStoreDecideApprovalWaitsForAllPendingGates(t *testing.T) {
 	if run.Status != StatusWaitingApproval {
 		t.Fatalf("run status with remaining pending gate = %q, want %q", run.Status, StatusWaitingApproval)
 	}
+	if run.StartedAt != nil {
+		t.Fatalf("started_at with remaining pending gate = %v, want nil", run.StartedAt)
+	}
 
+	clock.tick(time.Second)
+	startTime := clock.current
 	run, err = store.DecideApproval(run.ID, secondID, ApprovalApproved, "bob")
 	if err != nil {
 		t.Fatalf("DecideApproval second returned error: %v", err)
 	}
 	if run.Status != StatusRunning {
 		t.Fatalf("run status after all gates approved = %q, want %q", run.Status, StatusRunning)
+	}
+	if run.StartedAt == nil || *run.StartedAt != startTime {
+		t.Fatalf("started_at after approval-driven start = %v, want %s", run.StartedAt, startTime)
 	}
 }
 

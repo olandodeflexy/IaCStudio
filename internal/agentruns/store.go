@@ -373,6 +373,9 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 				}
 				if run.Status == StatusWaitingApproval && !hasPendingApprovals(run.Approvals) {
 					run.Status = StatusRunning
+					if run.StartedAt == nil {
+						run.StartedAt = timePtr(now)
+					}
 				}
 				return nil
 			}
