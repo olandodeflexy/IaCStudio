@@ -1,6 +1,7 @@
 package agentproviders
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -157,25 +158,45 @@ func TestDefaultEndpointProbeRejectsCredentialAndModelSpecificURLs(t *testing.T)
 }
 
 func TestIsLoopbackHostResolvesLocalhost(t *testing.T) {
-	if !isLoopbackHost("127.0.0.1") {
+	ctx, cancel := context.WithTimeout(context.Background(), localEndpointProbeTimeout)
+	defer cancel()
+	if !isLoopbackHost(ctx, "127.0.0.1") {
 		t.Fatal("127.0.0.1 should be loopback")
 	}
-	if !isLoopbackHost("::1") {
+	if !isLoopbackHost(ctx, "::1") {
 		t.Fatal("::1 should be loopback")
 	}
-	if isLoopbackHost("192.0.2.1") {
+	if isLoopbackHost(ctx, "192.0.2.1") {
 		t.Fatal("192.0.2.1 should not be treated as loopback")
 	}
-	if !isLoopbackHost("localhost") {
-		t.Fatal("localhost should resolve only to loopback addresses on this host")
-	}
-	fakeLookup := func(host string) ([]net.IP, error) {
+	loopbackLookup := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		if ctx == nil {
+			return nil, errors.New("missing context")
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			return nil, errors.New("missing context deadline")
+		}
 		if host != "localhost" {
 			return nil, errors.New("unexpected host")
 		}
-		return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("192.0.2.1")}, nil
+		return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}, {IP: net.ParseIP("::1")}}, nil
 	}
-	if isLoopbackHostWithLookup("localhost", fakeLookup) {
+	if !isLoopbackHostWithLookup(ctx, "localhost", loopbackLookup) {
+		t.Fatal("localhost should be accepted when all resolved addresses are loopback")
+	}
+	mixedLookup := func(ctx context.Context, host string) ([]net.IPAddr, error) {
+		if ctx == nil {
+			return nil, errors.New("missing context")
+		}
+		if _, ok := ctx.Deadline(); !ok {
+			return nil, errors.New("missing context deadline")
+		}
+		if host != "localhost" {
+			return nil, errors.New("unexpected host")
+		}
+		return []net.IPAddr{{IP: net.ParseIP("127.0.0.1")}, {IP: net.ParseIP("192.0.2.1")}}, nil
+	}
+	if isLoopbackHostWithLookup(ctx, "localhost", mixedLookup) {
 		t.Fatal("localhost should be rejected when any resolved address is not loopback")
 	}
 }

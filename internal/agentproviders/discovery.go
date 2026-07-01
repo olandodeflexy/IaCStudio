@@ -150,18 +150,18 @@ func (d Discoverer) status(definition LocalProviderDefinition) LocalProviderStat
 
 func defaultEndpointProbe(probeURL string) bool {
 	parsed, err := url.Parse(probeURL)
+	ctx, cancel := context.WithTimeout(context.Background(), localEndpointProbeTimeout)
+	defer cancel()
 	if err != nil ||
 		parsed.Scheme != "http" ||
 		parsed.User != nil ||
 		parsed.Path != "/v1/models" ||
 		parsed.RawQuery != "" ||
 		parsed.Fragment != "" ||
-		!isLoopbackHost(parsed.Hostname()) {
+		!isLoopbackHost(ctx, parsed.Hostname()) {
 		return false
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), localEndpointProbeTimeout)
-	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
 	if err != nil {
 		return false
@@ -191,21 +191,21 @@ func defaultEndpointProbe(probeURL string) bool {
 	return resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
 }
 
-func isLoopbackHost(host string) bool {
-	return isLoopbackHostWithLookup(host, net.LookupIP)
+func isLoopbackHost(ctx context.Context, host string) bool {
+	return isLoopbackHostWithLookup(ctx, host, net.DefaultResolver.LookupIPAddr)
 }
 
-func isLoopbackHostWithLookup(host string, lookup func(string) ([]net.IP, error)) bool {
+func isLoopbackHostWithLookup(ctx context.Context, host string, lookup func(context.Context, string) ([]net.IPAddr, error)) bool {
 	ip := net.ParseIP(host)
 	if ip != nil {
 		return ip.IsLoopback()
 	}
-	ips, err := lookup(host)
+	ips, err := lookup(ctx, host)
 	if err != nil {
 		return false
 	}
 	for _, resolved := range ips {
-		if !resolved.IsLoopback() {
+		if !resolved.IP.IsLoopback() {
 			return false
 		}
 	}
