@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
 	"sync"
@@ -234,6 +235,9 @@ func (s *Store) SetStatus(id string, status Status) (Run, error) {
 		if status == StatusRunning && run.StartedAt == nil {
 			run.StartedAt = timePtr(now)
 		}
+		if status == StatusCanceled {
+			run.Canceled = true
+		}
 		if terminalStatus(status) && run.CompletedAt == nil {
 			run.CompletedAt = timePtr(now)
 		}
@@ -288,16 +292,16 @@ func (s *Store) AddLog(id string, level LogLevel, message string) (Run, error) {
 }
 
 func (s *Store) AddPatch(id string, patch ProposedPatch) (Run, error) {
-	path := strings.TrimSpace(patch.Path)
-	if path == "" {
-		return Run{}, errors.New("patch path is required")
+	patchPath, err := normalizePatchPath(patch.Path)
+	if err != nil {
+		return Run{}, err
 	}
 	return s.update(id, func(run *Run, now time.Time) error {
 		if terminalStatus(run.Status) {
 			return ErrTerminated
 		}
 		patch.ID = fmt.Sprintf("patch_%06d", len(run.Patches)+1)
-		patch.Path = path
+		patch.Path = patchPath
 		patch.Summary = truncate(redactText(patch.Summary), maxLogMessageLen)
 		patch.Diff = truncate(redactText(patch.Diff), maxPatchDiffLen)
 		patch.CreatedAt = now
@@ -349,6 +353,30 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 	})
 }
 
+func normalizePatchPath(raw string) (string, error) {
+	patchPath := strings.TrimSpace(raw)
+	if patchPath == "" {
+		return "", errors.New("patch path is required")
+	}
+	if strings.Contains(patchPath, "\\") || hasWindowsDrivePrefix(patchPath) || path.IsAbs(patchPath) {
+		return "", ErrUnsafePatchPath
+	}
+	for _, segment := range strings.Split(patchPath, "/") {
+		if segment == ".." {
+			return "", ErrUnsafePatchPath
+		}
+	}
+	cleaned := path.Clean(patchPath)
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, "../") {
+		return "", ErrUnsafePatchPath
+	}
+	return cleaned, nil
+}
+
+func hasWindowsDrivePrefix(p string) bool {
+	return len(p) >= 2 && p[1] == ':' && ((p[0] >= 'A' && p[0] <= 'Z') || (p[0] >= 'a' && p[0] <= 'z'))
+}
+
 func (s *Store) update(id string, mutate func(*Run, time.Time) error) (Run, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -376,6 +404,7 @@ var (
 	ErrNotFound         = errors.New("agent run not found")
 	ErrTerminated       = errors.New("agent run is already in a terminal state")
 	ErrApprovalNotFound = errors.New("approval gate not found")
+	ErrUnsafePatchPath  = errors.New("patch path must be a relative path within the project")
 )
 
 func validMode(mode Mode) bool {
@@ -456,10 +485,7 @@ func redactKeyValue(match string) string {
 		return ""
 	}
 	prefix := strings.TrimRight(match[:end], " \t")
-	if strings.HasSuffix(prefix, ":=") {
-		return prefix + " [REDACTED]"
-	}
-	return prefix + "[REDACTED]"
+	return prefix + " [REDACTED]"
 }
 
 func redactionPrefixEnd(match string) int {

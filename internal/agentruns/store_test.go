@@ -115,6 +115,22 @@ func TestStoreRedactsShortAssignmentSecrets(t *testing.T) {
 	}
 }
 
+func TestStoreFormatsKeyValueRedactionsConsistently(t *testing.T) {
+	cases := map[string]string{
+		`secret="plain secret"`:      "secret= [REDACTED]",
+		`token: "colon secret"`:      "token: [REDACTED]",
+		`password := "short secret"`: "password := [REDACTED]",
+	}
+	for input, want := range cases {
+		t.Run(input, func(t *testing.T) {
+			got := redactText(input)
+			if got != want {
+				t.Fatalf("redactText(%q) = %q, want %q", input, got, want)
+			}
+		})
+	}
+}
+
 func TestTruncatePreservesUTF8(t *testing.T) {
 	got := truncate("世界🙂terraform", 8)
 	if got != "世..." {
@@ -125,6 +141,24 @@ func TestTruncatePreservesUTF8(t *testing.T) {
 	}
 	if !utf8.ValidString(got) {
 		t.Fatalf("truncate returned invalid UTF-8: %q", got)
+	}
+}
+
+func TestStoreSetStatusCanceledMarksCanceled(t *testing.T) {
+	clock := fixedClock()
+	store := NewStore(WithClock(clock.now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	clock.tick(time.Second)
+	run, err = store.SetStatus(run.ID, StatusCanceled)
+	if err != nil {
+		t.Fatalf("SetStatus canceled returned error: %v", err)
+	}
+	if !run.Canceled || run.Status != StatusCanceled || run.CompletedAt == nil || *run.CompletedAt != clock.current {
+		t.Fatalf("canceled status not recorded consistently: %+v", run)
 	}
 }
 
@@ -200,6 +234,41 @@ func TestStoreLifecycleUpdates(t *testing.T) {
 	}
 	if !run.Canceled || run.Status != StatusCanceled || run.CompletedAt == nil || *run.CompletedAt != clock.current {
 		t.Fatalf("cancel state not recorded: %+v", run)
+	}
+}
+
+func TestStoreRejectsUnsafePatchPaths(t *testing.T) {
+	store := NewStore(WithClock(fixedClock().now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	unsafePaths := []string{
+		"/etc/passwd",
+		"../main.tf",
+		"dir/../main.tf",
+		"dir/sub/../../main.tf",
+		`C:\temp\main.tf`,
+		"C:/temp/main.tf",
+		`\\server\share\main.tf`,
+		`dir\main.tf`,
+	}
+	for _, unsafePath := range unsafePaths {
+		t.Run(unsafePath, func(t *testing.T) {
+			_, err := store.AddPatch(run.ID, ProposedPatch{Path: unsafePath, Diff: "x"})
+			if !errors.Is(err, ErrUnsafePatchPath) {
+				t.Fatalf("AddPatch error = %v, want ErrUnsafePatchPath", err)
+			}
+		})
+	}
+
+	got, err := store.AddPatch(run.ID, ProposedPatch{Path: " ./dir/main.tf ", Diff: "x"})
+	if err != nil {
+		t.Fatalf("AddPatch safe path returned error: %v", err)
+	}
+	if got.Patches[0].Path != "dir/main.tf" {
+		t.Fatalf("safe patch path = %q, want dir/main.tf", got.Patches[0].Path)
 	}
 }
 
