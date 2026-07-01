@@ -10,10 +10,11 @@ import (
 func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	now := fixedClock()
 	store := NewStore(WithClock(now.now))
+	prompt := "rotate password=supersecret for AKIA1234567890ABCDEF"
 
 	run, err := store.Create(CreateRequest{
 		Project:    "prod",
-		Prompt:     "rotate password=supersecret for AKIA1234567890ABCDEF",
+		Prompt:     prompt,
 		ProviderID: "codex",
 		CreatedBy:  "alice",
 	})
@@ -33,8 +34,8 @@ func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	if strings.Contains(run.PromptPreview, "supersecret") || strings.Contains(run.PromptPreview, "AKIA1234567890ABCDEF") {
 		t.Fatalf("prompt preview leaked secret: %q", run.PromptPreview)
 	}
-	if run.PromptHash == "" || strings.Contains(run.PromptHash, "supersecret") {
-		t.Fatalf("prompt hash was not set safely: %q", run.PromptHash)
+	if want := hashText(prompt); run.PromptHash != want {
+		t.Fatalf("prompt hash = %q, want %q", run.PromptHash, want)
 	}
 	if run.CreatedAt != now.current || run.UpdatedAt != now.current {
 		t.Fatalf("timestamps = %s/%s, want %s", run.CreatedAt, run.UpdatedAt, now.current)
@@ -48,31 +49,36 @@ func TestStoreRedactsQuotedSecretsWithSpaces(t *testing.T) {
 	store := NewStore(WithClock(fixedClock().now))
 	run, err := store.Create(CreateRequest{
 		Project: "prod",
-		Prompt:  `rotate password="two word secret" and token='another secret phrase'`,
+		Prompt:  `rotate password="two word secret" and token='another secret phrase' for ASIA1234567890ABCDEF`,
 	})
 	if err != nil {
 		t.Fatalf("Create returned error: %v", err)
 	}
-	if strings.Contains(run.PromptPreview, "two word secret") || strings.Contains(run.PromptPreview, "another secret phrase") {
+	if strings.Contains(run.PromptPreview, "two word secret") ||
+		strings.Contains(run.PromptPreview, "another secret phrase") ||
+		strings.Contains(run.PromptPreview, "ASIA1234567890ABCDEF") {
 		t.Fatalf("prompt preview leaked quoted secret: %q", run.PromptPreview)
 	}
 
-	run, err = store.AddLog(run.ID, LogInfo, `using api_key="local model secret"`)
+	run, err = store.AddLog(run.ID, LogInfo, `using api_key="local model secret" and session_token='temporary session secret'`)
 	if err != nil {
 		t.Fatalf("AddLog returned error: %v", err)
 	}
-	if strings.Contains(run.Logs[0].Message, "local model secret") {
+	if strings.Contains(run.Logs[0].Message, "local model secret") ||
+		strings.Contains(run.Logs[0].Message, "temporary session secret") {
 		t.Fatalf("log leaked quoted secret: %q", run.Logs[0].Message)
 	}
 
 	run, err = store.AddPatch(run.ID, ProposedPatch{
 		Path: "main.tf",
-		Diff: `+ access_key = "quoted cloud secret"`,
+		Diff: `+ access_key_id = "quoted cloud secret"
++ secret_access_key = "quoted aws secret"`,
 	})
 	if err != nil {
 		t.Fatalf("AddPatch returned error: %v", err)
 	}
-	if strings.Contains(run.Patches[0].Diff, "quoted cloud secret") {
+	if strings.Contains(run.Patches[0].Diff, "quoted cloud secret") ||
+		strings.Contains(run.Patches[0].Diff, "quoted aws secret") {
 		t.Fatalf("patch leaked quoted secret: %q", run.Patches[0].Diff)
 	}
 }
@@ -124,14 +130,19 @@ func TestStoreLifecycleUpdates(t *testing.T) {
 
 	clock.tick(time.Second)
 	run, err = store.AddApproval(run.ID, ApprovalGate{
-		Kind:    ApprovalCommand,
-		Summary: "run terraform plan",
+		Kind:      ApprovalCommand,
+		Summary:   "run terraform plan",
+		DecidedAt: timePtr(clock.current),
+		DecidedBy: "caller-supplied",
 	})
 	if err != nil {
 		t.Fatalf("AddApproval returned error: %v", err)
 	}
 	if run.Status != StatusWaitingApproval || len(run.Approvals) != 1 || run.Approvals[0].Status != ApprovalPending {
 		t.Fatalf("approval state not recorded: %+v", run)
+	}
+	if run.Approvals[0].DecidedAt != nil || run.Approvals[0].DecidedBy != "" {
+		t.Fatalf("pending approval should not retain decision metadata: %+v", run.Approvals[0])
 	}
 
 	clock.tick(time.Second)
@@ -273,7 +284,7 @@ func TestStoreDecideApproval(t *testing.T) {
 
 	clock.tick(time.Second)
 	decideTime := clock.current
-	run, err = store.DecideApproval(run.ID, approvalID, ApprovalApproved, "alice")
+	run, err = store.DecideApproval(run.ID, approvalID, ApprovalApproved, "alice token=abc123")
 	if err != nil {
 		t.Fatalf("DecideApproval returned error: %v", err)
 	}
@@ -281,8 +292,8 @@ func TestStoreDecideApproval(t *testing.T) {
 	if a.Status != ApprovalApproved {
 		t.Fatalf("approval status = %q, want %q", a.Status, ApprovalApproved)
 	}
-	if a.DecidedBy != "alice" {
-		t.Fatalf("decided_by = %q, want alice", a.DecidedBy)
+	if strings.Contains(a.DecidedBy, "abc123") {
+		t.Fatalf("decided_by leaked token: %q", a.DecidedBy)
 	}
 	if a.DecidedAt == nil || *a.DecidedAt != decideTime {
 		t.Fatalf("decided_at = %v, want %s", a.DecidedAt, decideTime)

@@ -315,6 +315,8 @@ func (s *Store) AddApproval(id string, gate ApprovalGate) (Run, error) {
 		gate.Status = ApprovalPending
 		gate.Summary = truncate(redactText(gate.Summary), maxLogMessageLen)
 		gate.CreatedAt = now
+		gate.DecidedAt = nil
+		gate.DecidedBy = ""
 		run.Approvals = append(run.Approvals, gate)
 		run.Status = StatusWaitingApproval
 		return nil
@@ -336,7 +338,7 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 				}
 				run.Approvals[i].Status = decision
 				run.Approvals[i].DecidedAt = timePtr(now)
-				run.Approvals[i].DecidedBy = decidedBy
+				run.Approvals[i].DecidedBy = truncate(redactText(decidedBy), maxLogMessageLen)
 				return nil
 			}
 		}
@@ -424,15 +426,16 @@ func hashText(text string) string {
 }
 
 var secretPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
-	regexp.MustCompile(`(?i)(secret|token|password|api[_-]?key|access[_-]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s]+)`),
+	regexp.MustCompile(`(?:AKIA|ASIA)[0-9A-Z]{16}`),
+	regexp.MustCompile(`(?i)(secret|token|password|api[_-]?key|access[_-]?key(?:[_-]?id)?|secret[_-]?access[_-]?key|session[_-]?token)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s]+)`),
 }
 
 func redactText(text string) string {
 	redacted := text
 	for _, pattern := range secretPatterns {
 		redacted = pattern.ReplaceAllStringFunc(redacted, func(match string) string {
-			if strings.HasPrefix(match, "AKIA") {
+			upper := strings.ToUpper(match)
+			if strings.HasPrefix(upper, "AKIA") || strings.HasPrefix(upper, "ASIA") {
 				return "[REDACTED]"
 			}
 			if idx := strings.IndexAny(match, ":="); idx >= 0 {
