@@ -332,6 +332,7 @@ export function WorkspaceShell({
           loading={chatLoading}
           toolColor={toolMeta.color}
           scrollAnchorRef={chatEndRef}
+          projectName={projectName}
         />
         <TerminalPanel
           lines={terminalOutput}

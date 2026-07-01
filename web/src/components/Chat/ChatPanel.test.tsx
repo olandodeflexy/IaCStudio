@@ -5,10 +5,12 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
+const listAgentRunsMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../api', () => ({
   api: {
     listLocalAgentProviders: listLocalAgentProvidersMock,
+    listAgentRuns: listAgentRunsMock,
   },
 }));
 
@@ -25,6 +27,8 @@ describe('ChatPanel', () => {
   beforeEach(() => {
     listLocalAgentProvidersMock.mockReset();
     listLocalAgentProvidersMock.mockReturnValue(new Promise(() => {}));
+    listAgentRunsMock.mockReset();
+    listAgentRunsMock.mockResolvedValue([]);
     window.localStorage.clear();
   });
 
@@ -331,5 +335,37 @@ describe('ChatPanel', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Chat' }));
 
     expect(scrollIntoView).toHaveBeenCalledWith({ block: 'nearest' });
+  });
+
+  it('loads project-scoped run summaries in the Runs tab', async () => {
+    listAgentRunsMock.mockResolvedValueOnce([{
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'read_only',
+      status: 'queued',
+      prompt_preview: 'Review this project for unsafe Terraform changes',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:00:00Z',
+      canceled: false,
+      log_count: 2,
+      patch_count: 1,
+      approval_count: 1,
+      pending_approval_count: 1,
+    }]);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByText('Review this project for unsafe Terraform changes')).toBeInTheDocument();
+    });
+    expect(listAgentRunsMock).toHaveBeenCalledWith('demo');
+    expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('read only')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('2 logs')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('1 pending')).toBeInTheDocument();
   });
 });

@@ -261,6 +261,124 @@ describe('api.listLocalAgentProviders', () => {
   });
 });
 
+describe('api.agentRuns', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('lists project-scoped agent run summaries', async () => {
+    const response = {
+      runs: [{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'read_only',
+        status: 'queued',
+        prompt_preview: 'Review this project',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 0,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.listAgentRuns('demo')).resolves.toEqual(response.runs);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/agent-runs');
+  });
+
+  it('coerces missing agent run lists to an empty array', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({}), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    await expect(api.listAgentRuns('demo')).resolves.toEqual([]);
+  });
+
+  it('creates project-scoped agent runs without client identity fields', async () => {
+    const response = {
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'read_only',
+      status: 'queued',
+      prompt_preview: 'Review this project',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:00:00Z',
+      canceled: false,
+      logs: [],
+      patches: [],
+      approvals: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.createAgentRun('demo', {
+      prompt: 'Review this project',
+      provider_id: 'codex',
+      mode: 'read_only',
+    })).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/agent-runs', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prompt: 'Review this project',
+        provider_id: 'codex',
+        mode: 'read_only',
+      }),
+    });
+  });
+
+  it('gets one project-scoped agent run detail record', async () => {
+    const response = {
+      id: 'run_000001',
+      project: 'demo',
+      mode: 'read_only',
+      status: 'queued',
+      prompt_preview: 'Review this project',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:00:00Z',
+      canceled: false,
+      logs: [],
+      patches: [],
+      approvals: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.getAgentRun('demo', 'run_000001')).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/agent-runs/run_000001');
+  });
+});
+
 describe('api.listProjectStates', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

@@ -261,6 +261,76 @@ export interface LocalAgentProvidersResponse {
   providers: LocalAgentProviderStatus[];
 }
 
+export type AgentRunMode = 'read_only' | 'propose_only' | 'approved_execute';
+export type AgentRunStatus =
+  | 'queued'
+  | 'running'
+  | 'waiting_approval'
+  | 'completed'
+  | 'failed'
+  | 'canceled';
+
+export interface AgentRunSummary {
+  id: string;
+  project: string;
+  provider_id?: string;
+  mode: AgentRunMode;
+  status: AgentRunStatus;
+  prompt_preview: string;
+  prompt_hash: string;
+  created_at: string;
+  updated_at: string;
+  started_at?: string;
+  completed_at?: string;
+  canceled: boolean;
+  error?: string;
+  log_count: number;
+  patch_count: number;
+  approval_count: number;
+  pending_approval_count: number;
+}
+
+export interface AgentRunLogEntry {
+  id: string;
+  at: string;
+  level: 'info' | 'warn' | 'error' | 'audit';
+  message: string;
+}
+
+export interface AgentRunPatch {
+  id: string;
+  path: string;
+  summary: string;
+  diff: string;
+  created_at: string;
+}
+
+export interface AgentRunApproval {
+  id: string;
+  kind: 'file_write' | 'command' | 'iac_action' | 'cloud_write' | 'secret_read' | 'mcp_network';
+  status: 'pending' | 'approved' | 'rejected';
+  summary: string;
+  created_at: string;
+  decided_at?: string;
+  decided_by?: string;
+}
+
+export interface AgentRun extends AgentRunSummary {
+  logs: AgentRunLogEntry[];
+  patches: AgentRunPatch[];
+  approvals: AgentRunApproval[];
+}
+
+export interface AgentRunCreateInput {
+  prompt: string;
+  provider_id?: string;
+  mode?: AgentRunMode;
+}
+
+export interface AgentRunsResponse {
+  runs?: AgentRunSummary[] | null;
+}
+
 export type PlanRiskLevel = 'safe' | 'risky' | 'destructive' | 'unknown';
 
 export interface PlanFieldChange {
@@ -554,6 +624,28 @@ export const api = {
     if (!body || typeof body !== 'object') return [];
     const providers = (body as Partial<LocalAgentProvidersResponse>).providers;
     return Array.isArray(providers) ? providers : [];
+  },
+
+  async listAgentRuns(projectName: string): Promise<AgentRunSummary[]> {
+    const res = await fetch(`${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs`);
+    const body = (await (await check(res)).json()) as unknown;
+    if (!body || typeof body !== 'object') return [];
+    const runs = (body as AgentRunsResponse).runs;
+    return Array.isArray(runs) ? runs : [];
+  },
+
+  async createAgentRun(projectName: string, input: AgentRunCreateInput): Promise<AgentRun> {
+    const res = await fetch(`${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return (await check(res)).json();
+  },
+
+  async getAgentRun(projectName: string, id: string): Promise<AgentRun> {
+    const res = await fetch(`${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}`);
+    return (await check(res)).json();
   },
 
   async listCloudConnections(): Promise<CloudConnection[]> {
