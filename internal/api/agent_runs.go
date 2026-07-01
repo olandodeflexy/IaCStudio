@@ -20,6 +20,7 @@ func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agent
 		if !requireExistingAgentRunProject(w, projectsDir, name) {
 			return
 		}
+		setAgentRunJSONHeader(w)
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"runs": store.ListProjectSummaries(name),
 		})
@@ -51,6 +52,7 @@ func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agent
 			return
 		}
 
+		setAgentRunJSONHeader(w)
 		w.WriteHeader(http.StatusCreated)
 		_ = json.NewEncoder(w).Encode(run)
 	})
@@ -65,8 +67,13 @@ func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agent
 			http.Error(w, "agent run not found", http.StatusNotFound)
 			return
 		}
+		setAgentRunJSONHeader(w)
 		_ = json.NewEncoder(w).Encode(run)
 	})
+}
+
+func setAgentRunJSONHeader(w http.ResponseWriter) {
+	w.Header().Set("Content-Type", "application/json")
 }
 
 func requireExistingAgentRunProject(w http.ResponseWriter, projectsDir, name string) bool {

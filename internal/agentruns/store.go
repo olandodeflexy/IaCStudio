@@ -264,7 +264,7 @@ func (s *Store) ListProjectSummaries(project string) []RunSummary {
 	project = strings.TrimSpace(project)
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	summaries := make([]RunSummary, 0)
+	summaries := make([]RunSummary, 0, len(s.order))
 	for _, id := range s.order {
 		run, ok := s.runs[id]
 		if !ok || run.Project != project {

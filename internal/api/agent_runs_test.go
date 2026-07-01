@@ -47,6 +47,7 @@ func TestAgentRunRoutesCreateListAndGetSanitizedRun(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("create status = %d, body = %s", rec.Code, rec.Body.String())
 	}
+	requireJSONResponse(t, rec)
 	raw := map[string]json.RawMessage{}
 	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
 		t.Fatalf("decode raw response: %v", err)
@@ -83,6 +84,7 @@ func TestAgentRunRoutesCreateListAndGetSanitizedRun(t *testing.T) {
 	if getRec.Code != http.StatusOK {
 		t.Fatalf("get status = %d, body = %s", getRec.Code, getRec.Body.String())
 	}
+	requireJSONResponse(t, getRec)
 	var fetched agentruns.Run
 	if err := json.Unmarshal(getRec.Body.Bytes(), &fetched); err != nil {
 		t.Fatalf("decode fetched run: %v", err)
@@ -114,6 +116,7 @@ func TestAgentRunRoutesCreateListAndGetSanitizedRun(t *testing.T) {
 	if listRec.Code != http.StatusOK {
 		t.Fatalf("list status = %d, body = %s", listRec.Code, listRec.Body.String())
 	}
+	requireJSONResponse(t, listRec)
 	var listed struct {
 		Runs []map[string]json.RawMessage `json:"runs"`
 	}
@@ -258,4 +261,11 @@ func rawInt(t *testing.T, raw map[string]json.RawMessage, field string) int {
 		t.Fatalf("decode field %q as int: %v", field, err)
 	}
 	return decoded
+}
+
+func requireJSONResponse(t *testing.T, rec *httptest.ResponseRecorder) {
+	t.Helper()
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
 }
