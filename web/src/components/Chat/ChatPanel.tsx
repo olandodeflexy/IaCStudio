@@ -455,6 +455,15 @@ function isTerminalAgentRun(status: AgentRunSummary['status']) {
   return status === 'completed' || status === 'failed' || status === 'canceled';
 }
 
+function isConflictError(err: unknown) {
+  return (
+    typeof err === 'object'
+    && err !== null
+    && 'status' in err
+    && (err as { status?: unknown }).status === 409
+  );
+}
+
 function RunSummaryCard({
   run,
   canceling,
@@ -677,6 +686,13 @@ export function ChatPanel({
       .then(() => api.listAgentRuns(projectName))
       .then(runs => setAgentRuns(runs))
       .catch((err: unknown) => {
+        if (isConflictError(err)) {
+          return api.listAgentRuns(projectName)
+            .then(runs => setAgentRuns(runs))
+            .catch((refreshErr: unknown) => {
+              setAgentRunsError(refreshErr instanceof Error ? refreshErr.message : 'agent run refresh failed');
+            });
+        }
         setAgentRunsError(err instanceof Error ? err.message : 'agent run cancel failed');
       })
       .finally(() => setCancelingRunId(null));

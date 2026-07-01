@@ -431,4 +431,62 @@ describe('ChatPanel', () => {
     });
     expect(within(runsPanel).queryByRole('button', { name: 'Cancel run_000001' })).not.toBeInTheDocument();
   });
+
+  it('refreshes run summaries when cancel finds the run already terminal', async () => {
+    const conflictError = new Error('agent run is already in a terminal state');
+    Object.assign(conflictError, { status: 409 });
+    listAgentRunsMock
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'propose_only',
+        status: 'running',
+        prompt_preview: 'Prepare a safe deployment plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 2,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }])
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'propose_only',
+        status: 'completed',
+        prompt_preview: 'Prepare a safe deployment plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:01:00Z',
+        completed_at: '2026-07-01T10:01:00Z',
+        canceled: false,
+        log_count: 2,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+    cancelAgentRunMock.mockRejectedValueOnce(conflictError);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Cancel run_000001' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Cancel run_000001' }));
+
+    await waitFor(() => {
+      expect(cancelAgentRunMock).toHaveBeenCalledWith('demo', 'run_000001');
+      expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+      expect(within(runsPanel).getByText('completed')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).queryByRole('button', { name: 'Cancel run_000001' })).not.toBeInTheDocument();
+    expect(within(runsPanel).queryByText('Could not load agent runs.')).not.toBeInTheDocument();
+  });
 });
