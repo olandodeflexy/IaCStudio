@@ -224,7 +224,7 @@ func TestAgentRunRoutesDoNotExposeRunsAcrossProjects(t *testing.T) {
 		t.Fatalf("cross-project list status = %d, body = %s", listRec.Code, listRec.Body.String())
 	}
 	var listed struct {
-		Runs []agentRunSummary `json:"runs"`
+		Runs []agentruns.RunSummary `json:"runs"`
 	}
 	if err := json.Unmarshal(listRec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode listed runs: %v", err)

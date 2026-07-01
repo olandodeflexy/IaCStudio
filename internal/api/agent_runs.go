@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
-	"time"
 
 	"github.com/iac-studio/iac-studio/internal/agentruns"
 )
@@ -15,40 +14,14 @@ type agentRunCreateRequest struct {
 	Mode       agentruns.Mode `json:"mode,omitempty"`
 }
 
-type agentRunSummary struct {
-	ID                   string           `json:"id"`
-	Project              string           `json:"project"`
-	ProviderID           string           `json:"provider_id,omitempty"`
-	Mode                 agentruns.Mode   `json:"mode"`
-	Status               agentruns.Status `json:"status"`
-	PromptPreview        string           `json:"prompt_preview"`
-	PromptHash           string           `json:"prompt_hash"`
-	CreatedAt            time.Time        `json:"created_at"`
-	UpdatedAt            time.Time        `json:"updated_at"`
-	StartedAt            *time.Time       `json:"started_at,omitempty"`
-	CompletedAt          *time.Time       `json:"completed_at,omitempty"`
-	Canceled             bool             `json:"canceled"`
-	Error                string           `json:"error,omitempty"`
-	LogCount             int              `json:"log_count"`
-	PatchCount           int              `json:"patch_count"`
-	ApprovalCount        int              `json:"approval_count"`
-	PendingApprovalCount int              `json:"pending_approval_count"`
-}
-
 func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agentruns.Store) {
 	mux.HandleFunc("GET /api/projects/{name}/agent-runs", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
 		if !requireExistingAgentRunProject(w, projectsDir, name) {
 			return
 		}
-		runs := []agentRunSummary{}
-		for _, run := range store.List() {
-			if run.Project == name {
-				runs = append(runs, summarizeAgentRun(run))
-			}
-		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"runs": runs,
+			"runs": store.ListProjectSummaries(name),
 		})
 	})
 
@@ -94,33 +67,6 @@ func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agent
 		}
 		_ = json.NewEncoder(w).Encode(run)
 	})
-}
-
-func summarizeAgentRun(run agentruns.Run) agentRunSummary {
-	summary := agentRunSummary{
-		ID:            run.ID,
-		Project:       run.Project,
-		ProviderID:    run.ProviderID,
-		Mode:          run.Mode,
-		Status:        run.Status,
-		PromptPreview: run.PromptPreview,
-		PromptHash:    run.PromptHash,
-		CreatedAt:     run.CreatedAt,
-		UpdatedAt:     run.UpdatedAt,
-		StartedAt:     run.StartedAt,
-		CompletedAt:   run.CompletedAt,
-		Canceled:      run.Canceled,
-		Error:         run.Error,
-		LogCount:      len(run.Logs),
-		PatchCount:    len(run.Patches),
-		ApprovalCount: len(run.Approvals),
-	}
-	for _, approval := range run.Approvals {
-		if approval.Status == agentruns.ApprovalPending {
-			summary.PendingApprovalCount++
-		}
-	}
-	return summary
 }
 
 func requireExistingAgentRunProject(w http.ResponseWriter, projectsDir, name string) bool {

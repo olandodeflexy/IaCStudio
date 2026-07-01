@@ -3,6 +3,7 @@ package agentruns
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -341,6 +342,85 @@ func TestStoreReturnsDefensiveCopies(t *testing.T) {
 	}
 	if got.Logs[0].Message == "mutated-list" {
 		t.Fatal("store returned mutable list snapshot")
+	}
+}
+
+func TestStoreListProjectSummariesSkipsHeavyFields(t *testing.T) {
+	clock := fixedClock()
+	store := NewStore(WithClock(clock.now))
+	prod, err := store.Create(CreateRequest{Project: "prod", Prompt: "make a plan", ProviderID: "codex"})
+	if err != nil {
+		t.Fatalf("Create prod returned error: %v", err)
+	}
+	if _, err := store.Create(CreateRequest{Project: "other", Prompt: "make another plan"}); err != nil {
+		t.Fatalf("Create other returned error: %v", err)
+	}
+	clock.tick(time.Second)
+	prod, err = store.SetStatus(prod.ID, StatusRunning)
+	if err != nil {
+		t.Fatalf("SetStatus returned error: %v", err)
+	}
+	if _, err := store.AddLog(prod.ID, LogInfo, "started with token=log-secret"); err != nil {
+		t.Fatalf("AddLog returned error: %v", err)
+	}
+	if _, err := store.AddPatch(prod.ID, ProposedPatch{
+		Path:    "main.tf",
+		Summary: "add resource",
+		Diff:    "+ token=diff-secret",
+	}); err != nil {
+		t.Fatalf("AddPatch returned error: %v", err)
+	}
+	if _, err := store.AddApproval(prod.ID, ApprovalGate{
+		Kind:    ApprovalCommand,
+		Summary: "run command with token=approval-secret",
+	}); err != nil {
+		t.Fatalf("AddApproval returned error: %v", err)
+	}
+
+	summaries := store.ListProjectSummaries("prod")
+	if len(summaries) != 1 {
+		t.Fatalf("summaries = %+v, want one prod summary", summaries)
+	}
+	summary := summaries[0]
+	if summary.ID != prod.ID || summary.Project != "prod" || summary.ProviderID != "codex" {
+		t.Fatalf("unexpected summary identity: %+v", summary)
+	}
+	if summary.Status != StatusWaitingApproval || summary.LogCount != 1 || summary.PatchCount != 1 || summary.ApprovalCount != 1 || summary.PendingApprovalCount != 1 {
+		t.Fatalf("unexpected summary state/counts: %+v", summary)
+	}
+	if summary.StartedAt == nil || *summary.StartedAt != clock.current {
+		t.Fatalf("started_at = %v, want %s", summary.StartedAt, clock.current)
+	}
+	*summary.StartedAt = time.Time{}
+	got, ok := store.Get(prod.ID)
+	if !ok {
+		t.Fatal("expected prod run to exist")
+	}
+	if got.StartedAt == nil || *got.StartedAt != clock.current {
+		t.Fatal("summary returned mutable StartedAt pointer")
+	}
+
+	payload, err := json.Marshal(summary)
+	if err != nil {
+		t.Fatalf("marshal summary: %v", err)
+	}
+	serialized := string(payload)
+	for _, field := range []string{"logs", "patches", "approvals", "created_by"} {
+		if strings.Contains(serialized, field) {
+			t.Fatalf("summary JSON leaked field %q: %s", field, serialized)
+		}
+	}
+	for _, secret := range []string{"log-secret", "diff-secret", "approval-secret"} {
+		if strings.Contains(serialized, secret) {
+			t.Fatalf("summary JSON leaked heavy-field secret %q: %s", secret, serialized)
+		}
+	}
+
+	if other := store.ListProjectSummaries("other"); len(other) != 1 || other[0].Project != "other" {
+		t.Fatalf("other summaries = %+v, want exactly one other summary", other)
+	}
+	if missing := store.ListProjectSummaries("missing"); len(missing) != 0 {
+		t.Fatalf("missing summaries = %+v, want none", missing)
 	}
 }
 
