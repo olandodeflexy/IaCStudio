@@ -238,6 +238,8 @@ const hubStyles: Record<string, CSSProperties> = {
   runTitle: { flex: 1, minWidth: 0, color: 'var(--text-main)', fontWeight: 700, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   runPreview: { color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45, marginTop: 7, overflowWrap: 'anywhere' },
   runMeta: { display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8 },
+  runActions: { display: 'flex', justifyContent: 'flex-end', marginTop: 8 },
+  runCancelButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '5px 8px' },
 };
 
 function providerStatus(state: ProviderState) {
@@ -449,7 +451,23 @@ function runModeLabel(mode: AgentRunSummary['mode']) {
   return mode.replaceAll('_', ' ');
 }
 
-function RunSummaryCard({ run }: { run: AgentRunSummary }) {
+function isTerminalAgentRun(status: AgentRunSummary['status']) {
+  return status === 'completed' || status === 'failed' || status === 'canceled';
+}
+
+function RunSummaryCard({
+  run,
+  canceling,
+  cancelDisabled,
+  onCancel,
+}: {
+  run: AgentRunSummary;
+  canceling: boolean;
+  cancelDisabled: boolean;
+  onCancel: (id: string) => void;
+}) {
+  const canCancel = !isTerminalAgentRun(run.status);
+  const disabled = canceling || cancelDisabled;
   return (
     <div style={hubStyles.runCard}>
       <div style={hubStyles.runCardHead}>
@@ -469,6 +487,22 @@ function RunSummaryCard({ run }: { run: AgentRunSummary }) {
           <span style={{ ...hubStyles.badge, color: '#8aa7ff' }}>{run.pending_approval_count} pending</span>
         )}
       </div>
+      {canCancel && (
+        <div style={hubStyles.runActions}>
+          <button
+            type="button"
+            style={{
+              ...hubStyles.runCancelButton,
+              ...(disabled ? { cursor: canceling ? 'wait' : 'not-allowed', opacity: 0.7 } : {}),
+            }}
+            disabled={disabled}
+            aria-label={`Cancel ${run.id}`}
+            onClick={() => onCancel(run.id)}
+          >
+            {canceling ? 'Canceling...' : 'Cancel run'}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -478,11 +512,15 @@ function RunsPanel({
   runs,
   loading,
   error,
+  cancelingRunId,
+  onCancelRun,
 }: {
   projectName?: string;
   runs: AgentRunSummary[];
   loading: boolean;
   error: string | null;
+  cancelingRunId: string | null;
+  onCancelRun: (id: string) => void;
 }) {
   if (!projectName) {
     return (
@@ -518,7 +556,15 @@ function RunsPanel({
   }
   return (
     <div style={hubStyles.runsPanel} aria-label={`${projectName} agent runs`}>
-      {runs.map(run => <RunSummaryCard key={run.id} run={run} />)}
+      {runs.map(run => (
+        <RunSummaryCard
+          key={run.id}
+          run={run}
+          canceling={cancelingRunId === run.id}
+          cancelDisabled={cancelingRunId !== null}
+          onCancel={onCancelRun}
+        />
+      ))}
     </div>
   );
 }
@@ -543,6 +589,7 @@ export function ChatPanel({
   const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
   const [agentRunsLoading, setAgentRunsLoading] = useState(false);
   const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
+  const [cancelingRunId, setCancelingRunId] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -621,6 +668,19 @@ export function ChatPanel({
       cancelled = true;
     };
   }, [activeTab, projectName]);
+
+  const cancelAgentRun = (id: string) => {
+    if (!projectName || cancelingRunId) return;
+    setCancelingRunId(id);
+    setAgentRunsError(null);
+    api.cancelAgentRun(projectName, id)
+      .then(() => api.listAgentRuns(projectName))
+      .then(runs => setAgentRuns(runs))
+      .catch((err: unknown) => {
+        setAgentRunsError(err instanceof Error ? err.message : 'agent run cancel failed');
+      })
+      .finally(() => setCancelingRunId(null));
+  };
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {
     const lastIndex = AGENT_TABS.length - 1;
@@ -776,6 +836,8 @@ export function ChatPanel({
               runs={agentRuns}
               loading={agentRunsLoading}
               error={agentRunsError}
+              cancelingRunId={cancelingRunId}
+              onCancelRun={cancelAgentRun}
             />
           </div>
         </div>

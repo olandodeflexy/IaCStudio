@@ -648,6 +648,13 @@ export const api = {
     return (await check(res)).json();
   },
 
+  async cancelAgentRun(projectName: string, id: string): Promise<AgentRun> {
+    const res = await fetch(`${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}/cancel`, {
+      method: 'POST',
+    });
+    return (await check(res)).json();
+  },
+
   async listCloudConnections(): Promise<CloudConnection[]> {
     const res = await fetch(`${BASE}/api/cloud/connections`);
     return (await check(res)).json();

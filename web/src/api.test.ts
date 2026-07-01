@@ -377,6 +377,37 @@ describe('api.agentRuns', () => {
 
     expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/agent-runs/run_000001');
   });
+
+  it('cancels one project-scoped agent run', async () => {
+    const response = {
+      id: 'run_000001',
+      project: 'demo',
+      mode: 'read_only',
+      status: 'canceled',
+      prompt_preview: 'Review this project',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:01:00Z',
+      completed_at: '2026-07-01T10:01:00Z',
+      canceled: true,
+      logs: [],
+      patches: [],
+      approvals: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.cancelAgentRun('demo', 'run_000001')).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/agent-runs/run_000001/cancel', {
+      method: 'POST',
+    });
+  });
 });
 
 describe('api.listProjectStates', () => {
