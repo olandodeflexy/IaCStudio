@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
@@ -147,6 +148,30 @@ func TestDefaultEndpointProbeRejectsCredentialAndModelSpecificURLs(t *testing.T)
 		if defaultEndpointProbe(probeURL) {
 			t.Fatalf("probe should reject URL %q", probeURL)
 		}
+	}
+}
+
+func TestIsLoopbackHostResolvesLocalhost(t *testing.T) {
+	if !isLoopbackHost("127.0.0.1") {
+		t.Fatal("127.0.0.1 should be loopback")
+	}
+	if !isLoopbackHost("::1") {
+		t.Fatal("::1 should be loopback")
+	}
+	if isLoopbackHost("192.0.2.1") {
+		t.Fatal("192.0.2.1 should not be treated as loopback")
+	}
+	if !isLoopbackHost("localhost") {
+		t.Fatal("localhost should resolve only to loopback addresses on this host")
+	}
+	fakeLookup := func(host string) ([]net.IP, error) {
+		if host != "localhost" {
+			return nil, errors.New("unexpected host")
+		}
+		return []net.IP{net.ParseIP("127.0.0.1"), net.ParseIP("192.0.2.1")}, nil
+	}
+	if isLoopbackHostWithLookup("localhost", fakeLookup) {
+		t.Fatal("localhost should be rejected when any resolved address is not loopback")
 	}
 }
 

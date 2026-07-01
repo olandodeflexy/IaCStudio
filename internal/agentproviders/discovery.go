@@ -175,7 +175,8 @@ func defaultEndpointProbe(probeURL string) bool {
 		},
 		Jar: nil,
 		Transport: &http.Transport{
-			Proxy: nil,
+			DisableKeepAlives: true,
+			Proxy:             nil,
 		},
 	}
 	resp, err := client.Do(req)
@@ -190,11 +191,24 @@ func defaultEndpointProbe(probeURL string) bool {
 }
 
 func isLoopbackHost(host string) bool {
-	if host == "localhost" {
-		return true
-	}
+	return isLoopbackHostWithLookup(host, net.LookupIP)
+}
+
+func isLoopbackHostWithLookup(host string, lookup func(string) ([]net.IP, error)) bool {
 	ip := net.ParseIP(host)
-	return ip != nil && ip.IsLoopback()
+	if ip != nil {
+		return ip.IsLoopback()
+	}
+	ips, err := lookup(host)
+	if err != nil {
+		return false
+	}
+	for _, resolved := range ips {
+		if !resolved.IsLoopback() {
+			return false
+		}
+	}
+	return len(ips) > 0
 }
 
 func cloneStringSlice(values []string) []string {
