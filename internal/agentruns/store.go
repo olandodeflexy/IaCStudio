@@ -158,7 +158,8 @@ func NewStore(opts ...Option) *Store {
 }
 
 func (s *Store) Create(req CreateRequest) (Run, error) {
-	if strings.TrimSpace(req.Project) == "" {
+	project := strings.TrimSpace(req.Project)
+	if project == "" {
 		return Run{}, errors.New("project is required")
 	}
 	if strings.TrimSpace(req.Prompt) == "" {
@@ -180,7 +181,7 @@ func (s *Store) Create(req CreateRequest) (Run, error) {
 	id := fmt.Sprintf("run_%06d", s.next)
 	run := &Run{
 		ID:            id,
-		Project:       req.Project,
+		Project:       project,
 		ProviderID:    req.ProviderID,
 		Mode:          mode,
 		Status:        StatusQueued,
@@ -287,7 +288,8 @@ func (s *Store) AddLog(id string, level LogLevel, message string) (Run, error) {
 }
 
 func (s *Store) AddPatch(id string, patch ProposedPatch) (Run, error) {
-	if strings.TrimSpace(patch.Path) == "" {
+	path := strings.TrimSpace(patch.Path)
+	if path == "" {
 		return Run{}, errors.New("patch path is required")
 	}
 	return s.update(id, func(run *Run, now time.Time) error {
@@ -295,6 +297,7 @@ func (s *Store) AddPatch(id string, patch ProposedPatch) (Run, error) {
 			return ErrTerminated
 		}
 		patch.ID = fmt.Sprintf("patch_%06d", len(run.Patches)+1)
+		patch.Path = path
 		patch.Summary = truncate(redactText(patch.Summary), maxLogMessageLen)
 		patch.Diff = truncate(redactText(patch.Diff), maxPatchDiffLen)
 		patch.CreatedAt = now

@@ -14,7 +14,7 @@ func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	prompt := "rotate password=supersecret for AKIA1234567890ABCDEF"
 
 	run, err := store.Create(CreateRequest{
-		Project:    "prod",
+		Project:    " prod ",
 		Prompt:     prompt,
 		ProviderID: "codex",
 		CreatedBy:  "alice",
@@ -25,6 +25,9 @@ func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 
 	if run.ID != "run_000001" {
 		t.Fatalf("run ID = %q, want run_000001", run.ID)
+	}
+	if run.Project != "prod" {
+		t.Fatalf("project = %q, want prod", run.Project)
 	}
 	if run.Mode != ModeReadOnly {
 		t.Fatalf("mode = %q, want %q", run.Mode, ModeReadOnly)
@@ -156,7 +159,7 @@ func TestStoreLifecycleUpdates(t *testing.T) {
 
 	clock.tick(time.Second)
 	run, err = store.AddPatch(run.ID, ProposedPatch{
-		Path:    "main.tf",
+		Path:    " main.tf ",
 		Summary: "add bucket",
 		Diff:    "+ secret = \"dont-store-me\"",
 	})
@@ -165,6 +168,9 @@ func TestStoreLifecycleUpdates(t *testing.T) {
 	}
 	if len(run.Patches) != 1 || run.Patches[0].ID != "patch_000001" {
 		t.Fatalf("unexpected patches: %+v", run.Patches)
+	}
+	if run.Patches[0].Path != "main.tf" {
+		t.Fatalf("patch path = %q, want main.tf", run.Patches[0].Path)
 	}
 	if strings.Contains(run.Patches[0].Diff, "dont-store-me") {
 		t.Fatalf("patch diff leaked secret: %q", run.Patches[0].Diff)
