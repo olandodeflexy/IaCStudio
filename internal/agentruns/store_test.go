@@ -44,6 +44,39 @@ func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	}
 }
 
+func TestStoreRedactsQuotedSecretsWithSpaces(t *testing.T) {
+	store := NewStore(WithClock(fixedClock().now))
+	run, err := store.Create(CreateRequest{
+		Project: "prod",
+		Prompt:  `rotate password="two word secret" and token='another secret phrase'`,
+	})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	if strings.Contains(run.PromptPreview, "two word secret") || strings.Contains(run.PromptPreview, "another secret phrase") {
+		t.Fatalf("prompt preview leaked quoted secret: %q", run.PromptPreview)
+	}
+
+	run, err = store.AddLog(run.ID, LogInfo, `using api_key="local model secret"`)
+	if err != nil {
+		t.Fatalf("AddLog returned error: %v", err)
+	}
+	if strings.Contains(run.Logs[0].Message, "local model secret") {
+		t.Fatalf("log leaked quoted secret: %q", run.Logs[0].Message)
+	}
+
+	run, err = store.AddPatch(run.ID, ProposedPatch{
+		Path: "main.tf",
+		Diff: `+ access_key = "quoted cloud secret"`,
+	})
+	if err != nil {
+		t.Fatalf("AddPatch returned error: %v", err)
+	}
+	if strings.Contains(run.Patches[0].Diff, "quoted cloud secret") {
+		t.Fatalf("patch leaked quoted secret: %q", run.Patches[0].Diff)
+	}
+}
+
 func TestStoreLifecycleUpdates(t *testing.T) {
 	clock := fixedClock()
 	store := NewStore(WithClock(clock.now))
@@ -186,6 +219,11 @@ func TestStoreTerminalStateGuard(t *testing.T) {
 	if _, err := store.SetStatus(run.ID, StatusRunning); err != nil {
 		t.Fatalf("SetStatus running: %v", err)
 	}
+	run, err = store.AddApproval(run.ID, ApprovalGate{Kind: ApprovalCommand, Summary: "x"})
+	if err != nil {
+		t.Fatalf("AddApproval: %v", err)
+	}
+	approvalID := run.Approvals[0].ID
 	if _, err := store.SetStatus(run.ID, StatusCompleted); err != nil {
 		t.Fatalf("SetStatus completed: %v", err)
 	}
@@ -199,11 +237,17 @@ func TestStoreTerminalStateGuard(t *testing.T) {
 	if _, err := store.Fail(run.ID, "late fail"); !errors.Is(err, ErrTerminated) {
 		t.Fatalf("Fail on completed run: got %v, want ErrTerminated", err)
 	}
+	if _, err := store.AddLog(run.ID, LogInfo, "late log"); !errors.Is(err, ErrTerminated) {
+		t.Fatalf("AddLog on completed run: got %v, want ErrTerminated", err)
+	}
 	if _, err := store.AddApproval(run.ID, ApprovalGate{Kind: ApprovalCommand, Summary: "x"}); !errors.Is(err, ErrTerminated) {
 		t.Fatalf("AddApproval on completed run: got %v, want ErrTerminated", err)
 	}
 	if _, err := store.AddPatch(run.ID, ProposedPatch{Path: "x.tf", Summary: "s", Diff: "d"}); !errors.Is(err, ErrTerminated) {
 		t.Fatalf("AddPatch on completed run: got %v, want ErrTerminated", err)
+	}
+	if _, err := store.DecideApproval(run.ID, approvalID, ApprovalApproved, "alice"); !errors.Is(err, ErrTerminated) {
+		t.Fatalf("DecideApproval on completed run: got %v, want ErrTerminated", err)
 	}
 }
 

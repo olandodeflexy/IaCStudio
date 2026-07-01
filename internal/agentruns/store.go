@@ -273,6 +273,9 @@ func (s *Store) AddLog(id string, level LogLevel, message string) (Run, error) {
 		return Run{}, fmt.Errorf("invalid agent log level: %s", level)
 	}
 	return s.update(id, func(run *Run, now time.Time) error {
+		if terminalStatus(run.Status) {
+			return ErrTerminated
+		}
 		run.Logs = append(run.Logs, LogEntry{
 			ID:      fmt.Sprintf("log_%06d", len(run.Logs)+1),
 			At:      now,
@@ -323,6 +326,9 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 		return Run{}, fmt.Errorf("invalid approval decision: %s", decision)
 	}
 	return s.update(id, func(run *Run, now time.Time) error {
+		if terminalStatus(run.Status) {
+			return ErrTerminated
+		}
 		for i := range run.Approvals {
 			if run.Approvals[i].ID == approvalID {
 				if run.Approvals[i].Status != ApprovalPending {
@@ -362,8 +368,8 @@ func (s *Store) evictLocked() {
 }
 
 var (
-	ErrNotFound        = errors.New("agent run not found")
-	ErrTerminated      = errors.New("agent run is already in a terminal state")
+	ErrNotFound         = errors.New("agent run not found")
+	ErrTerminated       = errors.New("agent run is already in a terminal state")
 	ErrApprovalNotFound = errors.New("approval gate not found")
 )
 
@@ -419,7 +425,7 @@ func hashText(text string) string {
 
 var secretPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
-	regexp.MustCompile(`(?i)(secret|token|password|api[_-]?key|access[_-]?key)\s*[:=]\s*["']?[^"'\s]+`),
+	regexp.MustCompile(`(?i)(secret|token|password|api[_-]?key|access[_-]?key)\s*[:=]\s*(?:"[^"]*"|'[^']*'|[^\s]+)`),
 }
 
 func redactText(text string) string {
