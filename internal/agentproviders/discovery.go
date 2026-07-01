@@ -1,6 +1,16 @@
 package agentproviders
 
-import "os/exec"
+import (
+	"context"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os/exec"
+	"time"
+)
+
+const localEndpointProbeTimeout = 350 * time.Millisecond
 
 const (
 	StateAvailable          = "available"
@@ -11,6 +21,12 @@ const (
 )
 
 type LookupFunc func(file string) (string, error)
+type EndpointProbeFunc func(probeURL string) bool
+
+type EndpointCandidate struct {
+	Entrypoint string
+	ProbeURL   string
+}
 
 type LocalProviderDefinition struct {
 	ID             string
@@ -23,6 +39,7 @@ type LocalProviderDefinition struct {
 	CredentialMode string
 	AuthHint       string
 	InstallHint    string
+	Endpoints      []EndpointCandidate
 }
 
 type LocalProviderStatus struct {
@@ -43,6 +60,7 @@ type LocalProviderStatus struct {
 
 type Discoverer struct {
 	lookup LookupFunc
+	probe  EndpointProbeFunc
 }
 
 type Option func(*Discoverer)
@@ -55,8 +73,16 @@ func WithLookupFunc(lookup LookupFunc) Option {
 	}
 }
 
+func WithEndpointProbeFunc(probe EndpointProbeFunc) Option {
+	return func(d *Discoverer) {
+		if probe != nil {
+			d.probe = probe
+		}
+	}
+}
+
 func NewDiscoverer(opts ...Option) Discoverer {
-	d := Discoverer{lookup: exec.LookPath}
+	d := Discoverer{lookup: exec.LookPath, probe: defaultEndpointProbe}
 	for _, opt := range opts {
 		opt(&d)
 	}
@@ -107,7 +133,83 @@ func (d Discoverer) status(definition LocalProviderDefinition) LocalProviderStat
 			break
 		}
 	}
+	if !status.Installed {
+		for _, endpoint := range definition.Endpoints {
+			if !d.probe(endpoint.ProbeURL) {
+				continue
+			}
+			status.Installed = true
+			status.State = StateAvailable
+			status.Entrypoint = endpoint.Entrypoint
+			status.InstallHint = ""
+			break
+		}
+	}
 	return status
+}
+
+func defaultEndpointProbe(probeURL string) bool {
+	parsed, err := url.Parse(probeURL)
+	ctx, cancel := context.WithTimeout(context.Background(), localEndpointProbeTimeout)
+	defer cancel()
+	if err != nil ||
+		parsed.Scheme != "http" ||
+		parsed.User != nil ||
+		parsed.Path != "/v1/models" ||
+		parsed.RawQuery != "" ||
+		parsed.Fragment != "" ||
+		!isLoopbackHost(ctx, parsed.Hostname()) {
+		return false
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Accept", "application/json")
+
+	client := &http.Client{
+		Timeout: localEndpointProbeTimeout,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+		Jar: nil,
+		Transport: &http.Transport{
+			DisableCompression: true,
+			DisableKeepAlives:  true,
+			Proxy:              nil,
+		},
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_ = resp.Body.Close()
+	}()
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+	return resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices
+}
+
+func isLoopbackHost(ctx context.Context, host string) bool {
+	return isLoopbackHostWithLookup(ctx, host, net.DefaultResolver.LookupIPAddr)
+}
+
+func isLoopbackHostWithLookup(ctx context.Context, host string, lookup func(context.Context, string) ([]net.IPAddr, error)) bool {
+	ip := net.ParseIP(host)
+	if ip != nil {
+		return ip.IsLoopback()
+	}
+	ips, err := lookup(ctx, host)
+	if err != nil {
+		return false
+	}
+	for _, resolved := range ips {
+		if !resolved.IP.IsLoopback() {
+			return false
+		}
+	}
+	return len(ips) > 0
 }
 
 func cloneStringSlice(values []string) []string {
@@ -194,6 +296,27 @@ func DefaultLocalProviders() []LocalProviderDefinition {
 			CredentialMode: CredentialNone,
 			AuthHint:       "Uses local models and does not require cloud credentials.",
 			InstallHint:    "Install Ollama to enable local model workflows.",
+		},
+		{
+			ID:         "openai-compatible-local",
+			Name:       "LM Studio / vLLM",
+			Category:   "local_model",
+			Entrypoint: "OpenAI-compatible local endpoint",
+			Endpoints: []EndpointCandidate{
+				{Entrypoint: "http://127.0.0.1:1234/v1", ProbeURL: "http://127.0.0.1:1234/v1/models"},
+				{Entrypoint: "http://[::1]:1234/v1", ProbeURL: "http://[::1]:1234/v1/models"},
+				{Entrypoint: "http://127.0.0.1:8000/v1", ProbeURL: "http://127.0.0.1:8000/v1/models"},
+				{Entrypoint: "http://[::1]:8000/v1", ProbeURL: "http://[::1]:8000/v1/models"},
+			},
+			Capabilities: []string{
+				"chat",
+				"iac_assistance",
+				"local_model",
+				"openai_compatible",
+			},
+			CredentialMode: CredentialNone,
+			AuthHint:       "Uses a local OpenAI-compatible endpoint; IaC Studio probes /v1/models only and does not send prompts or credentials.",
+			InstallHint:    "Start LM Studio, vLLM, or another local OpenAI-compatible server.",
 		},
 	}
 }
