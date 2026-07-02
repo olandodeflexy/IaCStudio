@@ -132,7 +132,11 @@ func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agent
 
 		run, err := store.DecideApproval(id, r.PathValue("approval_id"), req.Decision, "")
 		if err != nil {
-			if errors.Is(err, agentruns.ErrApprovalNotFound) || errors.Is(err, agentruns.ErrNotFound) {
+			if errors.Is(err, agentruns.ErrNotFound) {
+				http.Error(w, "agent run not found", http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, agentruns.ErrApprovalNotFound) {
 				http.Error(w, "approval gate not found", http.StatusNotFound)
 				return
 			}

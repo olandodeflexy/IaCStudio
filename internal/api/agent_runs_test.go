@@ -374,6 +374,7 @@ func TestAgentRunRoutesRejectBadApprovalDecisions(t *testing.T) {
 		body       string
 		contentTyp string
 		status     int
+		wantBody   string
 	}{
 		{
 			name:       "missing content type",
@@ -390,11 +391,20 @@ func TestAgentRunRoutesRejectBadApprovalDecisions(t *testing.T) {
 			status:     http.StatusBadRequest,
 		},
 		{
+			name:       "missing run",
+			path:       "/api/projects/demo/agent-runs/run_999999/approvals/" + approvalID + "/decision",
+			body:       `{"decision":"approved"}`,
+			contentTyp: "application/json",
+			status:     http.StatusNotFound,
+			wantBody:   "agent run not found",
+		},
+		{
 			name:       "missing approval",
 			path:       "/api/projects/demo/agent-runs/" + run.ID + "/approvals/approval_999999/decision",
 			body:       `{"decision":"approved"}`,
 			contentTyp: "application/json",
 			status:     http.StatusNotFound,
+			wantBody:   "approval gate not found",
 		},
 	}
 
@@ -408,6 +418,9 @@ func TestAgentRunRoutesRejectBadApprovalDecisions(t *testing.T) {
 			router.ServeHTTP(rec, req)
 			if rec.Code != tc.status {
 				t.Fatalf("status = %d, want %d, body = %s", rec.Code, tc.status, rec.Body.String())
+			}
+			if tc.wantBody != "" && !strings.Contains(rec.Body.String(), tc.wantBody) {
+				t.Fatalf("body = %q, want it to contain %q", rec.Body.String(), tc.wantBody)
 			}
 		})
 	}
