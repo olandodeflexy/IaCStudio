@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, RefObject } from 'react';
 
 import { api, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
@@ -464,6 +464,11 @@ function isConflictError(err: unknown) {
   );
 }
 
+function agentRunRefreshErrorMessage(err: unknown) {
+  if (err instanceof Error && err.message) return `agent run refresh failed: ${err.message}`;
+  return 'agent run refresh failed';
+}
+
 function RunSummaryCard({
   run,
   canceling,
@@ -599,6 +604,8 @@ export function ChatPanel({
   const [agentRunsLoading, setAgentRunsLoading] = useState(false);
   const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
   const [cancelingRunId, setCancelingRunId] = useState<string | null>(null);
+  const latestProjectNameRef = useRef(projectName);
+  latestProjectNameRef.current = projectName;
 
   useEffect(() => {
     let cancelled = false;
@@ -678,24 +685,44 @@ export function ChatPanel({
     };
   }, [activeTab, projectName]);
 
+  useEffect(() => {
+    setCancelingRunId(null);
+  }, [projectName]);
+
+  const refreshAgentRunsForProject = (requestProjectName: string) => {
+    if (latestProjectNameRef.current !== requestProjectName) return Promise.resolve();
+    return api.listAgentRuns(requestProjectName)
+      .then(runs => {
+        if (latestProjectNameRef.current !== requestProjectName) return;
+        setAgentRuns(runs);
+      })
+      .catch((err: unknown) => {
+        if (latestProjectNameRef.current !== requestProjectName) return;
+        setAgentRunsError(agentRunRefreshErrorMessage(err));
+      });
+  };
+
   const cancelAgentRun = (id: string) => {
-    if (!projectName || cancelingRunId) return;
+    const requestProjectName = projectName;
+    if (!requestProjectName || cancelingRunId) return;
     setCancelingRunId(id);
     setAgentRunsError(null);
-    api.cancelAgentRun(projectName, id)
-      .then(() => api.listAgentRuns(projectName))
-      .then(runs => setAgentRuns(runs))
+    api.cancelAgentRun(requestProjectName, id)
+      .then(() => refreshAgentRunsForProject(requestProjectName))
       .catch((err: unknown) => {
         if (isConflictError(err)) {
-          return api.listAgentRuns(projectName)
-            .then(runs => setAgentRuns(runs))
-            .catch((refreshErr: unknown) => {
-              setAgentRunsError(refreshErr instanceof Error ? refreshErr.message : 'agent run refresh failed');
-            });
+          return refreshAgentRunsForProject(requestProjectName);
         }
-        setAgentRunsError(err instanceof Error ? err.message : 'agent run cancel failed');
+        if (latestProjectNameRef.current === requestProjectName) {
+          setAgentRunsError(err instanceof Error ? err.message : 'agent run cancel failed');
+        }
+        return undefined;
       })
-      .finally(() => setCancelingRunId(null));
+      .finally(() => {
+        if (latestProjectNameRef.current === requestProjectName) {
+          setCancelingRunId(null);
+        }
+      });
   };
 
   const handleTabKeyDown = (event: KeyboardEvent<HTMLButtonElement>, currentIndex: number) => {

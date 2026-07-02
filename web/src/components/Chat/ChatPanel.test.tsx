@@ -1,6 +1,6 @@
 import { createRef } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
 import { ChatPanel } from './ChatPanel';
 
@@ -488,5 +488,113 @@ describe('ChatPanel', () => {
     });
     expect(within(runsPanel).queryByRole('button', { name: 'Cancel run_000001' })).not.toBeInTheDocument();
     expect(within(runsPanel).queryByText('Could not load agent runs.')).not.toBeInTheDocument();
+  });
+
+  it('reports refresh failures separately after a successful cancel', async () => {
+    listAgentRunsMock
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'propose_only',
+        status: 'running',
+        prompt_preview: 'Prepare a safe deployment plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 2,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }])
+      .mockRejectedValueOnce(new Error('network unavailable'));
+    cancelAgentRunMock.mockResolvedValueOnce({
+      id: 'run_000001',
+      project: 'demo',
+      status: 'canceled',
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Cancel run_000001' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Cancel run_000001' }));
+
+    await waitFor(() => {
+      expect(cancelAgentRunMock).toHaveBeenCalledWith('demo', 'run_000001');
+      expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+      expect(within(runsPanel).getByText('agent run refresh failed: network unavailable')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).queryByText('agent run cancel failed')).not.toBeInTheDocument();
+  });
+
+  it('does not overwrite run summaries after switching projects during cancel', async () => {
+    let resolveCancel: (_value: { id: string; project: string; status: string }) => void = () => {};
+    const cancelPromise = new Promise(resolve => {
+      resolveCancel = resolve;
+    });
+    listAgentRunsMock
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'propose_only',
+        status: 'running',
+        prompt_preview: 'Prepare a safe deployment plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 2,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }])
+      .mockResolvedValueOnce([{
+        id: 'run_000002',
+        project: 'other',
+        provider_id: 'codex',
+        mode: 'read_only',
+        status: 'queued',
+        prompt_preview: 'Other project queued run',
+        prompt_hash: 'sha256:def',
+        created_at: '2026-07-01T10:02:00Z',
+        updated_at: '2026-07-01T10:02:00Z',
+        canceled: false,
+        log_count: 1,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+    cancelAgentRunMock.mockReturnValueOnce(cancelPromise);
+
+    const { rerender } = render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Cancel run_000001' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Cancel run_000001' }));
+    rerender(<ChatPanel {...baseProps} projectName="other" />);
+
+    await waitFor(() => {
+      expect(listAgentRunsMock).toHaveBeenCalledWith('other');
+      expect(within(runsPanel).getByText('Other project queued run')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      resolveCancel({ id: 'run_000001', project: 'demo', status: 'canceled' });
+    });
+
+    expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+    expect(within(runsPanel).getByText('Other project queued run')).toBeInTheDocument();
+    expect(within(runsPanel).queryByText('Prepare a safe deployment plan')).not.toBeInTheDocument();
   });
 });
