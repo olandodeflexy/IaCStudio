@@ -408,6 +408,50 @@ describe('api.agentRuns', () => {
       method: 'POST',
     });
   });
+
+  it('decides one project-scoped agent run approval', async () => {
+    const response = {
+      id: 'run_000001',
+      project: 'demo',
+      mode: 'propose_only',
+      status: 'running',
+      prompt_preview: 'Review this project',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:01:00Z',
+      canceled: false,
+      logs: [],
+      patches: [],
+      approvals: [{
+        id: 'approval_000001',
+        kind: 'command',
+        status: 'approved',
+        summary: 'Run terraform plan',
+        created_at: '2026-07-01T10:00:00Z',
+        decided_at: '2026-07-01T10:01:00Z',
+      }],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.decideAgentRunApproval(
+      'demo',
+      'run_000001',
+      'approval_000001',
+      'approved',
+    )).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo/agent-runs/run_000001/approvals/approval_000001/decision', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ decision: 'approved' }),
+    });
+  });
 });
 
 describe('api.listProjectStates', () => {

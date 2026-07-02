@@ -393,7 +393,7 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 		for i := range run.Approvals {
 			if run.Approvals[i].ID == approvalID {
 				if run.Approvals[i].Status != ApprovalPending {
-					return fmt.Errorf("approval gate %q is already decided", approvalID)
+					return fmt.Errorf("%w: %s", ErrApprovalDecided, approvalID)
 				}
 				run.Approvals[i].Status = decision
 				run.Approvals[i].DecidedAt = timePtr(now)
@@ -510,6 +510,7 @@ var (
 	ErrNotFound         = errors.New("agent run not found")
 	ErrTerminated       = errors.New("agent run is already in a terminal state")
 	ErrApprovalNotFound = errors.New("approval gate not found")
+	ErrApprovalDecided  = errors.New("approval gate is already decided")
 	ErrUnsafePatchPath  = errors.New("patch path must be a relative path within the project")
 )
 

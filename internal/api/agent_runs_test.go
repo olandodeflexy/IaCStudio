@@ -334,6 +334,152 @@ func TestAgentRunRoutesReturnConflictWhenCancelingTerminalRun(t *testing.T) {
 	}
 }
 
+func TestAgentRunRoutesDecideApproval(t *testing.T) {
+	_, router, run, approvalID := agentRunApprovalFixture(t, "run plan with token=approval-secret")
+
+	rec := postApprovalDecision(router, "demo", run.ID, approvalID, `{"decision":"approved","decided_by":"mallory token=spoofed"}`, "application/json")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approval decision status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	requireJSONResponse(t, rec)
+	var decided agentruns.Run
+	if err := json.Unmarshal(rec.Body.Bytes(), &decided); err != nil {
+		t.Fatalf("decode decided run: %v", err)
+	}
+	if decided.Status != agentruns.StatusRunning {
+		t.Fatalf("run status = %q, want %q", decided.Status, agentruns.StatusRunning)
+	}
+	if len(decided.Approvals) != 1 || decided.Approvals[0].Status != agentruns.ApprovalApproved {
+		t.Fatalf("approval not approved: %+v", decided.Approvals)
+	}
+	if decided.Approvals[0].DecidedAt == nil {
+		t.Fatalf("decided_at was not set: %+v", decided.Approvals[0])
+	}
+	if decided.Approvals[0].DecidedBy != "" {
+		t.Fatalf("route accepted client-supplied decided_by: %+v", decided.Approvals[0])
+	}
+	for _, secret := range []string{"approval-secret", "spoofed"} {
+		if strings.Contains(rec.Body.String(), secret) {
+			t.Fatalf("approval decision response leaked secret %q: %s", secret, rec.Body.String())
+		}
+	}
+}
+
+func TestAgentRunRoutesRejectBadApprovalDecisions(t *testing.T) {
+	_, router, run, approvalID := agentRunApprovalFixture(t, "run plan")
+
+	cases := []struct {
+		name       string
+		path       string
+		body       string
+		contentTyp string
+		status     int
+	}{
+		{
+			name:       "missing content type",
+			path:       "/api/projects/demo/agent-runs/" + run.ID + "/approvals/" + approvalID + "/decision",
+			body:       `{"decision":"approved"}`,
+			contentTyp: "",
+			status:     http.StatusUnsupportedMediaType,
+		},
+		{
+			name:       "invalid decision",
+			path:       "/api/projects/demo/agent-runs/" + run.ID + "/approvals/" + approvalID + "/decision",
+			body:       `{"decision":"maybe"}`,
+			contentTyp: "application/json",
+			status:     http.StatusBadRequest,
+		},
+		{
+			name:       "missing approval",
+			path:       "/api/projects/demo/agent-runs/" + run.ID + "/approvals/approval_999999/decision",
+			body:       `{"decision":"approved"}`,
+			contentTyp: "application/json",
+			status:     http.StatusNotFound,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body))
+			if tc.contentTyp != "" {
+				req.Header.Set("Content-Type", tc.contentTyp)
+			}
+			rec := httptest.NewRecorder()
+			router.ServeHTTP(rec, req)
+			if rec.Code != tc.status {
+				t.Fatalf("status = %d, want %d, body = %s", rec.Code, tc.status, rec.Body.String())
+			}
+		})
+	}
+}
+
+func TestAgentRunRoutesDoNotDecideApprovalsAcrossProjects(t *testing.T) {
+	store, router, run, approvalID := agentRunApprovalFixture(t, "run plan")
+
+	rec := postApprovalDecision(router, "other", run.ID, approvalID, `{"decision":"approved"}`, "application/json")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("cross-project approval status = %d, want %d, body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+	got, ok := store.Get(run.ID)
+	if !ok {
+		t.Fatal("expected original run to remain in store")
+	}
+	if got.Approvals[0].Status != agentruns.ApprovalPending {
+		t.Fatalf("cross-project approval mutated run: %+v", got)
+	}
+}
+
+func TestAgentRunRoutesReturnConflictWhenDecidingUnavailableApproval(t *testing.T) {
+	_, router, run, approvalID := agentRunApprovalFixture(t, "run plan")
+
+	rec := postApprovalDecision(router, "demo", run.ID, approvalID, `{"decision":"approved"}`, "application/json")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("approve approval status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+
+	rec = postApprovalDecision(router, "demo", run.ID, approvalID, `{"decision":"approved"}`, "application/json")
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("decide terminal approval status = %d, want %d, body = %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+}
+
+func agentRunApprovalFixture(t *testing.T, summary string) (*agentruns.Store, *http.ServeMux, agentruns.Run, string) {
+	t.Helper()
+	root := scaffoldAgentRunProject(t)
+	store := agentruns.NewStore()
+	router := agentRunMux(root, store)
+	run, err := store.Create(agentruns.CreateRequest{
+		Project: "demo",
+		Prompt:  "review this project",
+		Mode:    agentruns.ModeProposeOnly,
+	})
+	if err != nil {
+		t.Fatalf("create run: %v", err)
+	}
+	run, err = store.AddApproval(run.ID, agentruns.ApprovalGate{
+		Kind:    agentruns.ApprovalCommand,
+		Summary: summary,
+	})
+	if err != nil {
+		t.Fatalf("add approval: %v", err)
+	}
+	return store, router, run, run.Approvals[0].ID
+}
+
+func postApprovalDecision(router *http.ServeMux, project, runID, approvalID, body, contentType string) *httptest.ResponseRecorder {
+	req := httptest.NewRequest(
+		http.MethodPost,
+		"/api/projects/"+project+"/agent-runs/"+runID+"/approvals/"+approvalID+"/decision",
+		strings.NewReader(body),
+	)
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
+	rec := httptest.NewRecorder()
+	router.ServeHTTP(rec, req)
+	return rec
+}
+
 func rawString(t *testing.T, raw map[string]json.RawMessage, field string) string {
 	t.Helper()
 	value, ok := raw[field]

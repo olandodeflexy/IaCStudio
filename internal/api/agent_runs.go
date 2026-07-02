@@ -15,6 +15,10 @@ type agentRunCreateRequest struct {
 	Mode       agentruns.Mode `json:"mode,omitempty"`
 }
 
+type agentRunApprovalDecisionRequest struct {
+	Decision agentruns.ApprovalStatus `json:"decision"`
+}
+
 func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agentruns.Store) {
 	mux.HandleFunc("GET /api/projects/{name}/agent-runs", func(w http.ResponseWriter, r *http.Request) {
 		name := r.PathValue("name")
@@ -94,6 +98,49 @@ func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agent
 				return
 			}
 			http.Error(w, "cancel agent run: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		setAgentRunJSONHeader(w)
+		_ = json.NewEncoder(w).Encode(run)
+	})
+
+	mux.HandleFunc("POST /api/projects/{name}/agent-runs/{id}/approvals/{approval_id}/decision", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		name := r.PathValue("name")
+		if !requireExistingAgentRunProject(w, projectsDir, name) {
+			return
+		}
+		id := r.PathValue("id")
+		run, ok := store.Get(id)
+		if !ok || run.Project != name {
+			http.Error(w, "agent run not found", http.StatusNotFound)
+			return
+		}
+
+		var req agentRunApprovalDecisionRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		if req.Decision != agentruns.ApprovalApproved && req.Decision != agentruns.ApprovalRejected {
+			http.Error(w, "invalid approval decision: "+string(req.Decision), http.StatusBadRequest)
+			return
+		}
+
+		run, err := store.DecideApproval(id, r.PathValue("approval_id"), req.Decision, "")
+		if err != nil {
+			if errors.Is(err, agentruns.ErrApprovalNotFound) || errors.Is(err, agentruns.ErrNotFound) {
+				http.Error(w, "approval gate not found", http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, agentruns.ErrTerminated) || errors.Is(err, agentruns.ErrApprovalDecided) {
+				http.Error(w, err.Error(), http.StatusConflict)
+				return
+			}
+			http.Error(w, "decide approval: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
 		setAgentRunJSONHeader(w)
