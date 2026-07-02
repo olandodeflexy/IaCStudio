@@ -393,7 +393,7 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 		for i := range run.Approvals {
 			if run.Approvals[i].ID == approvalID {
 				if run.Approvals[i].Status != ApprovalPending {
-					return fmt.Errorf("%w: %q", ErrApprovalDecided, approvalID)
+					return ErrApprovalDecided
 				}
 				run.Approvals[i].Status = decision
 				run.Approvals[i].DecidedAt = timePtr(now)
