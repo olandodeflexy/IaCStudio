@@ -459,7 +459,7 @@ func TestAgentRunRoutesDoNotDecideApprovalsAcrossProjects(t *testing.T) {
 }
 
 func TestAgentRunRoutesReturnConflictWhenDecidingUnavailableApproval(t *testing.T) {
-	_, router, run, approvalID := agentRunApprovalFixture(t, "run plan")
+	store, router, run, approvalID := agentRunApprovalFixture(t, "run plan")
 
 	rec := postApprovalDecision(router, "demo", run.ID, approvalID, `{"decision":"approved"}`, "application/json")
 	if rec.Code != http.StatusOK {
@@ -468,7 +468,18 @@ func TestAgentRunRoutesReturnConflictWhenDecidingUnavailableApproval(t *testing.
 
 	rec = postApprovalDecision(router, "demo", run.ID, approvalID, `{"decision":"approved"}`, "application/json")
 	if rec.Code != http.StatusConflict {
+		t.Fatalf("decide already-decided approval status = %d, want %d, body = %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+
+	if _, err := store.SetStatus(run.ID, agentruns.StatusCompleted); err != nil {
+		t.Fatalf("complete run: %v", err)
+	}
+	rec = postApprovalDecision(router, "demo", run.ID, approvalID, `{"decision":"approved"}`, "application/json")
+	if rec.Code != http.StatusConflict {
 		t.Fatalf("decide terminal approval status = %d, want %d, body = %s", rec.Code, http.StatusConflict, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), agentruns.ErrTerminated.Error()) {
+		t.Fatalf("terminal approval body = %q, want it to contain %q", rec.Body.String(), agentruns.ErrTerminated.Error())
 	}
 }
 
