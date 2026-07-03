@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, RefObject } from 'react';
 
-import { api, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
+import { api, type AgentRunApprovalDecision, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
 
 export interface ChatMessage {
@@ -240,6 +240,12 @@ const hubStyles: Record<string, CSSProperties> = {
   runMeta: { display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8 },
   runActions: { display: 'flex', justifyContent: 'flex-end', marginTop: 8 },
   runCancelButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '5px 8px' },
+  pendingGateList: { borderTop: '1px solid var(--border-soft)', marginTop: 9, paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 7 },
+  pendingGateRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center' },
+  pendingGateSummary: { color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.35, overflowWrap: 'anywhere' },
+  pendingGateActions: { display: 'flex', gap: 5, flexWrap: 'wrap', justifyContent: 'flex-end' },
+  approveButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(84, 184, 169, 0.45)', borderRadius: 6, background: 'rgba(84, 184, 169, 0.16)', color: 'var(--accent-action)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '5px 8px' },
+  rejectButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(232, 111, 111, 0.42)', borderRadius: 6, background: 'rgba(232, 111, 111, 0.14)', color: 'var(--accent-danger)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '5px 8px' },
 };
 
 function providerStatus(state: ProviderState) {
@@ -473,15 +479,22 @@ function RunSummaryCard({
   run,
   canceling,
   cancelDisabled,
+  decidingGateKey,
+  decisionDisabled,
   onCancel,
+  onDecideApproval,
 }: {
   run: AgentRunSummary;
   canceling: boolean;
   cancelDisabled: boolean;
+  decidingGateKey: string | null;
+  decisionDisabled: boolean;
   onCancel: (id: string) => void;
+  onDecideApproval: (runId: string, approvalId: string, decision: AgentRunApprovalDecision) => void;
 }) {
   const canCancel = !isTerminalAgentRun(run.status);
   const disabled = canceling || cancelDisabled;
+  const pendingGates = run.pending_gates ?? [];
   return (
     <div style={hubStyles.runCard}>
       <div style={hubStyles.runCardHead}>
@@ -501,6 +514,54 @@ function RunSummaryCard({
           <span style={{ ...hubStyles.badge, color: '#8aa7ff' }}>{run.pending_approval_count} pending</span>
         )}
       </div>
+      {pendingGates.length > 0 && (
+        <div role="group" style={hubStyles.pendingGateList} aria-label={`${run.id} pending approval gates`}>
+          {pendingGates.map(gate => {
+            const gateKey = `${run.id}:${gate.id}`;
+            const deciding = decidingGateKey === gateKey;
+            const gateDisabled = decisionDisabled || deciding;
+            return (
+              <div key={gate.id} style={hubStyles.pendingGateRow}>
+                <div>
+                  <div style={hubStyles.pendingGateSummary}>{gate.summary}</div>
+                  <div style={hubStyles.runMeta}>
+                    <span style={hubStyles.badge}>{gate.kind.replaceAll('_', ' ')}</span>
+                    <span style={hubStyles.badge}>{gate.id}</span>
+                  </div>
+                </div>
+                <div style={hubStyles.pendingGateActions}>
+                  <button
+                    type="button"
+                    style={{
+                      ...hubStyles.approveButton,
+                      ...(gateDisabled ? { cursor: deciding ? 'wait' : 'not-allowed', opacity: 0.7 } : {}),
+                    }}
+                    disabled={gateDisabled}
+                    aria-busy={deciding}
+                    aria-label={`Approve ${gate.id} for ${run.id}`}
+                    onClick={() => onDecideApproval(run.id, gate.id, 'approved')}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    type="button"
+                    style={{
+                      ...hubStyles.rejectButton,
+                      ...(gateDisabled ? { cursor: deciding ? 'wait' : 'not-allowed', opacity: 0.7 } : {}),
+                    }}
+                    disabled={gateDisabled}
+                    aria-busy={deciding}
+                    aria-label={`Reject ${gate.id} for ${run.id}`}
+                    onClick={() => onDecideApproval(run.id, gate.id, 'rejected')}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
       {canCancel && (
         <div style={hubStyles.runActions}>
           <button
@@ -527,14 +588,18 @@ function RunsPanel({
   loading,
   error,
   cancelingRunId,
+  decidingGateKey,
   onCancelRun,
+  onDecideApproval,
 }: {
   projectName?: string;
   runs: AgentRunSummary[];
   loading: boolean;
   error: string | null;
   cancelingRunId: string | null;
+  decidingGateKey: string | null;
   onCancelRun: (id: string) => void;
+  onDecideApproval: (runId: string, approvalId: string, decision: AgentRunApprovalDecision) => void;
 }) {
   if (!projectName) {
     return (
@@ -575,8 +640,11 @@ function RunsPanel({
           key={run.id}
           run={run}
           canceling={cancelingRunId === run.id}
-          cancelDisabled={cancelingRunId !== null}
+          cancelDisabled={cancelingRunId !== null || decidingGateKey !== null}
+          decidingGateKey={decidingGateKey}
+          decisionDisabled={cancelingRunId !== null || decidingGateKey !== null}
           onCancel={onCancelRun}
+          onDecideApproval={onDecideApproval}
         />
       ))}
     </div>
@@ -604,6 +672,7 @@ export function ChatPanel({
   const [agentRunsLoading, setAgentRunsLoading] = useState(false);
   const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
   const [cancelingRunId, setCancelingRunId] = useState<string | null>(null);
+  const [decidingGateKey, setDecidingGateKey] = useState<string | null>(null);
   const latestProjectNameRef = useRef(projectName);
   latestProjectNameRef.current = projectName;
 
@@ -687,6 +756,7 @@ export function ChatPanel({
 
   useEffect(() => {
     setCancelingRunId(null);
+    setDecidingGateKey(null);
   }, [projectName]);
 
   const refreshAgentRunsForProject = (requestProjectName: string) => {
@@ -704,7 +774,7 @@ export function ChatPanel({
 
   const cancelAgentRun = (id: string) => {
     const requestProjectName = projectName;
-    if (!requestProjectName || cancelingRunId) return;
+    if (!requestProjectName || cancelingRunId || decidingGateKey) return;
     setCancelingRunId(id);
     setAgentRunsError(null);
     api.cancelAgentRun(requestProjectName, id)
@@ -721,6 +791,30 @@ export function ChatPanel({
       .finally(() => {
         if (latestProjectNameRef.current === requestProjectName) {
           setCancelingRunId(null);
+        }
+      });
+  };
+
+  const decideApprovalGate = (runId: string, approvalId: string, decision: AgentRunApprovalDecision) => {
+    const requestProjectName = projectName;
+    if (!requestProjectName || cancelingRunId || decidingGateKey) return;
+    const gateKey = `${runId}:${approvalId}`;
+    setDecidingGateKey(gateKey);
+    setAgentRunsError(null);
+    api.decideAgentRunApproval(requestProjectName, runId, approvalId, decision)
+      .then(() => refreshAgentRunsForProject(requestProjectName))
+      .catch((err: unknown) => {
+        if (isConflictError(err)) {
+          return refreshAgentRunsForProject(requestProjectName);
+        }
+        if (latestProjectNameRef.current === requestProjectName) {
+          setAgentRunsError(err instanceof Error ? err.message : 'agent run approval decision failed');
+        }
+        return undefined;
+      })
+      .finally(() => {
+        if (latestProjectNameRef.current === requestProjectName) {
+          setDecidingGateKey(null);
         }
       });
   };
@@ -880,7 +974,9 @@ export function ChatPanel({
               loading={agentRunsLoading}
               error={agentRunsError}
               cancelingRunId={cancelingRunId}
+              decidingGateKey={decidingGateKey}
               onCancelRun={cancelAgentRun}
+              onDecideApproval={decideApprovalGate}
             />
           </div>
         </div>
