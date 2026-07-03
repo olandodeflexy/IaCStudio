@@ -391,6 +391,14 @@ func TestAgentRunRoutesRejectBadApprovalDecisions(t *testing.T) {
 			status:     http.StatusBadRequest,
 		},
 		{
+			name:       "missing decision",
+			path:       "/api/projects/demo/agent-runs/" + run.ID + "/approvals/" + approvalID + "/decision",
+			body:       `{}`,
+			contentTyp: "application/json",
+			status:     http.StatusBadRequest,
+			wantBody:   "approval decision is required",
+		},
+		{
 			name:       "missing run",
 			path:       "/api/projects/demo/agent-runs/run_999999/approvals/" + approvalID + "/decision",
 			body:       `{"decision":"approved"}`,

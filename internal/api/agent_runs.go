@@ -125,6 +125,10 @@ func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agent
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}
+		if req.Decision == "" {
+			http.Error(w, "approval decision is required", http.StatusBadRequest)
+			return
+		}
 		if req.Decision != agentruns.ApprovalApproved && req.Decision != agentruns.ApprovalRejected {
 			http.Error(w, "invalid approval decision: "+string(req.Decision), http.StatusBadRequest)
 			return
