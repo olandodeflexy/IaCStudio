@@ -490,7 +490,7 @@ function RunSummaryCard({
   decidingGateKey: string | null;
   decisionDisabled: boolean;
   onCancel: (id: string) => void;
-  onDecideApproval: (runId: string, gateId: string, decision: AgentRunApprovalDecision) => void;
+  onDecideApproval: (runId: string, approvalId: string, decision: AgentRunApprovalDecision) => void;
 }) {
   const canCancel = !isTerminalAgentRun(run.status);
   const disabled = canceling || cancelDisabled;
@@ -599,7 +599,7 @@ function RunsPanel({
   cancelingRunId: string | null;
   decidingGateKey: string | null;
   onCancelRun: (id: string) => void;
-  onDecideApproval: (runId: string, gateId: string, decision: AgentRunApprovalDecision) => void;
+  onDecideApproval: (runId: string, approvalId: string, decision: AgentRunApprovalDecision) => void;
 }) {
   if (!projectName) {
     return (
@@ -795,13 +795,13 @@ export function ChatPanel({
       });
   };
 
-  const decideApprovalGate = (runId: string, gateId: string, decision: AgentRunApprovalDecision) => {
+  const decideApprovalGate = (runId: string, approvalId: string, decision: AgentRunApprovalDecision) => {
     const requestProjectName = projectName;
     if (!requestProjectName || cancelingRunId || decidingGateKey) return;
-    const gateKey = `${runId}:${gateId}`;
+    const gateKey = `${runId}:${approvalId}`;
     setDecidingGateKey(gateKey);
     setAgentRunsError(null);
-    api.decideAgentRunApproval(requestProjectName, runId, gateId, decision)
+    api.decideAgentRunApproval(requestProjectName, runId, approvalId, decision)
       .then(() => refreshAgentRunsForProject(requestProjectName))
       .catch((err: unknown) => {
         if (isConflictError(err)) {
