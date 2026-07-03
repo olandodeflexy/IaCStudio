@@ -270,6 +270,14 @@ export type AgentRunStatus =
   | 'failed'
   | 'canceled';
 
+export type AgentRunApprovalKind =
+  | 'file_write'
+  | 'command'
+  | 'iac_action'
+  | 'cloud_write'
+  | 'secret_read'
+  | 'mcp_network';
+
 export interface AgentRunSummary {
   id: string;
   project: string;
@@ -288,6 +296,14 @@ export interface AgentRunSummary {
   patch_count: number;
   approval_count: number;
   pending_approval_count: number;
+  pending_gates?: AgentRunPendingGate[];
+}
+
+export interface AgentRunPendingGate {
+  id: string;
+  kind: AgentRunApprovalKind;
+  summary: string;
+  created_at: string;
 }
 
 export interface AgentRunLogEntry {
@@ -307,7 +323,7 @@ export interface AgentRunPatch {
 
 export interface AgentRunApproval {
   id: string;
-  kind: 'file_write' | 'command' | 'iac_action' | 'cloud_write' | 'secret_read' | 'mcp_network';
+  kind: AgentRunApprovalKind;
   status: 'pending' | 'approved' | 'rejected';
   summary: string;
   created_at: string;

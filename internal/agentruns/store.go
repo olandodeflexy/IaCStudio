@@ -98,23 +98,24 @@ type Run struct {
 }
 
 type RunSummary struct {
-	ID                   string     `json:"id"`
-	Project              string     `json:"project"`
-	ProviderID           string     `json:"provider_id,omitempty"`
-	Mode                 Mode       `json:"mode"`
-	Status               Status     `json:"status"`
-	PromptPreview        string     `json:"prompt_preview"`
-	PromptHash           string     `json:"prompt_hash"`
-	CreatedAt            time.Time  `json:"created_at"`
-	UpdatedAt            time.Time  `json:"updated_at"`
-	StartedAt            *time.Time `json:"started_at,omitempty"`
-	CompletedAt          *time.Time `json:"completed_at,omitempty"`
-	Canceled             bool       `json:"canceled"`
-	Error                string     `json:"error,omitempty"`
-	LogCount             int        `json:"log_count"`
-	PatchCount           int        `json:"patch_count"`
-	ApprovalCount        int        `json:"approval_count"`
-	PendingApprovalCount int        `json:"pending_approval_count"`
+	ID                   string                `json:"id"`
+	Project              string                `json:"project"`
+	ProviderID           string                `json:"provider_id,omitempty"`
+	Mode                 Mode                  `json:"mode"`
+	Status               Status                `json:"status"`
+	PromptPreview        string                `json:"prompt_preview"`
+	PromptHash           string                `json:"prompt_hash"`
+	CreatedAt            time.Time             `json:"created_at"`
+	UpdatedAt            time.Time             `json:"updated_at"`
+	StartedAt            *time.Time            `json:"started_at,omitempty"`
+	CompletedAt          *time.Time            `json:"completed_at,omitempty"`
+	Canceled             bool                  `json:"canceled"`
+	Error                string                `json:"error,omitempty"`
+	LogCount             int                   `json:"log_count"`
+	PatchCount           int                   `json:"patch_count"`
+	ApprovalCount        int                   `json:"approval_count"`
+	PendingApprovalCount int                   `json:"pending_approval_count"`
+	PendingGates         []PendingApprovalGate `json:"pending_gates,omitempty"`
 }
 
 type LogEntry struct {
@@ -140,6 +141,13 @@ type ApprovalGate struct {
 	CreatedAt time.Time      `json:"created_at"`
 	DecidedAt *time.Time     `json:"decided_at,omitempty"`
 	DecidedBy string         `json:"decided_by,omitempty"`
+}
+
+type PendingApprovalGate struct {
+	ID        string       `json:"id"`
+	Kind      ApprovalKind `json:"kind"`
+	Summary   string       `json:"summary"`
+	CreatedAt time.Time    `json:"created_at"`
 }
 
 type Store struct {
@@ -450,6 +458,12 @@ func summarizeRun(run *Run) RunSummary {
 	for _, approval := range run.Approvals {
 		if approval.Status == ApprovalPending {
 			summary.PendingApprovalCount++
+			summary.PendingGates = append(summary.PendingGates, PendingApprovalGate{
+				ID:        approval.ID,
+				Kind:      approval.Kind,
+				Summary:   approval.Summary,
+				CreatedAt: approval.CreatedAt,
+			})
 		}
 	}
 	return summary
