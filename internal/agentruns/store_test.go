@@ -370,10 +370,11 @@ func TestStoreListProjectSummariesSkipsHeavyFields(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("AddPatch returned error: %v", err)
 	}
-	if _, err := store.AddApproval(prod.ID, ApprovalGate{
+	prod, err = store.AddApproval(prod.ID, ApprovalGate{
 		Kind:    ApprovalCommand,
 		Summary: "run command with token=approval-secret",
-	}); err != nil {
+	})
+	if err != nil {
 		t.Fatalf("AddApproval returned error: %v", err)
 	}
 
@@ -387,6 +388,19 @@ func TestStoreListProjectSummariesSkipsHeavyFields(t *testing.T) {
 	}
 	if summary.Status != StatusWaitingApproval || summary.LogCount != 1 || summary.PatchCount != 1 || summary.ApprovalCount != 1 || summary.PendingApprovalCount != 1 {
 		t.Fatalf("unexpected summary state/counts: %+v", summary)
+	}
+	if len(summary.PendingGates) != 1 {
+		t.Fatalf("pending gates = %+v, want one pending gate", summary.PendingGates)
+	}
+	pendingGate := summary.PendingGates[0]
+	if pendingGate.ID != prod.Approvals[0].ID || pendingGate.Kind != ApprovalCommand {
+		t.Fatalf("unexpected pending gate identity: %+v", pendingGate)
+	}
+	if !strings.Contains(pendingGate.Summary, "[REDACTED]") || strings.Contains(pendingGate.Summary, "approval-secret") {
+		t.Fatalf("pending gate summary was not redacted: %q", pendingGate.Summary)
+	}
+	if pendingGate.CreatedAt != prod.Approvals[0].CreatedAt {
+		t.Fatalf("pending gate created_at = %s, want %s", pendingGate.CreatedAt, prod.Approvals[0].CreatedAt)
 	}
 	if summary.StartedAt == nil || *summary.StartedAt != clock.current {
 		t.Fatalf("started_at = %v, want %s", summary.StartedAt, clock.current)

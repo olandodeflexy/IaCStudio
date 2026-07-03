@@ -282,7 +282,13 @@ describe('api.agentRuns', () => {
         log_count: 0,
         patch_count: 0,
         approval_count: 0,
-        pending_approval_count: 0,
+        pending_approval_count: 1,
+        pending_gates: [{
+          id: 'approval_000001',
+          kind: 'command',
+          summary: 'Run terraform plan',
+          created_at: '2026-07-01T10:00:00Z',
+        }],
       }],
     };
     const fetchMock = vi.fn().mockResolvedValue(

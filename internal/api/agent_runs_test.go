@@ -147,6 +147,23 @@ func TestAgentRunRoutesCreateListAndGetSanitizedRun(t *testing.T) {
 	if got := rawInt(t, summary, "pending_approval_count"); got != 1 {
 		t.Fatalf("pending_approval_count = %d, want 1", got)
 	}
+	var pendingGates []struct {
+		ID      string                 `json:"id"`
+		Kind    agentruns.ApprovalKind `json:"kind"`
+		Summary string                 `json:"summary"`
+	}
+	if err := json.Unmarshal(summary["pending_gates"], &pendingGates); err != nil {
+		t.Fatalf("decode pending_gates: %v", err)
+	}
+	if len(pendingGates) != 1 {
+		t.Fatalf("pending_gates = %+v, want one pending gate", pendingGates)
+	}
+	if pendingGates[0].ID == "" || pendingGates[0].Kind != agentruns.ApprovalCommand {
+		t.Fatalf("unexpected pending gate identity: %+v", pendingGates[0])
+	}
+	if !strings.Contains(pendingGates[0].Summary, "[REDACTED]") || strings.Contains(pendingGates[0].Summary, "approval-secret") {
+		t.Fatalf("pending gate summary was not redacted: %q", pendingGates[0].Summary)
+	}
 	for _, secret := range []string{"log-secret", "diff-secret", "approval-secret"} {
 		if strings.Contains(listRec.Body.String(), secret) {
 			t.Fatalf("list response leaked heavy-field secret %q: %s", secret, listRec.Body.String())
