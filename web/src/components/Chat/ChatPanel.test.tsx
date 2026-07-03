@@ -496,6 +496,48 @@ describe('ChatPanel', () => {
     expect(within(runsPanel).queryByRole('region', { name: 'run_000001 details' })).not.toBeInTheDocument();
   });
 
+  it('shows empty-state messages for run details without logs, patches, or approvals', async () => {
+    listAgentRunsMock.mockResolvedValueOnce([{
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'read_only',
+      status: 'completed',
+      prompt_preview: 'Read-only review completed',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:01:00Z',
+      completed_at: '2026-07-01T10:01:00Z',
+      canceled: false,
+      log_count: 0,
+      patch_count: 0,
+      approval_count: 0,
+      pending_approval_count: 0,
+    }]);
+    getAgentRunMock.mockResolvedValueOnce(agentRunFixture({
+      id: 'run_000001',
+      prompt_preview: 'Read-only review completed',
+    }));
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+    });
+    const details = within(runsPanel).getByRole('region', { name: 'run_000001 details' });
+    expect(within(details).getByText('No run logs yet.')).toBeInTheDocument();
+    expect(within(details).getByText('No proposed patches.')).toBeInTheDocument();
+    expect(within(details).getByText('No approval history.')).toBeInTheDocument();
+  });
+
   it('guards duplicate run detail requests before loading state rerenders', async () => {
     let resolveDetails!: (value: AgentRun) => void;
     getAgentRunMock.mockReturnValueOnce(

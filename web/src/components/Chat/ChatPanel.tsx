@@ -499,10 +499,11 @@ function RunDetailSection({
   empty: string;
   children?: ReactNode;
 }) {
+  const hasContent = children !== null && children !== undefined && children !== false;
   return (
     <div style={hubStyles.runDetailSection}>
       <div style={hubStyles.runDetailSectionTitle}>{title}</div>
-      {children ?? <div style={hubStyles.runDetailMessage}>{empty}</div>}
+      {hasContent ? children : <div style={hubStyles.runDetailMessage}>{empty}</div>}
     </div>
   );
 }
