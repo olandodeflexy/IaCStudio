@@ -7,12 +7,14 @@ import { ChatPanel } from './ChatPanel';
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
 const listAgentRunsMock = vi.hoisted(() => vi.fn());
 const cancelAgentRunMock = vi.hoisted(() => vi.fn());
+const decideAgentRunApprovalMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../api', () => ({
   api: {
     listLocalAgentProviders: listLocalAgentProvidersMock,
     listAgentRuns: listAgentRunsMock,
     cancelAgentRun: cancelAgentRunMock,
+    decideAgentRunApproval: decideAgentRunApprovalMock,
   },
 }));
 
@@ -33,6 +35,8 @@ describe('ChatPanel', () => {
     listAgentRunsMock.mockResolvedValue([]);
     cancelAgentRunMock.mockReset();
     cancelAgentRunMock.mockResolvedValue({});
+    decideAgentRunApprovalMock.mockReset();
+    decideAgentRunApprovalMock.mockResolvedValue({});
     window.localStorage.clear();
   });
 
@@ -357,6 +361,12 @@ describe('ChatPanel', () => {
       patch_count: 1,
       approval_count: 1,
       pending_approval_count: 1,
+      pending_gates: [{
+        id: 'approval_000001',
+        kind: 'command',
+        summary: 'Run terraform plan after reviewing the patch',
+        created_at: '2026-07-01T10:00:00Z',
+      }],
     }]);
 
     render(<ChatPanel {...baseProps} projectName="demo" />);
@@ -371,6 +381,78 @@ describe('ChatPanel', () => {
     expect(within(runsPanel).getByText('read only')).toBeInTheDocument();
     expect(within(runsPanel).getByText('2 logs')).toBeInTheDocument();
     expect(within(runsPanel).getByText('1 pending')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('Run terraform plan after reviewing the patch')).toBeInTheDocument();
+    expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000001 for run_000001' })).toBeInTheDocument();
+    expect(within(runsPanel).getByRole('button', { name: 'Reject approval_000001 for run_000001' })).toBeInTheDocument();
+  });
+
+  it.each([
+    { action: 'Approve', decision: 'approved', finalStatus: 'running' },
+    { action: 'Reject', decision: 'rejected', finalStatus: 'failed' },
+  ] as const)('decides pending approval gates with $action and refreshes the Runs tab', async ({ action, decision, finalStatus }) => {
+    listAgentRunsMock
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'approved_execute',
+        status: 'waiting_approval',
+        prompt_preview: 'Apply a reviewed Terraform plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 2,
+        patch_count: 1,
+        approval_count: 1,
+        pending_approval_count: 1,
+        pending_gates: [{
+          id: 'approval_000001',
+          kind: 'iac_action',
+          summary: 'Apply Terraform changes',
+          created_at: '2026-07-01T10:00:00Z',
+        }],
+      }])
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'approved_execute',
+        status: finalStatus,
+        prompt_preview: 'Apply a reviewed Terraform plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:01:00Z',
+        canceled: false,
+        log_count: 3,
+        patch_count: 1,
+        approval_count: 1,
+        pending_approval_count: 0,
+      }]);
+    decideAgentRunApprovalMock.mockResolvedValueOnce({
+      id: 'run_000001',
+      project: 'demo',
+      status: finalStatus,
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: `${action} approval_000001 for run_000001` })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: `${action} approval_000001 for run_000001` }));
+
+    await waitFor(() => {
+      expect(decideAgentRunApprovalMock).toHaveBeenCalledWith('demo', 'run_000001', 'approval_000001', decision);
+      expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+      expect(within(runsPanel).getByText(finalStatus)).toBeInTheDocument();
+    });
+    expect(within(runsPanel).queryByRole('button', { name: 'Approve approval_000001 for run_000001' })).not.toBeInTheDocument();
+    expect(within(runsPanel).queryByRole('button', { name: 'Reject approval_000001 for run_000001' })).not.toBeInTheDocument();
+    expect(within(runsPanel).queryByText('Apply Terraform changes')).not.toBeInTheDocument();
   });
 
   it('cancels non-terminal runs and refreshes the Runs tab', async () => {
