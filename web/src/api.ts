@@ -321,6 +321,8 @@ export interface AgentRun extends AgentRunSummary {
   approvals: AgentRunApproval[];
 }
 
+export type AgentRunApprovalDecision = 'approved' | 'rejected';
+
 export interface AgentRunCreateInput {
   prompt: string;
   provider_id?: string;
@@ -652,6 +654,23 @@ export const api = {
     const res = await fetch(`${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}/cancel`, {
       method: 'POST',
     });
+    return (await check(res)).json();
+  },
+
+  async decideAgentRunApproval(
+    projectName: string,
+    id: string,
+    approvalId: string,
+    decision: AgentRunApprovalDecision,
+  ): Promise<AgentRun> {
+    const res = await fetch(
+      `${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}/approvals/${encodeURIComponent(approvalId)}/decision`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ decision }),
+      },
+    );
     return (await check(res)).json();
   },
 
