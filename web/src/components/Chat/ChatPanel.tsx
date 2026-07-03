@@ -502,7 +502,7 @@ function RunDetailSection({
   return (
     <div style={hubStyles.runDetailSection}>
       <div style={hubStyles.runDetailSectionTitle}>{title}</div>
-      {children || <div style={hubStyles.runDetailMessage}>{empty}</div>}
+      {children ?? <div style={hubStyles.runDetailMessage}>{empty}</div>}
     </div>
   );
 }
@@ -890,6 +890,8 @@ export function ChatPanel({
   const [detailLoadingRunId, setDetailLoadingRunId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const latestProjectNameRef = useRef(projectName);
+  const detailRequestKeyRef = useRef<string | null>(null);
+  const detailRequestSeqRef = useRef(0);
   latestProjectNameRef.current = projectName;
 
   useEffect(() => {
@@ -971,6 +973,7 @@ export function ChatPanel({
   }, [activeTab, projectName]);
 
   useEffect(() => {
+    detailRequestKeyRef.current = null;
     setCancelingRunId(null);
     setDecidingGateKey(null);
     setSelectedRunId(null);
@@ -994,30 +997,38 @@ export function ChatPanel({
 
   const showAgentRunDetails = (id: string) => {
     const requestProjectName = projectName;
-    if (!requestProjectName || detailLoadingRunId) return;
+    if (!requestProjectName || detailRequestKeyRef.current) return;
+    detailRequestSeqRef.current += 1;
+    const requestKey = `${requestProjectName}:${id}:${detailRequestSeqRef.current}`;
+    detailRequestKeyRef.current = requestKey;
+    const isCurrentDetailRequest = () => (
+      detailRequestKeyRef.current === requestKey && latestProjectNameRef.current === requestProjectName
+    );
     setSelectedRunId(id);
     setSelectedRun(null);
     setDetailError(null);
     setDetailLoadingRunId(id);
     api.getAgentRun(requestProjectName, id)
       .then(run => {
-        if (latestProjectNameRef.current !== requestProjectName) return;
+        if (!isCurrentDetailRequest()) return;
         setSelectedRunId(run.id);
         setSelectedRun(run);
       })
       .catch((err: unknown) => {
-        if (latestProjectNameRef.current !== requestProjectName) return;
+        if (!isCurrentDetailRequest()) return;
         setSelectedRun(null);
         setDetailError(agentRunDetailErrorMessage(err));
       })
       .finally(() => {
-        if (latestProjectNameRef.current === requestProjectName) {
+        if (isCurrentDetailRequest()) {
+          detailRequestKeyRef.current = null;
           setDetailLoadingRunId(null);
         }
       });
   };
 
   const closeAgentRunDetails = () => {
+    detailRequestKeyRef.current = null;
     setSelectedRunId(null);
     setSelectedRun(null);
     setDetailError(null);

@@ -2,6 +2,7 @@ import { createRef } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
+import type { AgentRun } from '../../api';
 import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
@@ -29,6 +30,26 @@ describe('ChatPanel', () => {
     loading: false,
     toolColor: '#2FB5A8',
   };
+  const agentRunFixture = (overrides: Partial<AgentRun> = {}): AgentRun => ({
+    id: 'run_fixture',
+    project: 'demo',
+    provider_id: 'codex',
+    mode: 'read_only',
+    status: 'completed',
+    prompt_preview: 'Fixture run',
+    prompt_hash: 'sha256:fixture',
+    created_at: '2026-07-01T10:00:00Z',
+    updated_at: '2026-07-01T10:00:00Z',
+    canceled: false,
+    log_count: 0,
+    patch_count: 0,
+    approval_count: 0,
+    pending_approval_count: 0,
+    logs: [],
+    patches: [],
+    approvals: [],
+    ...overrides,
+  });
 
   beforeEach(() => {
     listLocalAgentProvidersMock.mockReset();
@@ -36,7 +57,7 @@ describe('ChatPanel', () => {
     listAgentRunsMock.mockReset();
     listAgentRunsMock.mockResolvedValue([]);
     getAgentRunMock.mockReset();
-    getAgentRunMock.mockResolvedValue({});
+    getAgentRunMock.mockResolvedValue(agentRunFixture());
     cancelAgentRunMock.mockReset();
     cancelAgentRunMock.mockResolvedValue({});
     decideAgentRunApprovalMock.mockReset();
@@ -473,6 +494,49 @@ describe('ChatPanel', () => {
 
     fireEvent.click(within(details).getByRole('button', { name: 'Close details for run_000001' }));
     expect(within(runsPanel).queryByRole('region', { name: 'run_000001 details' })).not.toBeInTheDocument();
+  });
+
+  it('guards duplicate run detail requests before loading state rerenders', async () => {
+    let resolveDetails!: (value: AgentRun) => void;
+    getAgentRunMock.mockReturnValueOnce(
+      new Promise(resolve => { resolveDetails = resolve; }),
+    );
+    listAgentRunsMock.mockResolvedValueOnce([{
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'read_only',
+      status: 'completed',
+      prompt_preview: 'Review project',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:00:00Z',
+      canceled: false,
+      log_count: 0,
+      patch_count: 0,
+      approval_count: 0,
+      pending_approval_count: 0,
+    }]);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+
+    const detailsButton = within(runsPanel).getByRole('button', { name: 'View details for run_000001' });
+    fireEvent.click(detailsButton);
+    fireEvent.click(detailsButton);
+
+    expect(getAgentRunMock).toHaveBeenCalledTimes(1);
+
+    act(() => resolveDetails(agentRunFixture({ id: 'run_000001', prompt_preview: 'Review project' })));
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+    });
   });
 
   it.each([
