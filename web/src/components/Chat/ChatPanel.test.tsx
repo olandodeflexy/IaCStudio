@@ -6,6 +6,7 @@ import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
 const listAgentRunsMock = vi.hoisted(() => vi.fn());
+const getAgentRunMock = vi.hoisted(() => vi.fn());
 const cancelAgentRunMock = vi.hoisted(() => vi.fn());
 const decideAgentRunApprovalMock = vi.hoisted(() => vi.fn());
 
@@ -13,6 +14,7 @@ vi.mock('../../api', () => ({
   api: {
     listLocalAgentProviders: listLocalAgentProvidersMock,
     listAgentRuns: listAgentRunsMock,
+    getAgentRun: getAgentRunMock,
     cancelAgentRun: cancelAgentRunMock,
     decideAgentRunApproval: decideAgentRunApprovalMock,
   },
@@ -33,6 +35,8 @@ describe('ChatPanel', () => {
     listLocalAgentProvidersMock.mockReturnValue(new Promise(() => {}));
     listAgentRunsMock.mockReset();
     listAgentRunsMock.mockResolvedValue([]);
+    getAgentRunMock.mockReset();
+    getAgentRunMock.mockResolvedValue({});
     cancelAgentRunMock.mockReset();
     cancelAgentRunMock.mockResolvedValue({});
     decideAgentRunApprovalMock.mockReset();
@@ -384,6 +388,91 @@ describe('ChatPanel', () => {
     expect(within(runsPanel).getByText('Run terraform plan after reviewing the patch')).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000001 for run_000001' })).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'Reject approval_000001 for run_000001' })).toBeInTheDocument();
+    expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+  });
+
+  it('loads one run detail record with logs, patches, and approvals', async () => {
+    listAgentRunsMock.mockResolvedValueOnce([{
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'propose_only',
+      status: 'completed',
+      prompt_preview: 'Review and propose a Terraform fix',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:02:00Z',
+      completed_at: '2026-07-01T10:02:00Z',
+      canceled: false,
+      log_count: 1,
+      patch_count: 1,
+      approval_count: 1,
+      pending_approval_count: 0,
+    }]);
+    getAgentRunMock.mockResolvedValueOnce({
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'propose_only',
+      status: 'completed',
+      prompt_preview: 'Review and propose a Terraform fix',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:02:00Z',
+      completed_at: '2026-07-01T10:02:00Z',
+      canceled: false,
+      log_count: 1,
+      patch_count: 1,
+      approval_count: 1,
+      pending_approval_count: 0,
+      logs: [{
+        id: 'log_000001',
+        at: '2026-07-01T10:00:01Z',
+        level: 'audit',
+        message: 'Started read-only project review',
+      }],
+      patches: [{
+        id: 'patch_000001',
+        path: 'main.tf',
+        summary: 'Restrict S3 bucket ACL',
+        diff: '- acl = "public-read"\n+ acl = "private"',
+        created_at: '2026-07-01T10:01:00Z',
+      }],
+      approvals: [{
+        id: 'approval_000001',
+        kind: 'file_write',
+        status: 'approved',
+        summary: 'Allow writing the proposed Terraform patch',
+        created_at: '2026-07-01T10:01:30Z',
+        decided_at: '2026-07-01T10:01:45Z',
+        decided_by: 'operator',
+      }],
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+
+    await waitFor(() => {
+      expect(getAgentRunMock).toHaveBeenCalledWith('demo', 'run_000001');
+      expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+    });
+
+    const details = within(runsPanel).getByRole('region', { name: 'run_000001 details' });
+    expect(within(details).getByText('Started read-only project review')).toBeInTheDocument();
+    expect(within(details).getByText('Restrict S3 bucket ACL')).toBeInTheDocument();
+    expect(within(details).getByText(/public-read/)).toBeInTheDocument();
+    expect(within(details).getByText('Allow writing the proposed Terraform patch')).toBeInTheDocument();
+    expect(within(details).getByText('approved')).toBeInTheDocument();
+
+    fireEvent.click(within(details).getByRole('button', { name: 'Close details for run_000001' }));
+    expect(within(runsPanel).queryByRole('region', { name: 'run_000001 details' })).not.toBeInTheDocument();
   });
 
   it.each([
