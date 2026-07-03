@@ -122,6 +122,11 @@ func registerAgentRunRoutes(mux *http.ServeMux, projectsDir string, store *agent
 
 		var req agentRunApprovalDecisionRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			var maxBytes *http.MaxBytesError
+			if errors.As(err, &maxBytes) {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
 			http.Error(w, "invalid request body: "+err.Error(), http.StatusBadRequest)
 			return
 		}

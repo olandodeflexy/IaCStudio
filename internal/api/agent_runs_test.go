@@ -399,6 +399,14 @@ func TestAgentRunRoutesRejectBadApprovalDecisions(t *testing.T) {
 			wantBody:   "approval decision is required",
 		},
 		{
+			name:       "oversized body",
+			path:       "/api/projects/demo/agent-runs/" + run.ID + "/approvals/" + approvalID + "/decision",
+			body:       strings.Repeat(" ", maxRequestBody+1),
+			contentTyp: "application/json",
+			status:     http.StatusRequestEntityTooLarge,
+			wantBody:   "request body too large",
+		},
+		{
 			name:       "missing run",
 			path:       "/api/projects/demo/agent-runs/run_999999/approvals/" + approvalID + "/decision",
 			body:       `{"decision":"approved"}`,
