@@ -515,7 +515,7 @@ function RunSummaryCard({
         )}
       </div>
       {pendingGates.length > 0 && (
-        <div style={hubStyles.pendingGateList} aria-label={`${run.id} pending approval gates`}>
+        <div role="group" style={hubStyles.pendingGateList} aria-label={`${run.id} pending approval gates`}>
           {pendingGates.map(gate => {
             const gateKey = `${run.id}:${gate.id}`;
             const deciding = decidingGateKey === gateKey;
@@ -537,6 +537,7 @@ function RunSummaryCard({
                       ...(gateDisabled ? { cursor: deciding ? 'wait' : 'not-allowed', opacity: 0.7 } : {}),
                     }}
                     disabled={gateDisabled}
+                    aria-busy={deciding}
                     aria-label={`Approve ${gate.id} for ${run.id}`}
                     onClick={() => onDecideApproval(run.id, gate.id, 'approved')}
                   >
@@ -549,6 +550,7 @@ function RunSummaryCard({
                       ...(gateDisabled ? { cursor: deciding ? 'wait' : 'not-allowed', opacity: 0.7 } : {}),
                     }}
                     disabled={gateDisabled}
+                    aria-busy={deciding}
                     aria-label={`Reject ${gate.id} for ${run.id}`}
                     onClick={() => onDecideApproval(run.id, gate.id, 'rejected')}
                   >

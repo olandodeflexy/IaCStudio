@@ -455,6 +455,60 @@ describe('ChatPanel', () => {
     expect(within(runsPanel).queryByText('Apply Terraform changes')).not.toBeInTheDocument();
   });
 
+  it('disables all gate action buttons while an approval decision is in-flight', async () => {
+    let resolveDecision!: (value: unknown) => void;
+    decideAgentRunApprovalMock.mockReturnValueOnce(
+      new Promise(resolve => { resolveDecision = resolve; }),
+    );
+    listAgentRunsMock.mockResolvedValueOnce([{
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'approved_execute',
+      status: 'waiting_approval',
+      prompt_preview: 'Waiting for approval',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:00:00Z',
+      canceled: false,
+      log_count: 0,
+      patch_count: 0,
+      approval_count: 1,
+      pending_approval_count: 2,
+      pending_gates: [
+        { id: 'approval_000001', kind: 'command', summary: 'First gate', created_at: '2026-07-01T10:00:00Z' },
+        { id: 'approval_000002', kind: 'iac_action', summary: 'Second gate', created_at: '2026-07-01T10:00:01Z' },
+      ],
+    }]);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000001 for run_000001' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Approve approval_000001 for run_000001' }));
+
+    // While the decision is in-flight all four gate buttons must be disabled
+    expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000001 for run_000001' })).toBeDisabled();
+    expect(within(runsPanel).getByRole('button', { name: 'Reject approval_000001 for run_000001' })).toBeDisabled();
+    expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000002 for run_000001' })).toBeDisabled();
+    expect(within(runsPanel).getByRole('button', { name: 'Reject approval_000002 for run_000001' })).toBeDisabled();
+
+    // The deciding gate's buttons carry aria-busy; the other gate's do not
+    expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000001 for run_000001' })).toHaveAttribute('aria-busy', 'true');
+    expect(within(runsPanel).getByRole('button', { name: 'Reject approval_000001 for run_000001' })).toHaveAttribute('aria-busy', 'true');
+    expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000002 for run_000001' })).toHaveAttribute('aria-busy', 'false');
+    expect(within(runsPanel).getByRole('button', { name: 'Reject approval_000002 for run_000001' })).toHaveAttribute('aria-busy', 'false');
+
+    // Resolve the in-flight request so the component can settle
+    listAgentRunsMock.mockResolvedValueOnce([]);
+    act(() => resolveDecision({}));
+    await waitFor(() => expect(decideAgentRunApprovalMock).toHaveBeenCalledTimes(1));
+  });
+
   it('cancels non-terminal runs and refreshes the Runs tab', async () => {
     listAgentRunsMock
       .mockResolvedValueOnce([{
