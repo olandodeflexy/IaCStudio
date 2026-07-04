@@ -465,6 +465,92 @@ describe('ChatPanel', () => {
     });
   });
 
+  it('ignores stale run-list responses after queue refresh wins', async () => {
+    let resolveInitialRuns: (runs: unknown[]) => void = () => {};
+    let resolveRefreshRuns: (runs: unknown[]) => void = () => {};
+    const initialList = new Promise<unknown[]>(resolve => {
+      resolveInitialRuns = resolve;
+    });
+    const refreshList = new Promise<unknown[]>(resolve => {
+      resolveRefreshRuns = resolve;
+    });
+    listAgentRunsMock
+      .mockReturnValueOnce(initialList)
+      .mockReturnValueOnce(refreshList);
+    createAgentRunMock.mockResolvedValueOnce(agentRunFixture({
+      id: 'run_000001',
+      mode: 'read_only',
+      status: 'queued',
+      prompt_preview: 'Review the current plan',
+    }));
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Review the current plan" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
+
+    await waitFor(() => {
+      expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
+        prompt: 'Review the current plan',
+        mode: 'read_only',
+      });
+      expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+    });
+
+    await act(async () => {
+      resolveRefreshRuns([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'read_only',
+        status: 'queued',
+        prompt_preview: 'Review the current plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 0,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+      await refreshList;
+    });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getAllByText('Review the current plan').length).toBeGreaterThan(0);
+      expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      resolveInitialRuns([{
+        id: 'run_stale',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'read_only',
+        status: 'completed',
+        prompt_preview: 'Stale pre-queue run',
+        prompt_hash: 'sha256:stale',
+        created_at: '2026-07-01T09:00:00Z',
+        updated_at: '2026-07-01T09:01:00Z',
+        canceled: false,
+        log_count: 0,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+      await initialList;
+    });
+
+    expect(within(runsPanel).getAllByText('Review the current plan').length).toBeGreaterThan(0);
+    expect(within(runsPanel).queryByText('Stale pre-queue run')).not.toBeInTheDocument();
+  });
+
   it('keeps the run queue action available while run summaries load', async () => {
     listAgentRunsMock.mockReturnValueOnce(new Promise(() => {}));
 

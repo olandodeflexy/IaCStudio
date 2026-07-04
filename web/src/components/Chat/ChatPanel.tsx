@@ -965,6 +965,7 @@ export function ChatPanel({
   const [detailLoadingRunId, setDetailLoadingRunId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const latestProjectNameRef = useRef(projectName);
+  const agentRunsListSeqRef = useRef(0);
   const detailRequestKeyRef = useRef<string | null>(null);
   const detailRequestSeqRef = useRef(0);
   latestProjectNameRef.current = projectName;
@@ -1027,20 +1028,27 @@ export function ChatPanel({
   useEffect(() => {
     if (activeTab !== 'runs' || !projectName) return;
     let cancelled = false;
+    agentRunsListSeqRef.current += 1;
+    const requestSeq = agentRunsListSeqRef.current;
+    const isCurrentListRequest = () => (
+      !cancelled
+      && agentRunsListSeqRef.current === requestSeq
+      && latestProjectNameRef.current === projectName
+    );
     setAgentRunsLoading(true);
     setAgentRunsError(null);
     api.listAgentRuns(projectName)
       .then(runs => {
-        if (cancelled) return;
+        if (!isCurrentListRequest()) return;
         setAgentRuns(runs);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (!isCurrentListRequest()) return;
         setAgentRuns([]);
         setAgentRunsError(err instanceof Error ? err.message : 'agent run list failed');
       })
       .finally(() => {
-        if (!cancelled) setAgentRunsLoading(false);
+        if (isCurrentListRequest()) setAgentRunsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -1060,14 +1068,23 @@ export function ChatPanel({
 
   const refreshAgentRunsForProject = (requestProjectName: string) => {
     if (latestProjectNameRef.current !== requestProjectName) return Promise.resolve();
+    agentRunsListSeqRef.current += 1;
+    const requestSeq = agentRunsListSeqRef.current;
+    const isCurrentListRequest = () => (
+      agentRunsListSeqRef.current === requestSeq
+      && latestProjectNameRef.current === requestProjectName
+    );
     return api.listAgentRuns(requestProjectName)
       .then(runs => {
-        if (latestProjectNameRef.current !== requestProjectName) return;
+        if (!isCurrentListRequest()) return;
         setAgentRuns(runs);
       })
       .catch((err: unknown) => {
-        if (latestProjectNameRef.current !== requestProjectName) return;
+        if (!isCurrentListRequest()) return;
         setAgentRunsError(agentRunRefreshErrorMessage(err));
+      })
+      .finally(() => {
+        if (isCurrentListRequest()) setAgentRunsLoading(false);
       });
   };
 
