@@ -877,17 +877,6 @@ function RunsPanel({
       </div>
     );
   }
-  if (loading) {
-    return <div style={hubStyles.runsEmpty}>Loading agent runs...</div>;
-  }
-  if (error) {
-    return (
-      <div style={hubStyles.runsEmpty}>
-        <strong style={{ color: 'var(--text-main)' }}>Could not load agent runs.</strong>
-        <div style={{ marginTop: 6 }}>{error}</div>
-      </div>
-    );
-  }
   return (
     <div style={hubStyles.runsPanel} aria-label={`${projectName} agent runs`}>
       <RunQueueCard
@@ -897,7 +886,14 @@ function RunsPanel({
         disabled={cancelingRunId !== null || decidingGateKey !== null || detailLoadingRunId !== null}
         onCreate={onCreateRun}
       />
-      {runs.length === 0 ? (
+      {loading ? (
+        <div style={hubStyles.runsEmpty}>Loading agent runs...</div>
+      ) : error ? (
+        <div style={hubStyles.runsEmpty}>
+          <strong style={{ color: 'var(--text-main)' }}>Could not load agent runs.</strong>
+          <div style={{ marginTop: 6 }}>{error}</div>
+        </div>
+      ) : runs.length === 0 ? (
         <div style={hubStyles.runsEmpty}>
           <strong style={{ color: 'var(--text-main)' }}>No agent runs yet.</strong>
           <div style={{ marginTop: 6 }}>
@@ -1084,9 +1080,13 @@ export function ChatPanel({
     })
       .then(() => refreshAgentRunsForProject(requestProjectName))
       .catch((err: unknown) => {
+        if (isConflictError(err)) {
+          return refreshAgentRunsForProject(requestProjectName);
+        }
         if (latestProjectNameRef.current === requestProjectName) {
           setAgentRunsError(err instanceof Error ? err.message : 'agent run create failed');
         }
+        return undefined;
       })
       .finally(() => {
         if (latestProjectNameRef.current === requestProjectName) {

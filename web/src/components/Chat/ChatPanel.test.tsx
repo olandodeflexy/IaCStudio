@@ -465,6 +465,77 @@ describe('ChatPanel', () => {
     });
   });
 
+  it('keeps the run queue action available while run summaries load', async () => {
+    listAgentRunsMock.mockReturnValueOnce(new Promise(() => {}));
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Review the current plan" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByText('Loading agent runs...')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
+  });
+
+  it('keeps the run queue action available when run summaries fail to load', async () => {
+    listAgentRunsMock.mockRejectedValueOnce(new Error('backend offline'));
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Review the current plan" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByText('Could not load agent runs.')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).getByText('backend offline')).toBeInTheDocument();
+    expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
+  });
+
+  it('refreshes run summaries when queueing hits a conflict', async () => {
+    const conflictError = new Error('agent run changed before queueing');
+    Object.assign(conflictError, { status: 409 });
+    listAgentRunsMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'read_only',
+        status: 'running',
+        prompt_preview: 'Review the current plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 0,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+    createAgentRunMock.mockRejectedValueOnce(conflictError);
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Review the current plan" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
+
+    await waitFor(() => {
+      expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
+        prompt: 'Review the current plan',
+        mode: 'read_only',
+      });
+      expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+      expect(within(runsPanel).getByText('running')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).queryByText('agent run changed before queueing')).not.toBeInTheDocument();
+  });
+
   it('loads one run detail record with logs, patches, and approvals', async () => {
     listAgentRunsMock.mockResolvedValueOnce([{
       id: 'run_000001',
