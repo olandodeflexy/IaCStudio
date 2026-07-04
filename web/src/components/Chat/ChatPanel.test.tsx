@@ -7,6 +7,7 @@ import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
 const listAgentRunsMock = vi.hoisted(() => vi.fn());
+const createAgentRunMock = vi.hoisted(() => vi.fn());
 const getAgentRunMock = vi.hoisted(() => vi.fn());
 const cancelAgentRunMock = vi.hoisted(() => vi.fn());
 const decideAgentRunApprovalMock = vi.hoisted(() => vi.fn());
@@ -15,6 +16,7 @@ vi.mock('../../api', () => ({
   api: {
     listLocalAgentProviders: listLocalAgentProvidersMock,
     listAgentRuns: listAgentRunsMock,
+    createAgentRun: createAgentRunMock,
     getAgentRun: getAgentRunMock,
     cancelAgentRun: cancelAgentRunMock,
     decideAgentRunApproval: decideAgentRunApprovalMock,
@@ -56,6 +58,8 @@ describe('ChatPanel', () => {
     listLocalAgentProvidersMock.mockReturnValue(new Promise(() => {}));
     listAgentRunsMock.mockReset();
     listAgentRunsMock.mockResolvedValue([]);
+    createAgentRunMock.mockReset();
+    createAgentRunMock.mockResolvedValue(agentRunFixture());
     getAgentRunMock.mockReset();
     getAgentRunMock.mockResolvedValue(agentRunFixture());
     cancelAgentRunMock.mockReset();
@@ -403,13 +407,62 @@ describe('ChatPanel', () => {
     });
     expect(listAgentRunsMock).toHaveBeenCalledWith('demo');
     expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
-    expect(within(runsPanel).getByText('read only')).toBeInTheDocument();
+    expect(within(runsPanel).getAllByText('read only').length).toBeGreaterThan(0);
     expect(within(runsPanel).getByText('2 logs')).toBeInTheDocument();
     expect(within(runsPanel).getByText('1 pending')).toBeInTheDocument();
     expect(within(runsPanel).getByText('Run terraform plan after reviewing the patch')).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000001 for run_000001' })).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'Reject approval_000001 for run_000001' })).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+  });
+
+  it('queues the current prompt as an audited run and refreshes the Runs tab', async () => {
+    listAgentRunsMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'approved_execute',
+        status: 'queued',
+        prompt_preview: 'Apply the reviewed Terraform plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 0,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+    createAgentRunMock.mockResolvedValueOnce(agentRunFixture({
+      id: 'run_000001',
+      mode: 'approved_execute',
+      status: 'queued',
+      prompt_preview: 'Apply the reviewed Terraform plan',
+    }));
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Apply the reviewed Terraform plan" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare deploy' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeInTheDocument();
+    });
+    expect(within(runsPanel).getByText('Apply the reviewed Terraform plan')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('approved execute')).toBeInTheDocument();
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
+
+    await waitFor(() => {
+      expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
+        prompt: 'Apply the reviewed Terraform plan',
+        mode: 'approved_execute',
+      });
+      expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+      expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
+    });
   });
 
   it('loads one run detail record with logs, patches, and approvals', async () => {
