@@ -2,10 +2,12 @@ import { createRef } from 'react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
+import type { AgentRun } from '../../api';
 import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
 const listAgentRunsMock = vi.hoisted(() => vi.fn());
+const getAgentRunMock = vi.hoisted(() => vi.fn());
 const cancelAgentRunMock = vi.hoisted(() => vi.fn());
 const decideAgentRunApprovalMock = vi.hoisted(() => vi.fn());
 
@@ -13,6 +15,7 @@ vi.mock('../../api', () => ({
   api: {
     listLocalAgentProviders: listLocalAgentProvidersMock,
     listAgentRuns: listAgentRunsMock,
+    getAgentRun: getAgentRunMock,
     cancelAgentRun: cancelAgentRunMock,
     decideAgentRunApproval: decideAgentRunApprovalMock,
   },
@@ -27,12 +30,34 @@ describe('ChatPanel', () => {
     loading: false,
     toolColor: '#2FB5A8',
   };
+  const agentRunFixture = (overrides: Partial<AgentRun> = {}): AgentRun => ({
+    id: 'run_fixture',
+    project: 'demo',
+    provider_id: 'codex',
+    mode: 'read_only',
+    status: 'completed',
+    prompt_preview: 'Fixture run',
+    prompt_hash: 'sha256:fixture',
+    created_at: '2026-07-01T10:00:00Z',
+    updated_at: '2026-07-01T10:00:00Z',
+    canceled: false,
+    log_count: 0,
+    patch_count: 0,
+    approval_count: 0,
+    pending_approval_count: 0,
+    logs: [],
+    patches: [],
+    approvals: [],
+    ...overrides,
+  });
 
   beforeEach(() => {
     listLocalAgentProvidersMock.mockReset();
     listLocalAgentProvidersMock.mockReturnValue(new Promise(() => {}));
     listAgentRunsMock.mockReset();
     listAgentRunsMock.mockResolvedValue([]);
+    getAgentRunMock.mockReset();
+    getAgentRunMock.mockResolvedValue(agentRunFixture());
     cancelAgentRunMock.mockReset();
     cancelAgentRunMock.mockResolvedValue({});
     decideAgentRunApprovalMock.mockReset();
@@ -384,6 +409,176 @@ describe('ChatPanel', () => {
     expect(within(runsPanel).getByText('Run terraform plan after reviewing the patch')).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000001 for run_000001' })).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'Reject approval_000001 for run_000001' })).toBeInTheDocument();
+    expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+  });
+
+  it('loads one run detail record with logs, patches, and approvals', async () => {
+    listAgentRunsMock.mockResolvedValueOnce([{
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'propose_only',
+      status: 'completed',
+      prompt_preview: 'Review and propose a Terraform fix',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:02:00Z',
+      completed_at: '2026-07-01T10:02:00Z',
+      canceled: false,
+      log_count: 1,
+      patch_count: 1,
+      approval_count: 1,
+      pending_approval_count: 0,
+    }]);
+    getAgentRunMock.mockResolvedValueOnce({
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'propose_only',
+      status: 'completed',
+      prompt_preview: 'Review and propose a Terraform fix',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:02:00Z',
+      completed_at: '2026-07-01T10:02:00Z',
+      canceled: false,
+      log_count: 1,
+      patch_count: 1,
+      approval_count: 1,
+      pending_approval_count: 0,
+      logs: [{
+        id: 'log_000001',
+        at: '2026-07-01T10:00:01Z',
+        level: 'audit',
+        message: 'Started read-only project review',
+      }],
+      patches: [{
+        id: 'patch_000001',
+        path: 'main.tf',
+        summary: 'Restrict S3 bucket ACL',
+        diff: '- acl = "public-read"\n+ acl = "private"',
+        created_at: '2026-07-01T10:01:00Z',
+      }],
+      approvals: [{
+        id: 'approval_000001',
+        kind: 'file_write',
+        status: 'approved',
+        summary: 'Allow writing the proposed Terraform patch',
+        created_at: '2026-07-01T10:01:30Z',
+        decided_at: '2026-07-01T10:01:45Z',
+        decided_by: 'operator',
+      }],
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+
+    await waitFor(() => {
+      expect(getAgentRunMock).toHaveBeenCalledWith('demo', 'run_000001');
+      expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+    });
+
+    const details = within(runsPanel).getByRole('region', { name: 'run_000001 details' });
+    expect(within(details).getByText('Started read-only project review')).toBeInTheDocument();
+    expect(within(details).getByText('Restrict S3 bucket ACL')).toBeInTheDocument();
+    expect(within(details).getByText(/public-read/)).toBeInTheDocument();
+    expect(within(details).getByText('Allow writing the proposed Terraform patch')).toBeInTheDocument();
+    expect(within(details).getByText('approved')).toBeInTheDocument();
+
+    fireEvent.click(within(details).getByRole('button', { name: 'Close details for run_000001' }));
+    expect(within(runsPanel).queryByRole('region', { name: 'run_000001 details' })).not.toBeInTheDocument();
+  });
+
+  it('shows empty-state messages for run details without logs, patches, or approvals', async () => {
+    listAgentRunsMock.mockResolvedValueOnce([{
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'read_only',
+      status: 'completed',
+      prompt_preview: 'Read-only review completed',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:01:00Z',
+      completed_at: '2026-07-01T10:01:00Z',
+      canceled: false,
+      log_count: 0,
+      patch_count: 0,
+      approval_count: 0,
+      pending_approval_count: 0,
+    }]);
+    getAgentRunMock.mockResolvedValueOnce(agentRunFixture({
+      id: 'run_000001',
+      prompt_preview: 'Read-only review completed',
+    }));
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+    });
+    const details = within(runsPanel).getByRole('region', { name: 'run_000001 details' });
+    expect(within(details).getByText('No run logs yet.')).toBeInTheDocument();
+    expect(within(details).getByText('No proposed patches.')).toBeInTheDocument();
+    expect(within(details).getByText('No approval history.')).toBeInTheDocument();
+  });
+
+  it('guards duplicate run detail requests before loading state rerenders', async () => {
+    let resolveDetails!: (value: AgentRun) => void;
+    getAgentRunMock.mockReturnValueOnce(
+      new Promise(resolve => { resolveDetails = resolve; }),
+    );
+    listAgentRunsMock.mockResolvedValueOnce([{
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'codex',
+      mode: 'read_only',
+      status: 'completed',
+      prompt_preview: 'Review project',
+      prompt_hash: 'sha256:abc',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:00:00Z',
+      canceled: false,
+      log_count: 0,
+      patch_count: 0,
+      approval_count: 0,
+      pending_approval_count: 0,
+    }]);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+
+    const detailsButton = within(runsPanel).getByRole('button', { name: 'View details for run_000001' });
+    fireEvent.click(detailsButton);
+    fireEvent.click(detailsButton);
+
+    expect(getAgentRunMock).toHaveBeenCalledTimes(1);
+
+    act(() => resolveDetails(agentRunFixture({ id: 'run_000001', prompt_preview: 'Review project' })));
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+    });
   });
 
   it.each([

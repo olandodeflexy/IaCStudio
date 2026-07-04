@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import type { CSSProperties, KeyboardEvent, RefObject } from 'react';
+import type { CSSProperties, KeyboardEvent, ReactNode, RefObject } from 'react';
 
-import { api, type AgentRunApprovalDecision, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
+import { api, type AgentRun, type AgentRunApprovalDecision, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
 
 export interface ChatMessage {
@@ -238,8 +238,18 @@ const hubStyles: Record<string, CSSProperties> = {
   runTitle: { flex: 1, minWidth: 0, color: 'var(--text-main)', fontWeight: 700, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
   runPreview: { color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45, marginTop: 7, overflowWrap: 'anywhere' },
   runMeta: { display: 'flex', gap: 5, flexWrap: 'wrap', marginTop: 8 },
-  runActions: { display: 'flex', justifyContent: 'flex-end', marginTop: 8 },
+  runActions: { display: 'flex', justifyContent: 'flex-end', gap: 6, flexWrap: 'wrap', marginTop: 8 },
+  runDetailsButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(84, 184, 169, 0.4)', borderRadius: 6, background: 'rgba(84, 184, 169, 0.12)', color: 'var(--accent-action)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '5px 8px' },
   runCancelButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '5px 8px' },
+  runDetailPanel: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-main)', borderRadius: 8, background: 'rgba(23, 29, 27, 0.9)', padding: 10, minWidth: 0 },
+  runDetailHead: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, marginBottom: 8 },
+  runDetailSection: { borderTop: '1px solid var(--border-soft)', paddingTop: 8, marginTop: 8 },
+  runDetailSectionTitle: { color: 'var(--text-main)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginBottom: 6 },
+  runDetailList: { display: 'flex', flexDirection: 'column', gap: 6 },
+  runDetailItem: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-2)', padding: 8, minWidth: 0 },
+  runDetailMessage: { color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.4, overflowWrap: 'anywhere' },
+  runDetailDiff: { margin: '6px 0 0', maxHeight: 160, overflow: 'auto', borderRadius: 6, background: 'rgba(5, 8, 8, 0.72)', color: 'var(--text-muted)', fontSize: 10, lineHeight: 1.45, padding: 8, whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' },
+  runDetailCloseButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '5px 8px' },
   pendingGateList: { borderTop: '1px solid var(--border-soft)', marginTop: 9, paddingTop: 8, display: 'flex', flexDirection: 'column', gap: 7 },
   pendingGateRow: { display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) auto', gap: 8, alignItems: 'center' },
   pendingGateSummary: { color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.35, overflowWrap: 'anywhere' },
@@ -475,25 +485,188 @@ function agentRunRefreshErrorMessage(err: unknown) {
   return 'agent run refresh failed';
 }
 
+function agentRunDetailErrorMessage(err: unknown) {
+  if (err instanceof Error && err.message) return `agent run detail failed: ${err.message}`;
+  return 'agent run detail failed';
+}
+
+function RunDetailSection({
+  title,
+  empty,
+  children,
+}: {
+  title: string;
+  empty: string;
+  children?: ReactNode;
+}) {
+  const hasContent = children !== null && children !== undefined && children !== false;
+  return (
+    <div style={hubStyles.runDetailSection}>
+      <div style={hubStyles.runDetailSectionTitle}>{title}</div>
+      {hasContent ? children : <div style={hubStyles.runDetailMessage}>{empty}</div>}
+    </div>
+  );
+}
+
+function RunDetailPanel({
+  run,
+  selectedRunId,
+  loadingRunId,
+  error,
+  onClose,
+}: {
+  run: AgentRun | null;
+  selectedRunId: string | null;
+  loadingRunId: string | null;
+  error: string | null;
+  onClose: () => void;
+}) {
+  if (loadingRunId) {
+    return (
+      <div
+        id={`agent-run-details-${loadingRunId}`}
+        role="status"
+        style={hubStyles.runDetailPanel}
+        aria-label={`${loadingRunId} details loading`}
+      >
+        Loading {loadingRunId} details...
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div
+        id={selectedRunId ? `agent-run-details-${selectedRunId}` : undefined}
+        role="alert"
+        style={hubStyles.runDetailPanel}
+      >
+        <div style={hubStyles.runDetailHead}>
+          <strong style={{ color: 'var(--text-main)', flex: 1 }}>Could not load run details.</strong>
+          <button
+            type="button"
+            style={hubStyles.runDetailCloseButton}
+            aria-label="Close run detail error"
+            onClick={onClose}
+          >
+            Close
+          </button>
+        </div>
+        <div style={{ ...hubStyles.runDetailMessage, marginTop: 6 }}>{error}</div>
+      </div>
+    );
+  }
+  if (!run) return null;
+
+  return (
+    <section
+      id={`agent-run-details-${run.id}`}
+      role="region"
+      aria-label={`${run.id} details`}
+      style={hubStyles.runDetailPanel}
+    >
+      <div style={hubStyles.runDetailHead}>
+        <span style={hubStyles.runTitle}>{run.id}</span>
+        <span style={{ ...hubStyles.badge, color: runStatusColor(run.status) }}>{run.status.replaceAll('_', ' ')}</span>
+        <button
+          type="button"
+          style={hubStyles.runDetailCloseButton}
+          aria-label={`Close details for ${run.id}`}
+          onClick={onClose}
+        >
+          Close
+        </button>
+      </div>
+      <div style={hubStyles.runPreview}>{run.prompt_preview || 'Prompt preview unavailable'}</div>
+      <div style={hubStyles.runMeta}>
+        <span style={hubStyles.badge}>{runModeLabel(run.mode)}</span>
+        {run.provider_id && <span style={hubStyles.badge}>{run.provider_id}</span>}
+        <span style={hubStyles.badge}>{run.prompt_hash}</span>
+      </div>
+
+      <RunDetailSection title="Logs" empty="No run logs yet.">
+        {run.logs.length > 0 && (
+          <div style={hubStyles.runDetailList}>
+            {run.logs.map(log => (
+              <div key={log.id} style={hubStyles.runDetailItem}>
+                <div style={hubStyles.runMeta}>
+                  <span style={hubStyles.badge}>{log.level}</span>
+                  <span style={hubStyles.badge}>{log.at}</span>
+                </div>
+                <div style={{ ...hubStyles.runDetailMessage, marginTop: 6 }}>{log.message}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </RunDetailSection>
+
+      <RunDetailSection title="Proposed patches" empty="No proposed patches.">
+        {run.patches.length > 0 && (
+          <div style={hubStyles.runDetailList}>
+            {run.patches.map(patch => (
+              <div key={patch.id} style={hubStyles.runDetailItem}>
+                <div style={hubStyles.runMeta}>
+                  <span style={hubStyles.badge}>{patch.path}</span>
+                  <span style={hubStyles.badge}>{patch.created_at}</span>
+                </div>
+                <div style={{ ...hubStyles.runDetailMessage, marginTop: 6 }}>{patch.summary}</div>
+                <pre style={hubStyles.runDetailDiff}>{patch.diff}</pre>
+              </div>
+            ))}
+          </div>
+        )}
+      </RunDetailSection>
+
+      <RunDetailSection title="Approvals" empty="No approval history.">
+        {run.approvals.length > 0 && (
+          <div style={hubStyles.runDetailList}>
+            {run.approvals.map(approval => (
+              <div key={approval.id} style={hubStyles.runDetailItem}>
+                <div style={hubStyles.runMeta}>
+                  <span style={hubStyles.badge}>{approval.kind.replaceAll('_', ' ')}</span>
+                  <span style={{ ...hubStyles.badge, color: approval.status === 'rejected' ? 'var(--accent-danger)' : approval.status === 'approved' ? 'var(--accent-action)' : '#8aa7ff' }}>
+                    {approval.status}
+                  </span>
+                  <span style={hubStyles.badge}>{approval.id}</span>
+                </div>
+                <div style={{ ...hubStyles.runDetailMessage, marginTop: 6 }}>{approval.summary}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </RunDetailSection>
+    </section>
+  );
+}
+
 function RunSummaryCard({
   run,
   canceling,
   cancelDisabled,
+  detailSelected,
+  detailLoading,
+  detailsDisabled,
   decidingGateKey,
   decisionDisabled,
   onCancel,
+  onShowDetails,
   onDecideApproval,
 }: {
   run: AgentRunSummary;
   canceling: boolean;
   cancelDisabled: boolean;
+  detailSelected: boolean;
+  detailLoading: boolean;
+  detailsDisabled: boolean;
   decidingGateKey: string | null;
   decisionDisabled: boolean;
   onCancel: (id: string) => void;
+  onShowDetails: (id: string) => void;
   onDecideApproval: (runId: string, approvalId: string, decision: AgentRunApprovalDecision) => void;
 }) {
   const canCancel = !isTerminalAgentRun(run.status);
   const disabled = canceling || cancelDisabled;
+  const detailDisabled = detailLoading || detailsDisabled;
+  const detailOpen = detailSelected || detailLoading;
   const pendingGates = run.pending_gates ?? [];
   return (
     <div style={hubStyles.runCard}>
@@ -562,8 +735,23 @@ function RunSummaryCard({
           })}
         </div>
       )}
-      {canCancel && (
-        <div style={hubStyles.runActions}>
+      <div style={hubStyles.runActions}>
+        <button
+          type="button"
+          style={{
+            ...hubStyles.runDetailsButton,
+            ...(detailDisabled ? { cursor: detailLoading ? 'wait' : 'not-allowed', opacity: 0.7 } : {}),
+          }}
+          disabled={detailDisabled}
+          aria-busy={detailLoading}
+          aria-expanded={detailOpen}
+          aria-controls={detailOpen ? `agent-run-details-${run.id}` : undefined}
+          aria-label={`View details for ${run.id}`}
+          onClick={() => onShowDetails(run.id)}
+        >
+          {detailLoading ? 'Loading details...' : 'Details'}
+        </button>
+        {canCancel && (
           <button
             type="button"
             style={{
@@ -576,8 +764,8 @@ function RunSummaryCard({
           >
             {canceling ? 'Canceling...' : 'Cancel run'}
           </button>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -588,8 +776,14 @@ function RunsPanel({
   loading,
   error,
   cancelingRunId,
+  selectedRun,
+  selectedRunId,
+  detailLoadingRunId,
+  detailError,
   decidingGateKey,
   onCancelRun,
+  onShowDetails,
+  onCloseDetails,
   onDecideApproval,
 }: {
   projectName?: string;
@@ -597,8 +791,14 @@ function RunsPanel({
   loading: boolean;
   error: string | null;
   cancelingRunId: string | null;
+  selectedRun: AgentRun | null;
+  selectedRunId: string | null;
+  detailLoadingRunId: string | null;
+  detailError: string | null;
   decidingGateKey: string | null;
   onCancelRun: (id: string) => void;
+  onShowDetails: (id: string) => void;
+  onCloseDetails: () => void;
   onDecideApproval: (runId: string, approvalId: string, decision: AgentRunApprovalDecision) => void;
 }) {
   if (!projectName) {
@@ -641,12 +841,25 @@ function RunsPanel({
           run={run}
           canceling={cancelingRunId === run.id}
           cancelDisabled={cancelingRunId !== null || decidingGateKey !== null}
+          detailSelected={selectedRunId === run.id}
+          detailLoading={detailLoadingRunId === run.id}
+          detailsDisabled={detailLoadingRunId !== null && detailLoadingRunId !== run.id}
           decidingGateKey={decidingGateKey}
           decisionDisabled={cancelingRunId !== null || decidingGateKey !== null}
           onCancel={onCancelRun}
+          onShowDetails={onShowDetails}
           onDecideApproval={onDecideApproval}
         />
       ))}
+      {(selectedRun || detailLoadingRunId || detailError) && (
+        <RunDetailPanel
+          run={selectedRun}
+          selectedRunId={selectedRunId}
+          loadingRunId={detailLoadingRunId}
+          error={detailError}
+          onClose={onCloseDetails}
+        />
+      )}
     </div>
   );
 }
@@ -673,7 +886,13 @@ export function ChatPanel({
   const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
   const [cancelingRunId, setCancelingRunId] = useState<string | null>(null);
   const [decidingGateKey, setDecidingGateKey] = useState<string | null>(null);
+  const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
+  const [selectedRun, setSelectedRun] = useState<AgentRun | null>(null);
+  const [detailLoadingRunId, setDetailLoadingRunId] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
   const latestProjectNameRef = useRef(projectName);
+  const detailRequestKeyRef = useRef<string | null>(null);
+  const detailRequestSeqRef = useRef(0);
   latestProjectNameRef.current = projectName;
 
   useEffect(() => {
@@ -755,8 +974,13 @@ export function ChatPanel({
   }, [activeTab, projectName]);
 
   useEffect(() => {
+    detailRequestKeyRef.current = null;
     setCancelingRunId(null);
     setDecidingGateKey(null);
+    setSelectedRunId(null);
+    setSelectedRun(null);
+    setDetailLoadingRunId(null);
+    setDetailError(null);
   }, [projectName]);
 
   const refreshAgentRunsForProject = (requestProjectName: string) => {
@@ -770,6 +994,46 @@ export function ChatPanel({
         if (latestProjectNameRef.current !== requestProjectName) return;
         setAgentRunsError(agentRunRefreshErrorMessage(err));
       });
+  };
+
+  const showAgentRunDetails = (id: string) => {
+    const requestProjectName = projectName;
+    if (!requestProjectName || detailRequestKeyRef.current) return;
+    detailRequestSeqRef.current += 1;
+    const requestKey = `${requestProjectName}:${id}:${detailRequestSeqRef.current}`;
+    detailRequestKeyRef.current = requestKey;
+    const isCurrentDetailRequest = () => (
+      detailRequestKeyRef.current === requestKey && latestProjectNameRef.current === requestProjectName
+    );
+    setSelectedRunId(id);
+    setSelectedRun(null);
+    setDetailError(null);
+    setDetailLoadingRunId(id);
+    api.getAgentRun(requestProjectName, id)
+      .then(run => {
+        if (!isCurrentDetailRequest()) return;
+        setSelectedRunId(run.id);
+        setSelectedRun(run);
+      })
+      .catch((err: unknown) => {
+        if (!isCurrentDetailRequest()) return;
+        setSelectedRun(null);
+        setDetailError(agentRunDetailErrorMessage(err));
+      })
+      .finally(() => {
+        if (isCurrentDetailRequest()) {
+          detailRequestKeyRef.current = null;
+          setDetailLoadingRunId(null);
+        }
+      });
+  };
+
+  const closeAgentRunDetails = () => {
+    detailRequestKeyRef.current = null;
+    setSelectedRunId(null);
+    setSelectedRun(null);
+    setDetailError(null);
+    setDetailLoadingRunId(null);
   };
 
   const cancelAgentRun = (id: string) => {
@@ -974,8 +1238,14 @@ export function ChatPanel({
               loading={agentRunsLoading}
               error={agentRunsError}
               cancelingRunId={cancelingRunId}
+              selectedRun={selectedRun}
+              selectedRunId={selectedRunId}
+              detailLoadingRunId={detailLoadingRunId}
+              detailError={detailError}
               decidingGateKey={decidingGateKey}
               onCancelRun={cancelAgentRun}
+              onShowDetails={showAgentRunDetails}
+              onCloseDetails={closeAgentRunDetails}
               onDecideApproval={decideApprovalGate}
             />
           </div>
