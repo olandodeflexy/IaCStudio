@@ -474,7 +474,7 @@ function runModeLabel(mode: AgentRunSummary['mode']) {
 function modeForTask(task: typeof TASK_MODES[number]): AgentRunMode {
   switch (task) {
     case 'Prepare deploy':
-      return 'approved_execute';
+      return 'propose_only';
     case 'Generate IaC':
     case 'Fix policy':
       return 'propose_only';

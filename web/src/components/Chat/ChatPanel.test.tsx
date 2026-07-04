@@ -423,7 +423,7 @@ describe('ChatPanel', () => {
         id: 'run_000001',
         project: 'demo',
         provider_id: 'codex',
-        mode: 'approved_execute',
+        mode: 'propose_only',
         status: 'queued',
         prompt_preview: 'Apply the reviewed Terraform plan',
         prompt_hash: 'sha256:abc',
@@ -437,7 +437,7 @@ describe('ChatPanel', () => {
       }]);
     createAgentRunMock.mockResolvedValueOnce(agentRunFixture({
       id: 'run_000001',
-      mode: 'approved_execute',
+      mode: 'propose_only',
       status: 'queued',
       prompt_preview: 'Apply the reviewed Terraform plan',
     }));
@@ -451,14 +451,14 @@ describe('ChatPanel', () => {
       expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeInTheDocument();
     });
     expect(within(runsPanel).getByText('Apply the reviewed Terraform plan')).toBeInTheDocument();
-    expect(within(runsPanel).getByText('approved execute')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('propose only')).toBeInTheDocument();
 
     fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
 
     await waitFor(() => {
       expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
         prompt: 'Apply the reviewed Terraform plan',
-        mode: 'approved_execute',
+        mode: 'propose_only',
       });
       expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
       expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
