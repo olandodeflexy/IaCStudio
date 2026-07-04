@@ -482,6 +482,9 @@ function modeForTask(task: typeof TASK_MODES[number]): AgentRunMode {
     case 'Explain plan':
       return 'read_only';
   }
+  const exhaustiveTask: never = task;
+  void exhaustiveTask;
+  return 'read_only';
 }
 
 function isTerminalAgentRun(status: AgentRunSummary['status']) {
