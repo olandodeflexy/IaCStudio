@@ -26,6 +26,40 @@ func TestDefaultLocalProviderOrder(t *testing.T) {
 	}
 }
 
+func TestDefaultConnectionProviderOrderAndSecurityMetadata(t *testing.T) {
+	definitions := DefaultConnectionProviders()
+	got := make([]string, 0, len(definitions))
+	for _, definition := range definitions {
+		got = append(got, definition.ID)
+		if definition.Name == "" || definition.Family == "" || definition.Category == "" {
+			t.Fatalf("provider %q missing identity metadata: %+v", definition.ID, definition)
+		}
+		if definition.BillingHint == "" || definition.DataHandlingHint == "" || definition.SecretStorageHint == "" || definition.SetupHint == "" {
+			t.Fatalf("provider %q missing user-facing hints: %+v", definition.ID, definition)
+		}
+		if len(definition.Capabilities) == 0 || len(definition.CostControls) == 0 {
+			t.Fatalf("provider %q missing capabilities or cost controls: %+v", definition.ID, definition)
+		}
+	}
+	want := []string{"openai-api", "anthropic-api", "azure-openai", "aws-bedrock", "vertex-ai", "enterprise-gateway"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("connection provider order = %#v, want %#v", got, want)
+	}
+}
+
+func TestDefaultConnectionProvidersDoNotContainSecretValues(t *testing.T) {
+	data, err := json.Marshal(DefaultConnectionProviders())
+	if err != nil {
+		t.Fatalf("marshal connection providers: %v", err)
+	}
+	got := string(data)
+	for _, leaked := range []string{"sk-", "AKIA", "secret_value", "access_token", "refresh_token"} {
+		if strings.Contains(got, leaked) {
+			t.Fatalf("connection provider metadata leaked secret-like value %q in %s", leaked, got)
+		}
+	}
+}
+
 func TestDefaultOpenAICompatibleLocalEndpointCandidates(t *testing.T) {
 	definitions := DefaultLocalProviders()
 	var endpoints []EndpointCandidate

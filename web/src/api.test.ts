@@ -261,6 +261,54 @@ describe('api.listLocalAgentProviders', () => {
   });
 });
 
+describe('api.listAgentProviderConnections', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('fetches redacted API and enterprise provider connection metadata', async () => {
+    const response = {
+      providers: [{
+        id: 'openai-api',
+        name: 'OpenAI API',
+        family: 'openai',
+        category: 'api',
+        credential_mode: 'secret_store',
+        required_fields: ['model'],
+        secret_fields: ['api_key'],
+        capabilities: ['chat', 'tool_calling'],
+        cost_controls: ['monthly_budget'],
+        billing_hint: 'Billed through OpenAI Platform API usage.',
+        data_handling_hint: 'Prompts are sent to the configured endpoint.',
+        secret_storage_hint: 'Keys are stored through secret stores and never returned.',
+        setup_hint: 'Use for automation.',
+      }],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.listAgentProviderConnections()).resolves.toEqual(response.providers);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/agent-hub/providers/connections');
+  });
+
+  it('coerces null provider connection responses to an empty array', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('null', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    await expect(api.listAgentProviderConnections()).resolves.toEqual([]);
+  });
+});
+
 describe('api.agentRuns', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
