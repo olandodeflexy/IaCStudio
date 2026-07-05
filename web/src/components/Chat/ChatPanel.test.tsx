@@ -7,6 +7,7 @@ import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
 const listAgentRunsMock = vi.hoisted(() => vi.fn());
+const createAgentRunMock = vi.hoisted(() => vi.fn());
 const getAgentRunMock = vi.hoisted(() => vi.fn());
 const cancelAgentRunMock = vi.hoisted(() => vi.fn());
 const decideAgentRunApprovalMock = vi.hoisted(() => vi.fn());
@@ -15,6 +16,7 @@ vi.mock('../../api', () => ({
   api: {
     listLocalAgentProviders: listLocalAgentProvidersMock,
     listAgentRuns: listAgentRunsMock,
+    createAgentRun: createAgentRunMock,
     getAgentRun: getAgentRunMock,
     cancelAgentRun: cancelAgentRunMock,
     decideAgentRunApproval: decideAgentRunApprovalMock,
@@ -56,6 +58,8 @@ describe('ChatPanel', () => {
     listLocalAgentProvidersMock.mockReturnValue(new Promise(() => {}));
     listAgentRunsMock.mockReset();
     listAgentRunsMock.mockResolvedValue([]);
+    createAgentRunMock.mockReset();
+    createAgentRunMock.mockResolvedValue(agentRunFixture());
     getAgentRunMock.mockReset();
     getAgentRunMock.mockResolvedValue(agentRunFixture());
     cancelAgentRunMock.mockReset();
@@ -403,13 +407,219 @@ describe('ChatPanel', () => {
     });
     expect(listAgentRunsMock).toHaveBeenCalledWith('demo');
     expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
-    expect(within(runsPanel).getByText('read only')).toBeInTheDocument();
+    expect(within(runsPanel).getAllByText('read only').length).toBeGreaterThan(0);
     expect(within(runsPanel).getByText('2 logs')).toBeInTheDocument();
     expect(within(runsPanel).getByText('1 pending')).toBeInTheDocument();
     expect(within(runsPanel).getByText('Run terraform plan after reviewing the patch')).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'Approve approval_000001 for run_000001' })).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'Reject approval_000001 for run_000001' })).toBeInTheDocument();
     expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+  });
+
+  it('queues the current prompt as an audited run and refreshes the Runs tab', async () => {
+    listAgentRunsMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'propose_only',
+        status: 'queued',
+        prompt_preview: 'Apply the reviewed Terraform plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 0,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+    createAgentRunMock.mockResolvedValueOnce(agentRunFixture({
+      id: 'run_000001',
+      mode: 'propose_only',
+      status: 'queued',
+      prompt_preview: 'Apply the reviewed Terraform plan',
+    }));
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Apply the reviewed Terraform plan" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare deploy' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeInTheDocument();
+    });
+    expect(within(runsPanel).getByText('Apply the reviewed Terraform plan')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('propose only')).toBeInTheDocument();
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
+
+    await waitFor(() => {
+      expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
+        prompt: 'Apply the reviewed Terraform plan',
+        mode: 'propose_only',
+      });
+      expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+      expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
+    });
+  });
+
+  it('ignores stale run-list responses after queue refresh wins', async () => {
+    let resolveInitialRuns: (runs: unknown[]) => void = () => {};
+    let resolveRefreshRuns: (runs: unknown[]) => void = () => {};
+    const initialList = new Promise<unknown[]>(resolve => {
+      resolveInitialRuns = resolve;
+    });
+    const refreshList = new Promise<unknown[]>(resolve => {
+      resolveRefreshRuns = resolve;
+    });
+    listAgentRunsMock
+      .mockReturnValueOnce(initialList)
+      .mockReturnValueOnce(refreshList);
+    createAgentRunMock.mockResolvedValueOnce(agentRunFixture({
+      id: 'run_000001',
+      mode: 'read_only',
+      status: 'queued',
+      prompt_preview: 'Review the current plan',
+    }));
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Review the current plan" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
+
+    await waitFor(() => {
+      expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
+        prompt: 'Review the current plan',
+        mode: 'read_only',
+      });
+      expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+    });
+
+    await act(async () => {
+      resolveRefreshRuns([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'read_only',
+        status: 'queued',
+        prompt_preview: 'Review the current plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 0,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+      await refreshList;
+    });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getAllByText('Review the current plan').length).toBeGreaterThan(0);
+      expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
+    });
+
+    await act(async () => {
+      resolveInitialRuns([{
+        id: 'run_stale',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'read_only',
+        status: 'completed',
+        prompt_preview: 'Stale pre-queue run',
+        prompt_hash: 'sha256:stale',
+        created_at: '2026-07-01T09:00:00Z',
+        updated_at: '2026-07-01T09:01:00Z',
+        canceled: false,
+        log_count: 0,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+      await initialList;
+    });
+
+    expect(within(runsPanel).getAllByText('Review the current plan').length).toBeGreaterThan(0);
+    expect(within(runsPanel).queryByText('Stale pre-queue run')).not.toBeInTheDocument();
+  });
+
+  it('keeps the run queue action available while run summaries load', async () => {
+    listAgentRunsMock.mockReturnValueOnce(new Promise(() => {}));
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Review the current plan" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByText('Loading agent runs...')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
+  });
+
+  it('keeps the run queue action available when run summaries fail to load', async () => {
+    listAgentRunsMock.mockRejectedValueOnce(new Error('backend offline'));
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Review the current plan" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByText('Could not load agent runs.')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).getByText('backend offline')).toBeInTheDocument();
+    expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
+  });
+
+  it('refreshes run summaries when queueing hits a conflict', async () => {
+    const conflictError = new Error('agent run changed before queueing');
+    Object.assign(conflictError, { status: 409 });
+    listAgentRunsMock
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'run_000001',
+        project: 'demo',
+        provider_id: 'codex',
+        mode: 'read_only',
+        status: 'running',
+        prompt_preview: 'Review the current plan',
+        prompt_hash: 'sha256:abc',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+        canceled: false,
+        log_count: 0,
+        patch_count: 0,
+        approval_count: 0,
+        pending_approval_count: 0,
+      }]);
+    createAgentRunMock.mockRejectedValueOnce(conflictError);
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="Review the current plan" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
+    });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
+
+    await waitFor(() => {
+      expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
+        prompt: 'Review the current plan',
+        mode: 'read_only',
+      });
+      expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+      expect(within(runsPanel).getByText('running')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).queryByText('agent run changed before queueing')).not.toBeInTheDocument();
   });
 
   it('loads one run detail record with logs, patches, and approvals', async () => {

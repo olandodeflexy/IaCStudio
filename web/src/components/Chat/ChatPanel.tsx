@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactNode, RefObject } from 'react';
 
-import { api, type AgentRun, type AgentRunApprovalDecision, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
+import { api, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
 
 export interface ChatMessage {
@@ -233,6 +233,10 @@ const hubStyles: Record<string, CSSProperties> = {
   providerActionHint: { color: '#77847d', fontSize: 11 },
   runsPanel: { flex: 1, minHeight: 0, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   runsEmpty: { flex: 1, minHeight: 0, padding: 16, color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.55 },
+  runQueueCard: { borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(84, 184, 169, 0.32)', borderRadius: 8, background: 'rgba(84, 184, 169, 0.08)', padding: 10, minWidth: 0 },
+  runQueueHead: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0, flexWrap: 'wrap' },
+  runQueueText: { color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45, marginTop: 7, overflowWrap: 'anywhere' },
+  runQueueButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(84, 184, 169, 0.48)', borderRadius: 6, background: 'rgba(84, 184, 169, 0.18)', color: 'var(--accent-action)', cursor: 'pointer', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '5px 8px' },
   runCard: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-main)', borderRadius: 8, background: 'var(--bg-elev-2)', padding: 10, minWidth: 0 },
   runCardHead: { display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 },
   runTitle: { flex: 1, minWidth: 0, color: 'var(--text-main)', fontWeight: 700, fontSize: 12, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' },
@@ -467,6 +471,22 @@ function runModeLabel(mode: AgentRunSummary['mode']) {
   return mode.replaceAll('_', ' ');
 }
 
+function modeForTask(task: typeof TASK_MODES[number]): AgentRunMode {
+  switch (task) {
+    case 'Prepare deploy':
+      return 'propose_only';
+    case 'Generate IaC':
+    case 'Fix policy':
+      return 'propose_only';
+    case 'Review project':
+    case 'Explain plan':
+      return 'read_only';
+  }
+  const exhaustiveTask: never = task;
+  void exhaustiveTask;
+  return 'read_only';
+}
+
 function isTerminalAgentRun(status: AgentRunSummary['status']) {
   return status === 'completed' || status === 'failed' || status === 'canceled';
 }
@@ -638,6 +658,49 @@ function RunDetailPanel({
   );
 }
 
+function RunQueueCard({
+  task,
+  prompt,
+  creating,
+  disabled,
+  onCreate,
+}: {
+  task: typeof TASK_MODES[number];
+  prompt: string;
+  creating: boolean;
+  disabled: boolean;
+  onCreate: () => void;
+}) {
+  const trimmedPrompt = prompt.trim();
+  const mode = modeForTask(task);
+  const blocked = disabled || creating || trimmedPrompt.length === 0;
+  return (
+    <div style={hubStyles.runQueueCard}>
+      <div style={hubStyles.runQueueHead}>
+        <strong style={{ color: 'var(--text-main)', fontSize: 12, flex: 1 }}>Queue audited run</strong>
+        <span style={hubStyles.badge}>{task}</span>
+        <span style={hubStyles.badge}>{runModeLabel(mode)}</span>
+        <button
+          type="button"
+          style={{
+            ...hubStyles.runQueueButton,
+            ...(blocked ? { cursor: creating ? 'wait' : 'not-allowed', opacity: 0.7 } : {}),
+          }}
+          disabled={blocked}
+          aria-busy={creating}
+          aria-label="Queue current prompt as agent run"
+          onClick={onCreate}
+        >
+          {creating ? 'Queueing...' : 'Queue run'}
+        </button>
+      </div>
+      <div style={hubStyles.runQueueText}>
+        {trimmedPrompt || 'Type a prompt in the message box, then queue it here as an auditable run.'}
+      </div>
+    </div>
+  );
+}
+
 function RunSummaryCard({
   run,
   canceling,
@@ -775,12 +838,16 @@ function RunsPanel({
   runs,
   loading,
   error,
+  task,
+  prompt,
+  creatingRun,
   cancelingRunId,
   selectedRun,
   selectedRunId,
   detailLoadingRunId,
   detailError,
   decidingGateKey,
+  onCreateRun,
   onCancelRun,
   onShowDetails,
   onCloseDetails,
@@ -790,12 +857,16 @@ function RunsPanel({
   runs: AgentRunSummary[];
   loading: boolean;
   error: string | null;
+  task: typeof TASK_MODES[number];
+  prompt: string;
+  creatingRun: boolean;
   cancelingRunId: string | null;
   selectedRun: AgentRun | null;
   selectedRunId: string | null;
   detailLoadingRunId: string | null;
   detailError: string | null;
   decidingGateKey: string | null;
+  onCreateRun: () => void;
   onCancelRun: (id: string) => void;
   onShowDetails: (id: string) => void;
   onCloseDetails: () => void;
@@ -809,48 +880,50 @@ function RunsPanel({
       </div>
     );
   }
-  if (loading) {
-    return <div style={hubStyles.runsEmpty}>Loading agent runs...</div>;
-  }
-  if (error) {
-    return (
-      <div style={hubStyles.runsEmpty}>
-        <strong style={{ color: 'var(--text-main)' }}>Could not load agent runs.</strong>
-        <div style={{ marginTop: 6 }}>{error}</div>
-      </div>
-    );
-  }
-  if (runs.length === 0) {
-    return (
-      <div style={hubStyles.runsEmpty}>
-        <strong style={{ color: 'var(--text-main)' }}>No agent runs yet.</strong>
-        <div style={{ marginTop: 6 }}>
-          Future runs will show provider, task mode, approvals, proposed patches, and deployment actions in one audit trail.
-        </div>
-        <div style={{ marginTop: 10, color: '#77847d' }}>
-          This view is read-only; execution and approval gates remain behind the secure run lifecycle.
-        </div>
-      </div>
-    );
-  }
   return (
     <div style={hubStyles.runsPanel} aria-label={`${projectName} agent runs`}>
-      {runs.map(run => (
-        <RunSummaryCard
-          key={run.id}
-          run={run}
-          canceling={cancelingRunId === run.id}
-          cancelDisabled={cancelingRunId !== null || decidingGateKey !== null}
-          detailSelected={selectedRunId === run.id}
-          detailLoading={detailLoadingRunId === run.id}
-          detailsDisabled={detailLoadingRunId !== null && detailLoadingRunId !== run.id}
-          decidingGateKey={decidingGateKey}
-          decisionDisabled={cancelingRunId !== null || decidingGateKey !== null}
-          onCancel={onCancelRun}
-          onShowDetails={onShowDetails}
-          onDecideApproval={onDecideApproval}
-        />
-      ))}
+      <RunQueueCard
+        task={task}
+        prompt={prompt}
+        creating={creatingRun}
+        disabled={cancelingRunId !== null || decidingGateKey !== null || detailLoadingRunId !== null}
+        onCreate={onCreateRun}
+      />
+      {loading ? (
+        <div style={hubStyles.runsEmpty}>Loading agent runs...</div>
+      ) : error ? (
+        <div style={hubStyles.runsEmpty}>
+          <strong style={{ color: 'var(--text-main)' }}>Could not load agent runs.</strong>
+          <div style={{ marginTop: 6 }}>{error}</div>
+        </div>
+      ) : runs.length === 0 ? (
+        <div style={hubStyles.runsEmpty}>
+          <strong style={{ color: 'var(--text-main)' }}>No agent runs yet.</strong>
+          <div style={{ marginTop: 6 }}>
+            Future runs will show provider, task mode, approvals, proposed patches, and deployment actions in one audit trail.
+          </div>
+          <div style={{ marginTop: 10, color: '#77847d' }}>
+            This view is read-only; execution and approval gates remain behind the secure run lifecycle.
+          </div>
+        </div>
+      ) : (
+        runs.map(run => (
+          <RunSummaryCard
+            key={run.id}
+            run={run}
+            canceling={cancelingRunId === run.id}
+            cancelDisabled={creatingRun || cancelingRunId !== null || decidingGateKey !== null}
+            detailSelected={selectedRunId === run.id}
+            detailLoading={detailLoadingRunId === run.id}
+            detailsDisabled={creatingRun || (detailLoadingRunId !== null && detailLoadingRunId !== run.id)}
+            decidingGateKey={decidingGateKey}
+            decisionDisabled={creatingRun || cancelingRunId !== null || decidingGateKey !== null}
+            onCancel={onCancelRun}
+            onShowDetails={onShowDetails}
+            onDecideApproval={onDecideApproval}
+          />
+        ))
+      )}
       {(selectedRun || detailLoadingRunId || detailError) && (
         <RunDetailPanel
           run={selectedRun}
@@ -884,6 +957,7 @@ export function ChatPanel({
   const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
   const [agentRunsLoading, setAgentRunsLoading] = useState(false);
   const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
+  const [creatingRun, setCreatingRun] = useState(false);
   const [cancelingRunId, setCancelingRunId] = useState<string | null>(null);
   const [decidingGateKey, setDecidingGateKey] = useState<string | null>(null);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
@@ -891,6 +965,7 @@ export function ChatPanel({
   const [detailLoadingRunId, setDetailLoadingRunId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const latestProjectNameRef = useRef(projectName);
+  const agentRunsListSeqRef = useRef(0);
   const detailRequestKeyRef = useRef<string | null>(null);
   const detailRequestSeqRef = useRef(0);
   latestProjectNameRef.current = projectName;
@@ -953,20 +1028,27 @@ export function ChatPanel({
   useEffect(() => {
     if (activeTab !== 'runs' || !projectName) return;
     let cancelled = false;
+    agentRunsListSeqRef.current += 1;
+    const requestSeq = agentRunsListSeqRef.current;
+    const isCurrentListRequest = () => (
+      !cancelled
+      && agentRunsListSeqRef.current === requestSeq
+      && latestProjectNameRef.current === projectName
+    );
     setAgentRunsLoading(true);
     setAgentRunsError(null);
     api.listAgentRuns(projectName)
       .then(runs => {
-        if (cancelled) return;
+        if (!isCurrentListRequest()) return;
         setAgentRuns(runs);
       })
       .catch((err: unknown) => {
-        if (cancelled) return;
+        if (!isCurrentListRequest()) return;
         setAgentRuns([]);
         setAgentRunsError(err instanceof Error ? err.message : 'agent run list failed');
       })
       .finally(() => {
-        if (!cancelled) setAgentRunsLoading(false);
+        if (isCurrentListRequest()) setAgentRunsLoading(false);
       });
     return () => {
       cancelled = true;
@@ -975,6 +1057,7 @@ export function ChatPanel({
 
   useEffect(() => {
     detailRequestKeyRef.current = null;
+    setCreatingRun(false);
     setCancelingRunId(null);
     setDecidingGateKey(null);
     setSelectedRunId(null);
@@ -985,14 +1068,50 @@ export function ChatPanel({
 
   const refreshAgentRunsForProject = (requestProjectName: string) => {
     if (latestProjectNameRef.current !== requestProjectName) return Promise.resolve();
+    agentRunsListSeqRef.current += 1;
+    const requestSeq = agentRunsListSeqRef.current;
+    const isCurrentListRequest = () => (
+      agentRunsListSeqRef.current === requestSeq
+      && latestProjectNameRef.current === requestProjectName
+    );
     return api.listAgentRuns(requestProjectName)
       .then(runs => {
-        if (latestProjectNameRef.current !== requestProjectName) return;
+        if (!isCurrentListRequest()) return;
         setAgentRuns(runs);
       })
       .catch((err: unknown) => {
-        if (latestProjectNameRef.current !== requestProjectName) return;
+        if (!isCurrentListRequest()) return;
         setAgentRunsError(agentRunRefreshErrorMessage(err));
+      })
+      .finally(() => {
+        if (isCurrentListRequest()) setAgentRunsLoading(false);
+      });
+  };
+
+  const createAgentRun = () => {
+    const requestProjectName = projectName;
+    const prompt = input.trim();
+    if (!requestProjectName || prompt.length === 0 || creatingRun || cancelingRunId || decidingGateKey || detailRequestKeyRef.current) return;
+    setCreatingRun(true);
+    setAgentRunsError(null);
+    api.createAgentRun(requestProjectName, {
+      prompt,
+      mode: modeForTask(activeTask),
+    })
+      .then(() => refreshAgentRunsForProject(requestProjectName))
+      .catch((err: unknown) => {
+        if (isConflictError(err)) {
+          return refreshAgentRunsForProject(requestProjectName);
+        }
+        if (latestProjectNameRef.current === requestProjectName) {
+          setAgentRunsError(err instanceof Error ? err.message : 'agent run create failed');
+        }
+        return undefined;
+      })
+      .finally(() => {
+        if (latestProjectNameRef.current === requestProjectName) {
+          setCreatingRun(false);
+        }
       });
   };
 
@@ -1237,12 +1356,16 @@ export function ChatPanel({
               runs={agentRuns}
               loading={agentRunsLoading}
               error={agentRunsError}
+              task={activeTask}
+              prompt={input}
+              creatingRun={creatingRun}
               cancelingRunId={cancelingRunId}
               selectedRun={selectedRun}
               selectedRunId={selectedRunId}
               detailLoadingRunId={detailLoadingRunId}
               detailError={detailError}
               decidingGateKey={decidingGateKey}
+              onCreateRun={createAgentRun}
               onCancelRun={cancelAgentRun}
               onShowDetails={showAgentRunDetails}
               onCloseDetails={closeAgentRunDetails}
