@@ -33,15 +33,24 @@ func NewLocalEncryptedFileSecretStore(keyPath string) SecretStore {
 			if key, ok := environmentEncryptionKey(); ok {
 				return key, nil
 			}
-			return loadOrCreateLocalKey(keyPath)
+			key, err := loadOrCreateLocalKey(keyPath)
+			return key, wrapLocalEncryptedKeyPathError(keyPath, err)
 		},
 		func() ([]byte, error) {
 			if key, ok := environmentEncryptionKey(); ok {
 				return key, nil
 			}
-			return loadExistingLocalKey(keyPath)
+			key, err := loadExistingLocalKey(keyPath)
+			return key, wrapLocalEncryptedKeyPathError(keyPath, err)
 		},
 	)
+}
+
+func wrapLocalEncryptedKeyPathError(keyPath string, err error) error {
+	if err == nil {
+		return nil
+	}
+	return fmt.Errorf("local encrypted secret store key %q: %w", keyPath, err)
 }
 
 func (s *localEncryptedSecretStore) Kind() string {
