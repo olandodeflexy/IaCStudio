@@ -6,6 +6,7 @@ import type { AgentRun, AgentRunSummary } from '../../api';
 import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
+const listAgentProviderConnectionsMock = vi.hoisted(() => vi.fn());
 const listAgentRunsMock = vi.hoisted(() => vi.fn());
 const createAgentRunMock = vi.hoisted(() => vi.fn());
 const getAgentRunMock = vi.hoisted(() => vi.fn());
@@ -15,6 +16,7 @@ const decideAgentRunApprovalMock = vi.hoisted(() => vi.fn());
 vi.mock('../../api', () => ({
   api: {
     listLocalAgentProviders: listLocalAgentProvidersMock,
+    listAgentProviderConnections: listAgentProviderConnectionsMock,
     listAgentRuns: listAgentRunsMock,
     createAgentRun: createAgentRunMock,
     getAgentRun: getAgentRunMock,
@@ -79,6 +81,8 @@ describe('ChatPanel', () => {
   beforeEach(() => {
     listLocalAgentProvidersMock.mockReset();
     listLocalAgentProvidersMock.mockReturnValue(new Promise(() => {}));
+    listAgentProviderConnectionsMock.mockReset();
+    listAgentProviderConnectionsMock.mockReturnValue(new Promise(() => {}));
     listAgentRunsMock.mockReset();
     listAgentRunsMock.mockResolvedValue([]);
     createAgentRunMock.mockReset();
@@ -174,6 +178,71 @@ describe('ChatPanel', () => {
     expect(within(codexPanel).getAllByText('External login').length).toBeGreaterThan(0);
     expect(within(codexPanel).getByText('Version unknown')).toBeInTheDocument();
     expect(within(codexPanel).getAllByText('local cli').length).toBeGreaterThan(0);
+  });
+
+  it('shows API and enterprise provider connection catalog metadata without secret values', async () => {
+    listAgentProviderConnectionsMock.mockResolvedValueOnce([
+      {
+        id: 'openai-api',
+        name: 'OpenAI API',
+        family: 'openai',
+        category: 'api',
+        credential_mode: 'secret_store',
+        required_fields: ['model'],
+        secret_fields: ['api_key'],
+        capabilities: ['chat', 'code_editing', 'iac_assistance', 'tool_calling', 'vision'],
+        cost_controls: ['monthly_budget', 'per_run_token_limit', 'allowed_models'],
+        billing_hint: 'Billed through the OpenAI Platform API account, separate from ChatGPT subscriptions.',
+        data_handling_hint: 'Prompts and selected project context are sent to the configured OpenAI API endpoint.',
+        secret_storage_hint: 'Store API keys through IaC Studio secret stores; keys are never returned to the browser after save.',
+        setup_hint: 'Use for automation, hosted workflows, or centrally billed platform usage.',
+      },
+      {
+        id: 'enterprise-gateway',
+        name: 'Enterprise Gateway',
+        family: 'gateway',
+        category: 'enterprise_gateway',
+        credential_mode: 'enterprise_sso',
+        required_fields: ['endpoint', 'tenant'],
+        secret_fields: [],
+        capabilities: ['chat', 'code_editing', 'iac_assistance', 'tool_calling', 'audit_controls', 'policy_routing'],
+        cost_controls: ['workspace_budget', 'allowed_models', 'team_quota'],
+        billing_hint: "Billed through the organization's gateway or enterprise model platform.",
+        data_handling_hint: 'Prompts and selected project context follow the configured enterprise gateway routing policy.',
+        secret_storage_hint: 'Use SSO or gateway-managed credentials; IaC Studio should not collect individual API keys for this path.',
+        setup_hint: 'Use for private routing, SSO, audit, and platform-team rollouts.',
+      },
+    ]);
+
+    render(<ChatPanel {...baseProps} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+
+    await waitFor(() => {
+      expect(within(codexPanel).getByRole('region', { name: 'Codex API and enterprise connection catalog' })).toBeInTheDocument();
+    });
+    const catalog = within(codexPanel).getByRole('region', { name: 'Codex API and enterprise connection catalog' });
+    expect(within(catalog).getByLabelText('OpenAI API connection')).toBeInTheDocument();
+    expect(within(catalog).getByText(/separate from ChatGPT subscriptions/)).toBeInTheDocument();
+    expect(within(catalog).getByText(/configured OpenAI API endpoint/)).toBeInTheDocument();
+    expect(within(catalog).getByText(/keys are never returned to the browser after save/)).toBeInTheDocument();
+    expect(within(catalog).getByText('Secret store')).toBeInTheDocument();
+    expect(within(catalog).getByText('monthly budget')).toBeInTheDocument();
+    expect(within(catalog).getByText('Enterprise SSO')).toBeInTheDocument();
+    expect(within(catalog).queryByText('sk-test-secret')).not.toBeInTheDocument();
+  });
+
+  it('keeps provider panels usable when the connection catalog cannot load', async () => {
+    listAgentProviderConnectionsMock.mockRejectedValueOnce(new Error('catalog unavailable'));
+
+    render(<ChatPanel {...baseProps} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+
+    await flushAsyncUpdates();
+
+    expect(within(codexPanel).getByRole('button', { name: /Codex CLI/ })).toBeInTheDocument();
+    expect(within(codexPanel).queryByRole('region', { name: 'Codex API and enterprise connection catalog' })).not.toBeInTheDocument();
   });
 
   it('shows read-only details for the selected provider card', () => {
