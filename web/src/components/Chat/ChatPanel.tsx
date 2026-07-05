@@ -68,6 +68,7 @@ const TASK_MODES = [
   'Fix policy',
   'Prepare deploy',
 ] as const;
+const AGENT_RUN_REFRESH_INTERVAL_MS = 5000;
 
 const AGENT_HUB_STORAGE_KEYS = {
   activeTab: 'iac-studio.agentHub.activeTab',
@@ -1021,7 +1022,9 @@ export function ChatPanel({
   const [detailError, setDetailError] = useState<string | null>(null);
   const latestProjectNameRef = useRef(projectName);
   const agentRunsListSeqRef = useRef(0);
+  const agentRunsRefreshInFlightRef = useRef(false);
   const detailRequestKeyRef = useRef<string | null>(null);
+  const detailPollInFlightRef = useRef(false);
   const detailRequestSeqRef = useRef(0);
   latestProjectNameRef.current = projectName;
 
@@ -1054,6 +1057,7 @@ export function ChatPanel({
     () => selectedRunProviderId(runProviderTab, selectedProviders[runProviderTab]),
     [runProviderTab, selectedProviders],
   );
+  const hasActiveAgentRuns = agentRuns.some(run => !isTerminalAgentRun(run.status));
 
   const panelStyle = (tab: AgentHubTab) => (
     activeTab === tab ? hubStyles.tabPanel : hubStyles.hiddenTabPanel
@@ -1118,6 +1122,7 @@ export function ChatPanel({
 
   useEffect(() => {
     detailRequestKeyRef.current = null;
+    detailPollInFlightRef.current = false;
     setCreatingRun(false);
     setCancelingRunId(null);
     setDecidingGateKey(null);
@@ -1148,6 +1153,87 @@ export function ChatPanel({
         if (isCurrentListRequest()) setAgentRunsLoading(false);
       });
   };
+
+  useEffect(() => {
+    if (activeTab !== 'runs' || !projectName || !hasActiveAgentRuns || agentRunsLoading) return;
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      if (agentRunsRefreshInFlightRef.current) return;
+      const requestProjectName = projectName;
+      agentRunsListSeqRef.current += 1;
+      const requestSeq = agentRunsListSeqRef.current;
+      const isCurrentListRequest = () => (
+        !cancelled
+        && agentRunsListSeqRef.current === requestSeq
+        && latestProjectNameRef.current === requestProjectName
+      );
+      agentRunsRefreshInFlightRef.current = true;
+      void api.listAgentRuns(requestProjectName)
+        .then(runs => {
+          if (!isCurrentListRequest()) return;
+          setAgentRuns(runs);
+          setAgentRunsError(null);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrentListRequest()) return;
+          setAgentRunsError(agentRunRefreshErrorMessage(err));
+        })
+        .finally(() => {
+          if (isCurrentListRequest()) setAgentRunsLoading(false);
+          if (!cancelled) agentRunsRefreshInFlightRef.current = false;
+        });
+    }, AGENT_RUN_REFRESH_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      agentRunsRefreshInFlightRef.current = false;
+      window.clearInterval(timer);
+    };
+  }, [activeTab, projectName, hasActiveAgentRuns, agentRunsLoading]);
+
+  useEffect(() => {
+    const requestProjectName = projectName;
+    const requestRun = selectedRun;
+    const requestRunId = requestRun?.id;
+    if (
+      activeTab !== 'runs'
+      || !requestProjectName
+      || !requestRunId
+      || isTerminalAgentRun(requestRun.status)
+    ) {
+      return;
+    }
+
+    let cancelled = false;
+    const timer = window.setInterval(() => {
+      if (detailRequestKeyRef.current || detailPollInFlightRef.current) return;
+      detailPollInFlightRef.current = true;
+      const isCurrentDetailPoll = () => (
+        !cancelled
+        && latestProjectNameRef.current === requestProjectName
+        && selectedRunId === requestRunId
+      );
+      api.getAgentRun(requestProjectName, requestRunId)
+        .then(run => {
+          if (!isCurrentDetailPoll()) return;
+          setSelectedRunId(run.id);
+          setSelectedRun(run);
+          setDetailError(null);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrentDetailPoll()) return;
+          setDetailError(agentRunDetailErrorMessage(err));
+        })
+        .finally(() => {
+          if (!cancelled) detailPollInFlightRef.current = false;
+        });
+    }, AGENT_RUN_REFRESH_INTERVAL_MS);
+
+    return () => {
+      cancelled = true;
+      detailPollInFlightRef.current = false;
+      window.clearInterval(timer);
+    };
+  }, [activeTab, projectName, selectedRun?.id, selectedRun?.status, selectedRunId]);
 
   const createAgentRun = () => {
     const requestProjectName = projectName;

@@ -1,8 +1,8 @@
 import { createRef } from 'react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
-import type { AgentRun } from '../../api';
+import type { AgentRun, AgentRunSummary } from '../../api';
 import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
@@ -52,6 +52,29 @@ describe('ChatPanel', () => {
     approvals: [],
     ...overrides,
   });
+  const agentRunSummaryFixture = (overrides: Partial<AgentRunSummary> = {}): AgentRunSummary => ({
+    id: 'run_fixture',
+    project: 'demo',
+    provider_id: 'codex',
+    mode: 'read_only',
+    status: 'completed',
+    prompt_preview: 'Fixture run',
+    prompt_hash: 'sha256:fixture',
+    created_at: '2026-07-01T10:00:00Z',
+    updated_at: '2026-07-01T10:00:00Z',
+    canceled: false,
+    log_count: 0,
+    patch_count: 0,
+    approval_count: 0,
+    pending_approval_count: 0,
+    ...overrides,
+  });
+  const flushAsyncUpdates = async () => {
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+  };
 
   beforeEach(() => {
     listLocalAgentProvidersMock.mockReset();
@@ -67,6 +90,10 @@ describe('ChatPanel', () => {
     decideAgentRunApprovalMock.mockReset();
     decideAgentRunApprovalMock.mockResolvedValue({});
     window.localStorage.clear();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   it('renders the empty-state hint when no messages are present', () => {
@@ -679,6 +706,195 @@ describe('ChatPanel', () => {
       expect(within(runsPanel).getByText('running')).toBeInTheDocument();
     });
     expect(within(runsPanel).queryByText('agent run changed before queueing')).not.toBeInTheDocument();
+  });
+
+  it('auto-refreshes active run summaries while the Runs tab is open', async () => {
+    vi.useFakeTimers();
+    listAgentRunsMock
+      .mockResolvedValueOnce([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'running',
+        prompt_preview: 'Watch the live run',
+      })])
+      .mockResolvedValueOnce([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'completed',
+        prompt_preview: 'Watch the live run',
+        updated_at: '2026-07-01T10:00:05Z',
+        completed_at: '2026-07-01T10:00:05Z',
+        log_count: 1,
+      })])
+      .mockResolvedValue([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'completed',
+        prompt_preview: 'Watch the live run',
+        updated_at: '2026-07-01T10:00:05Z',
+        completed_at: '2026-07-01T10:00:05Z',
+        log_count: 1,
+      })]);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await flushAsyncUpdates();
+    expect(within(runsPanel).getByText('running')).toBeInTheDocument();
+    expect(listAgentRunsMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(within(runsPanel).getByText('completed')).toBeInTheDocument();
+    expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears transient summary polling errors after a successful refresh', async () => {
+    vi.useFakeTimers();
+    listAgentRunsMock
+      .mockResolvedValueOnce([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'running',
+        prompt_preview: 'Watch the live run',
+      })])
+      .mockRejectedValueOnce(new Error('temporary outage'))
+      .mockResolvedValue([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'running',
+        prompt_preview: 'Watch the live run after recovery',
+        updated_at: '2026-07-01T10:00:10Z',
+        log_count: 1,
+      })]);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await flushAsyncUpdates();
+    expect(within(runsPanel).getByText('Watch the live run')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(within(runsPanel).getByText('agent run refresh failed: temporary outage')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(within(runsPanel).queryByText('Could not load agent runs.')).not.toBeInTheDocument();
+    expect(within(runsPanel).queryByText('agent run refresh failed: temporary outage')).not.toBeInTheDocument();
+    expect(within(runsPanel).getByText('Watch the live run after recovery')).toBeInTheDocument();
+  });
+
+  it('auto-refreshes open active run details', async () => {
+    vi.useFakeTimers();
+    listAgentRunsMock
+      .mockResolvedValueOnce([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'running',
+        prompt_preview: 'Watch detail logs',
+      })])
+      .mockResolvedValue([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'completed',
+        prompt_preview: 'Watch detail logs',
+        updated_at: '2026-07-01T10:00:05Z',
+        completed_at: '2026-07-01T10:00:05Z',
+        log_count: 1,
+      })]);
+    getAgentRunMock
+      .mockResolvedValueOnce(agentRunFixture({
+        id: 'run_000001',
+        status: 'running',
+        prompt_preview: 'Watch detail logs',
+      }))
+      .mockResolvedValueOnce(agentRunFixture({
+        id: 'run_000001',
+        status: 'completed',
+        prompt_preview: 'Watch detail logs',
+        log_count: 1,
+        logs: [{
+          id: 'log_000001',
+          at: '2026-07-01T10:00:05Z',
+          level: 'info',
+          message: 'Finished live run',
+        }],
+      }));
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await flushAsyncUpdates();
+    expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+
+    await flushAsyncUpdates();
+    expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+    expect(getAgentRunMock).toHaveBeenCalledTimes(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(within(runsPanel).getByText('Finished live run')).toBeInTheDocument();
+    expect(getAgentRunMock).toHaveBeenCalledTimes(2);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(getAgentRunMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not block switching run details while a detail poll is in flight', async () => {
+    vi.useFakeTimers();
+
+    // Two active runs so both detail buttons are visible
+    listAgentRunsMock.mockResolvedValue([
+      agentRunSummaryFixture({ id: 'run_000001', status: 'running', prompt_preview: 'Run one' }),
+      agentRunSummaryFixture({ id: 'run_000002', status: 'running', prompt_preview: 'Run two' }),
+    ]);
+
+    // First user-initiated detail fetch for run_000001 (running)
+    // Then poll fires for run_000001
+    // Then user switches to run_000002
+    let resolveFirstPoll!: (_value: AgentRun) => void;
+    const firstPollPromise = new Promise<AgentRun>(res => { resolveFirstPoll = res; });
+    getAgentRunMock
+      .mockResolvedValueOnce(agentRunFixture({ id: 'run_000001', status: 'running' }))
+      .mockReturnValueOnce(firstPollPromise) // stalled poll for run_000001
+      .mockResolvedValue(agentRunFixture({ id: 'run_000002', status: 'running' }));
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="new task" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await flushAsyncUpdates();
+
+    // Open details for run_000001
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+    await flushAsyncUpdates();
+    expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+
+    // Advance timer so the detail poll fires (firstPollPromise stalls in flight)
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(getAgentRunMock).toHaveBeenCalledTimes(2); // 1 user-init + 1 poll
+
+    // While poll is stalled, switching to run_000002 must succeed immediately
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000002' }));
+    await flushAsyncUpdates();
+    expect(within(runsPanel).getByRole('region', { name: 'run_000002 details' })).toBeInTheDocument();
+
+    // Resolve the stalled poll — its response must be silently discarded
+    await act(async () => { resolveFirstPoll(agentRunFixture({ id: 'run_000001', status: 'running' })); });
+    expect(within(runsPanel).getByRole('region', { name: 'run_000002 details' })).toBeInTheDocument();
   });
 
   it('loads one run detail record with logs, patches, and approvals', async () => {
