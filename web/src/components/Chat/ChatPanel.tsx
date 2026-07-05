@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactNode, RefObject } from 'react';
 
-import { api, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
+import { api, type AgentProviderConnectionDefinition, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
 
 export interface ChatMessage {
@@ -136,6 +136,15 @@ const PROVIDER_GROUPS: Record<ProviderTab, {
   },
 };
 
+const PROVIDER_CONNECTION_FAMILIES: Record<ProviderTab, string[]> = {
+  codex: ['openai', 'azure_openai', 'gateway'],
+  claude: ['anthropic', 'gateway'],
+  gemini: ['vertex', 'gateway'],
+  copilot: ['gateway'],
+  local: [],
+  mcp: ['bedrock', 'vertex', 'gateway'],
+};
+
 const stateLabels: Record<ProviderState, string> = {
   available: 'Available',
   setup: 'Setup',
@@ -238,6 +247,10 @@ const hubStyles: Record<string, CSSProperties> = {
   providerActions: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 },
   providerActionButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', cursor: 'not-allowed', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '6px 9px', opacity: 0.72 },
   providerActionHint: { color: '#77847d', fontSize: 11 },
+  connectionCatalog: { gridColumn: '1 / -1', borderTop: '1px solid var(--border-soft)', paddingTop: 10, marginTop: 2, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 8 },
+  connectionCatalogIntro: { gridColumn: '1 / -1', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45 },
+  connectionCard: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-main)', borderRadius: 8, background: 'rgba(23, 29, 27, 0.68)', padding: 10, minWidth: 0 },
+  connectionHint: { color: '#77847d', fontSize: 11, lineHeight: 1.4, marginTop: 6, overflowWrap: 'anywhere' },
   runsPanel: { flex: 1, minHeight: 0, overflowY: 'auto', padding: 12, display: 'flex', flexDirection: 'column', gap: 8 },
   runsEmpty: { flex: 1, minHeight: 0, padding: 16, color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.55 },
   runQueueCard: { borderWidth: 1, borderStyle: 'solid', borderColor: 'rgba(84, 184, 169, 0.32)', borderRadius: 8, background: 'rgba(84, 184, 169, 0.08)', padding: 10, minWidth: 0 },
@@ -280,7 +293,24 @@ function providerStatus(state: ProviderState) {
 function credentialLabel(mode: string) {
   if (mode === 'none') return 'No credentials';
   if (mode === 'external_login') return 'External login';
+  if (mode === 'secret_store') return 'Secret store';
+  if (mode === 'cloud_connection') return 'Cloud Connection';
+  if (mode === 'enterprise_sso') return 'Enterprise SSO';
   return mode;
+}
+
+function compactList(items: string[], empty = 'None') {
+  if (items.length === 0) return empty;
+  return items.map(item => item.replaceAll('_', ' ')).join(', ');
+}
+
+function connectionProvidersForTab(
+  tab: ProviderTab,
+  providers: AgentProviderConnectionDefinition[],
+) {
+  const families = PROVIDER_CONNECTION_FAMILIES[tab];
+  if (families.length === 0) return [];
+  return providers.filter(provider => families.includes(provider.family));
 }
 
 function providerDisplay(provider: Pick<ProviderDefinition, 'state' | 'note'>, status?: LocalAgentProviderStatus) {
@@ -411,20 +441,88 @@ function ProviderDetails({
   );
 }
 
+function ConnectionCatalog({
+  title,
+  providers,
+}: {
+  title: string;
+  providers: AgentProviderConnectionDefinition[];
+}) {
+  if (providers.length === 0) return null;
+  return (
+    <section
+      role="region"
+      aria-label={`${title} API and enterprise connection catalog`}
+      style={hubStyles.connectionCatalog}
+    >
+      <div style={hubStyles.connectionCatalogIntro}>
+        <strong style={{ color: 'var(--text-main)' }}>API and enterprise connections</strong>
+        <span> - read-only catalog metadata. Credentials stay behind local or external secret stores.</span>
+      </div>
+      {providers.map(provider => (
+        <article key={provider.id} style={hubStyles.connectionCard} aria-label={`${provider.name} connection`}>
+          <div style={hubStyles.providerHead}>
+            <span style={{ ...hubStyles.providerName, flex: 1 }}>{provider.name}</span>
+            <span style={hubStyles.badge}>{provider.category.replaceAll('_', ' ')}</span>
+          </div>
+          <div style={hubStyles.providerMeta}>
+            <span style={hubStyles.badge}>{credentialLabel(provider.credential_mode)}</span>
+            <span style={hubStyles.badge}>{provider.family.replaceAll('_', ' ')}</span>
+          </div>
+          <div style={hubStyles.connectionHint}>{provider.billing_hint}</div>
+          <div style={hubStyles.connectionHint}>{provider.data_handling_hint}</div>
+          <div style={hubStyles.connectionHint}>{provider.secret_storage_hint}</div>
+          <div style={hubStyles.providerDetailsGrid}>
+            <div>
+              <div style={hubStyles.providerDetailLabel}>Required</div>
+              <div style={hubStyles.providerDetailValue} title={compactList(provider.required_fields)}>
+                {compactList(provider.required_fields)}
+              </div>
+            </div>
+            <div>
+              <div style={hubStyles.providerDetailLabel}>Secrets</div>
+              <div style={hubStyles.providerDetailValue} title={compactList(provider.secret_fields)}>
+                {compactList(provider.secret_fields)}
+              </div>
+            </div>
+          </div>
+          {provider.capabilities.length > 0 && (
+            <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} capabilities`}>
+              {provider.capabilities.map(capability => (
+                <span key={capability} style={hubStyles.badge}>{capability.replaceAll('_', ' ')}</span>
+              ))}
+            </div>
+          )}
+          {provider.cost_controls.length > 0 && (
+            <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} cost controls`}>
+              {provider.cost_controls.map(control => (
+                <span key={control} style={hubStyles.badge}>{control.replaceAll('_', ' ')}</span>
+              ))}
+            </div>
+          )}
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function ProviderGroup({
   tab,
   active,
   localProviders,
+  connectionProviders,
   selectedProviderName,
   onSelectProvider,
 }: {
   tab: ProviderTab;
   active: boolean;
   localProviders: Record<string, LocalAgentProviderStatus>;
+  connectionProviders: AgentProviderConnectionDefinition[];
   selectedProviderName?: string;
   onSelectProvider: (tab: ProviderTab, providerName: string) => void;
 }) {
   const group = PROVIDER_GROUPS[tab];
+  const visibleConnectionProviders = connectionProvidersForTab(tab, connectionProviders);
   const selectedProvider = group.providers.find(provider => provider.name === selectedProviderName) ?? group.providers[0];
   const selectedLocalStatus = selectedProvider.localProviderId ? localProviders[selectedProvider.localProviderId] : undefined;
   const selectedDisplay = providerDisplay(selectedProvider, selectedLocalStatus);
@@ -488,6 +586,7 @@ function ProviderGroup({
         displayNote={selectedDisplay.note}
         localStatus={selectedLocalStatus}
       />
+      <ConnectionCatalog title={group.title} providers={visibleConnectionProviders} />
     </div>
   );
 }
@@ -1010,6 +1109,7 @@ export function ChatPanel({
   const [activeTask, setActiveTask] = useState<typeof TASK_MODES[number]>(() => readStoredTaskMode());
   const [selectedProviders, setSelectedProviders] = useState<Partial<Record<ProviderTab, string>>>({});
   const [localProviders, setLocalProviders] = useState<Record<string, LocalAgentProviderStatus>>({});
+  const [connectionProviders, setConnectionProviders] = useState<AgentProviderConnectionDefinition[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
   const [agentRunsLoading, setAgentRunsLoading] = useState(false);
   const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
@@ -1037,6 +1137,20 @@ export function ChatPanel({
       })
       .catch(() => {
         if (!cancelled) setLocalProviders({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listAgentProviderConnections()
+      .then(providers => {
+        if (!cancelled) setConnectionProviders(providers);
+      })
+      .catch(() => {
+        if (!cancelled) setConnectionProviders([]);
       });
     return () => {
       cancelled = true;
@@ -1487,6 +1601,7 @@ export function ChatPanel({
               tab={tab}
               active={activeTab === tab}
               localProviders={localProviders}
+              connectionProviders={connectionProviders}
               selectedProviderName={selectedProviders[tab]}
               onSelectProvider={selectProvider}
             />
