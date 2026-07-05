@@ -408,6 +408,8 @@ describe('ChatPanel', () => {
     expect(listAgentRunsMock).toHaveBeenCalledWith('demo');
     expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
     expect(within(runsPanel).getAllByText('read only').length).toBeGreaterThan(0);
+    expect(within(runsPanel).getByText('Codex CLI')).toBeInTheDocument();
+    expect(within(runsPanel).getByTitle('codex')).toBeInTheDocument();
     expect(within(runsPanel).getByText('2 logs')).toBeInTheDocument();
     expect(within(runsPanel).getByText('1 pending')).toBeInTheDocument();
     expect(within(runsPanel).getByText('Run terraform plan after reviewing the patch')).toBeInTheDocument();
@@ -452,7 +454,7 @@ describe('ChatPanel', () => {
     });
     expect(within(runsPanel).getByText('Apply the reviewed Terraform plan')).toBeInTheDocument();
     expect(within(runsPanel).getByText('propose only')).toBeInTheDocument();
-    expect(within(runsPanel).getByText('ollama')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('Ollama')).toBeInTheDocument();
 
     fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
 
@@ -478,7 +480,7 @@ describe('ChatPanel', () => {
     await waitFor(() => {
       expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
     });
-    expect(within(runsPanel).getByText('codex-openai-api')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('OpenAI API')).toBeInTheDocument();
 
     fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
 
@@ -489,6 +491,35 @@ describe('ChatPanel', () => {
         provider_id: 'codex-openai-api',
       });
     });
+  });
+
+  it('falls back to raw provider ids for unknown run providers', async () => {
+    listAgentRunsMock.mockResolvedValueOnce([{
+      id: 'run_000001',
+      project: 'demo',
+      provider_id: 'custom-provider-bridge',
+      mode: 'read_only',
+      status: 'queued',
+      prompt_preview: 'Review this project for custom policy checks',
+      prompt_hash: 'sha256:xyz',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:00:00Z',
+      canceled: false,
+      log_count: 0,
+      patch_count: 0,
+      approval_count: 0,
+      pending_approval_count: 0,
+    }]);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByText('Review this project for custom policy checks')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).getByText('custom-provider-bridge')).toBeInTheDocument();
+    expect(within(runsPanel).getByTitle('custom-provider-bridge')).toBeInTheDocument();
   });
 
   it('ignores stale run-list responses after queue refresh wins', async () => {
@@ -724,6 +755,7 @@ describe('ChatPanel', () => {
     });
 
     const details = within(runsPanel).getByRole('region', { name: 'run_000001 details' });
+    expect(within(details).getByText('Codex CLI')).toBeInTheDocument();
     expect(within(details).getByText('Started read-only project review')).toBeInTheDocument();
     expect(within(details).getByText('Restrict S3 bucket ACL')).toBeInTheDocument();
     expect(within(details).getByText(/public-read/)).toBeInTheDocument();

@@ -46,6 +46,7 @@ type ProviderLane =
   | 'OpenAI-compatible';
 type ProviderActionLabel = 'Configure API' | 'Use enterprise policy' | 'Use local CLI';
 type ProviderDefinition = { name: string; lane: ProviderLane; state: ProviderState; note: string; localProviderId?: string };
+type RunProviderIdentity = { id: string; label: string };
 
 const PROVIDER_TABS: ProviderTab[] = ['codex', 'claude', 'gemini', 'copilot', 'local', 'mcp'];
 
@@ -335,6 +336,17 @@ function selectedRunProviderId(tab: ProviderTab, selectedProviderName?: string) 
   return providerIdForRun(tab, provider);
 }
 
+function providerIdentityForRunId(providerId?: string): RunProviderIdentity | null {
+  if (!providerId) return null;
+  for (const tab of PROVIDER_TABS) {
+    for (const provider of PROVIDER_GROUPS[tab].providers) {
+      const id = providerIdForRun(tab, provider);
+      if (id === providerId) return { id, label: provider.name };
+    }
+  }
+  return { id: providerId, label: providerId };
+}
+
 function ProviderDetails({
   provider,
   displayState,
@@ -547,6 +559,20 @@ function RunDetailSection({
   );
 }
 
+function ProviderBadge({ providerId }: { providerId?: string }) {
+  const provider = providerIdentityForRunId(providerId);
+  if (!provider) return null;
+  return (
+    <span
+      style={hubStyles.badge}
+      title={provider.id}
+      aria-label={`Provider ${provider.label}`}
+    >
+      {provider.label}
+    </span>
+  );
+}
+
 function RunDetailPanel({
   run,
   selectedRunId,
@@ -618,7 +644,7 @@ function RunDetailPanel({
       <div style={hubStyles.runPreview}>{run.prompt_preview || 'Prompt preview unavailable'}</div>
       <div style={hubStyles.runMeta}>
         <span style={hubStyles.badge}>{runModeLabel(run.mode)}</span>
-        {run.provider_id && <span style={hubStyles.badge}>{run.provider_id}</span>}
+        <ProviderBadge providerId={run.provider_id} />
         <span style={hubStyles.badge}>{run.prompt_hash}</span>
       </div>
 
@@ -701,7 +727,7 @@ function RunQueueCard({
         <strong style={{ color: 'var(--text-main)', fontSize: 12, flex: 1 }}>Queue audited run</strong>
         <span style={hubStyles.badge}>{task}</span>
         <span style={hubStyles.badge}>{runModeLabel(mode)}</span>
-        <span style={hubStyles.badge}>{providerId}</span>
+        <ProviderBadge providerId={providerId} />
         <button
           type="button"
           style={{
@@ -764,7 +790,7 @@ function RunSummaryCard({
       </div>
       <div style={hubStyles.runMeta}>
         <span style={hubStyles.badge}>{runModeLabel(run.mode)}</span>
-        {run.provider_id && <span style={hubStyles.badge}>{run.provider_id}</span>}
+        <ProviderBadge providerId={run.provider_id} />
         <span style={hubStyles.badge}>{run.log_count} logs</span>
         <span style={hubStyles.badge}>{run.patch_count} patches</span>
         <span style={hubStyles.badge}>{run.approval_count} approvals</span>
