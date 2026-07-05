@@ -754,6 +754,45 @@ describe('ChatPanel', () => {
     expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
   });
 
+  it('clears transient summary polling errors after a successful refresh', async () => {
+    vi.useFakeTimers();
+    listAgentRunsMock
+      .mockResolvedValueOnce([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'running',
+        prompt_preview: 'Watch the live run',
+      })])
+      .mockRejectedValueOnce(new Error('temporary outage'))
+      .mockResolvedValue([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'running',
+        prompt_preview: 'Watch the live run after recovery',
+        updated_at: '2026-07-01T10:00:10Z',
+        log_count: 1,
+      })]);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await flushAsyncUpdates();
+    expect(within(runsPanel).getByText('Watch the live run')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(within(runsPanel).getByText('agent run refresh failed: temporary outage')).toBeInTheDocument();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+
+    expect(within(runsPanel).queryByText('Could not load agent runs.')).not.toBeInTheDocument();
+    expect(within(runsPanel).queryByText('agent run refresh failed: temporary outage')).not.toBeInTheDocument();
+    expect(within(runsPanel).getByText('Watch the live run after recovery')).toBeInTheDocument();
+  });
+
   it('auto-refreshes open active run details', async () => {
     vi.useFakeTimers();
     listAgentRunsMock

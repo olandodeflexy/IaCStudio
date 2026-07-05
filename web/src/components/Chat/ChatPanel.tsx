@@ -1172,6 +1172,7 @@ export function ChatPanel({
         .then(runs => {
           if (!isCurrentListRequest()) return;
           setAgentRuns(runs);
+          setAgentRunsError(null);
         })
         .catch((err: unknown) => {
           if (!isCurrentListRequest()) return;
