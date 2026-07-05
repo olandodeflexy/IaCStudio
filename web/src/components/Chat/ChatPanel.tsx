@@ -486,16 +486,20 @@ function ConnectionCatalog({
               </div>
             </div>
           </div>
-          <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} capabilities`}>
-            {provider.capabilities.slice(0, 4).map(capability => (
-              <span key={capability} style={hubStyles.badge}>{capability.replaceAll('_', ' ')}</span>
-            ))}
-          </div>
-          <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} cost controls`}>
-            {provider.cost_controls.slice(0, 3).map(control => (
-              <span key={control} style={hubStyles.badge}>{control.replaceAll('_', ' ')}</span>
-            ))}
-          </div>
+          {provider.capabilities.length > 0 && (
+            <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} capabilities`}>
+              {provider.capabilities.slice(0, 4).map(capability => (
+                <span key={capability} style={hubStyles.badge}>{capability.replaceAll('_', ' ')}</span>
+              ))}
+            </div>
+          )}
+          {provider.cost_controls.length > 0 && (
+            <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} cost controls`}>
+              {provider.cost_controls.slice(0, 3).map(control => (
+                <span key={control} style={hubStyles.badge}>{control.replaceAll('_', ' ')}</span>
+              ))}
+            </div>
+          )}
         </article>
       ))}
     </section>
