@@ -45,6 +45,16 @@ func TestDefaultConnectionProviderOrderAndSecurityMetadata(t *testing.T) {
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("connection provider order = %#v, want %#v", got, want)
 	}
+	for _, definition := range definitions {
+		if definition.ID == "aws-bedrock" || definition.ID == "vertex-ai" {
+			if !containsString(definition.RequiredFields, "connection_id") {
+				t.Fatalf("%s required fields = %#v, want connection_id", definition.ID, definition.RequiredFields)
+			}
+			if containsString(definition.RequiredFields, "cloud_connection_id") {
+				t.Fatalf("%s required fields should use connection_id convention: %#v", definition.ID, definition.RequiredFields)
+			}
+		}
+	}
 }
 
 func TestDefaultConnectionProvidersDoNotContainSecretValues(t *testing.T) {
@@ -308,6 +318,15 @@ func TestStatusNormalizesListFieldsForJSONConsumers(t *testing.T) {
 func containsAny(s string, needles []string) bool {
 	for _, needle := range needles {
 		if len(needle) > 0 && strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
 			return true
 		}
 	}

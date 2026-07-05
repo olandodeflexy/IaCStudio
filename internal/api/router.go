@@ -1107,6 +1107,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		})
 	})
 	mux.HandleFunc("GET /api/agent-hub/providers/connections", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"providers": opts.agentProviderConnections(),
 		})

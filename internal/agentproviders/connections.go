@@ -28,6 +28,8 @@ type ConnectionProviderDefinition struct {
 	SetupHint         string   `json:"setup_hint"`
 }
 
+// DefaultConnectionProviders returns the built-in API and enterprise provider
+// connection catalog without resolved credential values.
 func DefaultConnectionProviders() []ConnectionProviderDefinition {
 	return []ConnectionProviderDefinition{
 		{
@@ -110,7 +112,7 @@ func DefaultConnectionProviders() []ConnectionProviderDefinition {
 			Family:         "bedrock",
 			Category:       ConnectionCategoryAPI,
 			CredentialMode: ConnectionCredentialCloudConnection,
-			RequiredFields: []string{"region", "model_id", "cloud_connection_id"},
+			RequiredFields: []string{"region", "model_id", "connection_id"},
 			SecretFields:   []string{},
 			Capabilities: []string{
 				"chat",
@@ -133,7 +135,7 @@ func DefaultConnectionProviders() []ConnectionProviderDefinition {
 			Family:         "vertex",
 			Category:       ConnectionCategoryAPI,
 			CredentialMode: ConnectionCredentialCloudConnection,
-			RequiredFields: []string{"project_id", "location", "model", "cloud_connection_id"},
+			RequiredFields: []string{"project_id", "location", "model", "connection_id"},
 			SecretFields:   []string{},
 			Capabilities: []string{
 				"chat",
