@@ -131,7 +131,7 @@ Click **gear icon** in the app header to switch providers at any time.
 The Agent Hub gives AI work a reviewable run lifecycle instead of letting an
 assistant freely edit files, run commands, or touch cloud credentials.
 
-1. **Queue a run** from the Agent Hub Runs tab. New runs default to
+1. **Queue a run** from the Runs tab. New runs default to
    `read_only`; callers can also request `propose_only` or `approved_execute`.
 2. **Watch the audit trail** in the Runs tab. IaC Studio records status,
    provider, prompt preview, prompt hash, logs, proposed patches, and pending
