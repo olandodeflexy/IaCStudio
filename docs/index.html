@@ -733,6 +733,47 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
           </div>
         </section>
 
+        <section id="agent-hub-runs" class="doc-section" data-title="agent hub runs lifecycle approval gates patches cancellation read only propose approved execute">
+          <h2>Agent Hub Runs</h2>
+          <p>
+            Agent Hub runs turn AI work into an auditable project-scoped workflow.
+            The goal is to let assistants inspect, propose, and request gated actions
+            without receiving unrestricted filesystem, shell, cloud, or secret access.
+          </p>
+
+          <ol class="steps">
+            <li><strong>Queue a run.</strong> The Runs tab creates a project-scoped run with provider metadata, a prompt preview, and a prompt fingerprint.</li>
+            <li><strong>Follow status.</strong> Runs move through <code>queued</code>, <code>running</code>, <code>waiting_approval</code>, and terminal states such as <code>completed</code>, <code>failed</code>, or <code>canceled</code>.</li>
+            <li><strong>Review output.</strong> Logs, proposed patches, and pending gates are visible before any risky action proceeds.</li>
+            <li><strong>Approve or reject gates.</strong> Rejected gates fail closed. Non-terminal runs can be canceled from the UI.</li>
+          </ol>
+
+          <div class="feature-grid compact">
+            <article>
+              <h3>Read-only</h3>
+              <p><code>read_only</code> is the default mode. It records inspection work and logs without proposing mutations.</p>
+            </article>
+            <article>
+              <h3>Propose-only</h3>
+              <p><code>propose_only</code> can produce diffs or review artifacts, but the run lifecycle does not apply them automatically.</p>
+            </article>
+            <article>
+              <h3>Approved execute</h3>
+              <p><code>approved_execute</code> still requires explicit gates before file writes, commands, IaC actions, cloud writes, secret reads, or networked MCP calls.</p>
+            </article>
+            <article>
+              <h3>Near-live view</h3>
+              <p>The Runs tab refreshes active summaries and open run details while work is in progress, then stops polling after terminal states.</p>
+            </article>
+          </div>
+
+          <div class="callout">
+            Agent run responses do not return raw cloud credentials. Prompt history is represented
+            by a bounded preview and HMAC fingerprint, and proposed file changes are surfaced as
+            diffs before any apply path should be considered.
+          </div>
+        </section>
+
         <section id="mcp-server" class="doc-section" data-title="mcp server ai clients claude cursor codex tools approval audit">
           <h2>MCP Server</h2>
           <p>
@@ -837,6 +878,10 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
               <p>Infrastructure commands run through a safe runner with timeouts, captured logs, and a kill path.</p>
             </article>
             <article>
+              <h3>Agent run gates</h3>
+              <p>AI tasks default to read-only, keep an audit trail, surface patches as diffs, and require explicit approval for high-risk actions.</p>
+            </article>
+            <article>
               <h3>Cloud target context</h3>
               <p>Selected Cloud Connections are validated before command execution and inject provider env only for that run.</p>
             </article>
@@ -898,6 +943,11 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
                   <td>AI</td>
                   <td><code>POST /api/ai/chat</code><br><code>POST /api/ai/chat/stream</code><br><code>POST /api/ai/topology</code><br><code>POST /api/ai/topology/image</code><br><code>POST /api/ai/fix</code><br><code>POST /api/ai/suggest</code><br><code>POST /api/ai/settings</code></td>
                   <td>Chat, streaming responses, topology generation, image import, plan fixes, suggestions, and provider settings.</td>
+                </tr>
+                <tr>
+                  <td>Agent runs</td>
+                  <td><code>GET /api/projects/{name}/agent-runs</code><br><code>POST /api/projects/{name}/agent-runs</code><br><code>GET /api/projects/{name}/agent-runs/{id}</code><br><code>POST /api/projects/{name}/agent-runs/{id}/cancel</code><br><code>POST /api/projects/{name}/agent-runs/{id}/approvals/{approvalID}/decision</code></td>
+                  <td>Create project-scoped AI runs, list summaries, load audit details, cancel non-terminal work, and approve or reject pending gates.</td>
                 </tr>
                 <tr>
                   <td>Policy and scanning</td>
