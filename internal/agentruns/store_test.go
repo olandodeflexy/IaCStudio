@@ -204,6 +204,63 @@ func TestStoreSetStatusCanceledMarksCanceled(t *testing.T) {
 	}
 }
 
+func TestStoreCancelAddsAuditLog(t *testing.T) {
+	clock := fixedClock()
+	store := NewStore(WithClock(clock.now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	clock.tick(time.Second)
+	run, err = store.Cancel(run.ID)
+	if err != nil {
+		t.Fatalf("Cancel returned error: %v", err)
+	}
+	if len(run.Logs) != 1 {
+		t.Fatalf("cancel logs = %+v, want one audit log", run.Logs)
+	}
+	auditLog := run.Logs[0]
+	if auditLog.ID != "log_000001" || auditLog.Level != LogAudit || auditLog.At != clock.current {
+		t.Fatalf("cancel audit log metadata = %+v, want first audit log at %s", auditLog, clock.current)
+	}
+	if auditLog.Message != "Agent run canceled." {
+		t.Fatalf("cancel audit log message = %q", auditLog.Message)
+	}
+}
+
+func TestStoreFailAddsAuditLogAndRedactsReason(t *testing.T) {
+	clock := fixedClock()
+	store := NewStore(WithClock(clock.now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+
+	clock.tick(time.Second)
+	run, err = store.Fail(run.ID, "provider failed with token=runner-secret")
+	if err != nil {
+		t.Fatalf("Fail returned error: %v", err)
+	}
+	if run.Status != StatusFailed || run.CompletedAt == nil || *run.CompletedAt != clock.current {
+		t.Fatalf("failed state not recorded: %+v", run)
+	}
+	if strings.Contains(run.Error, "runner-secret") || !strings.Contains(run.Error, "[REDACTED]") {
+		t.Fatalf("run error was not redacted: %q", run.Error)
+	}
+	if len(run.Logs) != 1 {
+		t.Fatalf("failure logs = %+v, want one audit log", run.Logs)
+	}
+	auditLog := run.Logs[0]
+	if auditLog.ID != "log_000001" || auditLog.Level != LogAudit || auditLog.At != clock.current {
+		t.Fatalf("failure audit log metadata = %+v, want first audit log at %s", auditLog, clock.current)
+	}
+	if !strings.Contains(auditLog.Message, "Agent run failed: provider failed with token= [REDACTED]") ||
+		strings.Contains(auditLog.Message, "runner-secret") {
+		t.Fatalf("failure audit log was not redacted: %q", auditLog.Message)
+	}
+}
+
 func TestStoreLifecycleUpdates(t *testing.T) {
 	clock := fixedClock()
 	store := NewStore(WithClock(clock.now))

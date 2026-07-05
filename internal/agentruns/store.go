@@ -315,6 +315,7 @@ func (s *Store) Cancel(id string) (Run, error) {
 		if run.CompletedAt == nil {
 			run.CompletedAt = timePtr(now)
 		}
+		appendLog(run, now, LogAudit, "Agent run canceled.")
 		return nil
 	})
 }
@@ -324,10 +325,16 @@ func (s *Store) Fail(id string, message string) (Run, error) {
 		if terminalStatus(run.Status) {
 			return ErrTerminated
 		}
+		failureMessage := truncate(redactText(message), maxLogMessageLen)
 		run.Status = StatusFailed
-		run.Error = truncate(redactText(message), maxLogMessageLen)
+		run.Error = failureMessage
 		if run.CompletedAt == nil {
 			run.CompletedAt = timePtr(now)
+		}
+		if failureMessage == "" {
+			appendLog(run, now, LogAudit, "Agent run failed.")
+		} else {
+			appendLog(run, now, LogAudit, "Agent run failed: "+failureMessage)
 		}
 		return nil
 	})
