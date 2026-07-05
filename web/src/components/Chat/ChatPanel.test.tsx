@@ -408,6 +408,7 @@ describe('ChatPanel', () => {
     expect(listAgentRunsMock).toHaveBeenCalledWith('demo');
     expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
     expect(within(runsPanel).getAllByText('read only').length).toBeGreaterThan(0);
+    expect(within(runsPanel).getByText('Codex CLI')).toBeInTheDocument();
     expect(within(runsPanel).getByText('2 logs')).toBeInTheDocument();
     expect(within(runsPanel).getByText('1 pending')).toBeInTheDocument();
     expect(within(runsPanel).getByText('Run terraform plan after reviewing the patch')).toBeInTheDocument();
@@ -452,7 +453,7 @@ describe('ChatPanel', () => {
     });
     expect(within(runsPanel).getByText('Apply the reviewed Terraform plan')).toBeInTheDocument();
     expect(within(runsPanel).getByText('propose only')).toBeInTheDocument();
-    expect(within(runsPanel).getByText('ollama')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('Ollama')).toBeInTheDocument();
 
     fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
 
@@ -478,7 +479,7 @@ describe('ChatPanel', () => {
     await waitFor(() => {
       expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
     });
-    expect(within(runsPanel).getByText('codex-openai-api')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('OpenAI API')).toBeInTheDocument();
 
     fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
 
@@ -724,6 +725,7 @@ describe('ChatPanel', () => {
     });
 
     const details = within(runsPanel).getByRole('region', { name: 'run_000001 details' });
+    expect(within(details).getByText('Codex CLI')).toBeInTheDocument();
     expect(within(details).getByText('Started read-only project review')).toBeInTheDocument();
     expect(within(details).getByText('Restrict S3 bucket ACL')).toBeInTheDocument();
     expect(within(details).getByText(/public-read/)).toBeInTheDocument();
