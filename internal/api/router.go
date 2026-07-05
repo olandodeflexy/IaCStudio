@@ -1102,6 +1102,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// absolute executable paths; local endpoint checks only call loopback
 	// /v1/models probes with short timeouts and no credentials.
 	mux.HandleFunc("GET /api/agent-hub/providers/local", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"providers": opts.localAgentProviders(),
 		})

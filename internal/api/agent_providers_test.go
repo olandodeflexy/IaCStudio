@@ -51,6 +51,9 @@ func TestAgentHubLocalProvidersRouteUsesConfiguredDiscovery(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
 	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q, want application/json", got)
+	}
 	var body struct {
 		Providers []agentproviders.LocalProviderStatus `json:"providers"`
 	}
@@ -105,6 +108,9 @@ func TestAgentHubProviderConnectionsRouteUsesConfiguredCatalog(t *testing.T) {
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d", rec.Code)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("content type = %q, want application/json", got)
 	}
 	var body struct {
 		Providers []agentproviders.ConnectionProviderDefinition `json:"providers"`
