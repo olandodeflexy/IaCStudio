@@ -2,6 +2,7 @@ package agentproviderconnections
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"slices"
@@ -102,6 +103,79 @@ func TestSavePreservesExternalSecretRefsOnPartialUpdate(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "vault://llm/anthropic/api_key") {
 		t.Fatalf("external secret ref was not preserved: %s", string(data))
+	}
+}
+
+func TestSavePersistsUpdatedFieldsAfterPartialUpdate(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root)
+
+	created, err := manager.Save(Profile{
+		Name:           "OpenAI automation",
+		ProviderID:     "openai-api",
+		CredentialMode: "secret_store",
+		Secrets: map[string]string{
+			"api_key": "sk-original",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save profile: %v", err)
+	}
+
+	updated, err := manager.Save(Profile{
+		ID:             created.ID,
+		Name:           "OpenAI automation",
+		ProviderID:     "openai-api",
+		CredentialMode: "secret_store",
+		Metadata: map[string]string{
+			"model": "gpt-5",
+		},
+	})
+	if err != nil {
+		t.Fatalf("partial update profile: %v", err)
+	}
+	if updated.UpdatedAt.IsZero() {
+		t.Fatal("updated response should include UpdatedAt")
+	}
+
+	data, err := os.ReadFile(filepath.Join(root, profilesFileName))
+	if err != nil {
+		t.Fatalf("read profiles file: %v", err)
+	}
+	var persisted []Profile
+	if err := json.Unmarshal(data, &persisted); err != nil {
+		t.Fatalf("parse persisted profiles: %v", err)
+	}
+	if len(persisted) != 1 {
+		t.Fatalf("persisted profiles = %#v", persisted)
+	}
+	if !persisted[0].UpdatedAt.Equal(updated.UpdatedAt) {
+		t.Fatalf("persisted UpdatedAt = %s, response UpdatedAt = %s", persisted[0].UpdatedAt, updated.UpdatedAt)
+	}
+	if persisted[0].SecretStore != cloudconnections.SecretStoreLocalEncrypted {
+		t.Fatalf("persisted secret store = %q", persisted[0].SecretStore)
+	}
+	if strings.TrimSpace(persisted[0].SecretRefs["api_key"]) == "" {
+		t.Fatalf("persisted secret refs should retain api_key presence: %#v", persisted[0].SecretRefs)
+	}
+}
+
+func TestSaveRejectsSecretRefsWithoutExplicitExternalStore(t *testing.T) {
+	manager := NewManager(t.TempDir())
+
+	_, err := manager.Save(Profile{
+		Name:           "OpenAI external ref",
+		ProviderID:     "openai-api",
+		CredentialMode: "secret_store",
+		SecretRefs: map[string]string{
+			"api_key": "vault://llm/openai/api_key",
+		},
+	})
+	if err == nil {
+		t.Fatal("Save should reject secret refs without an explicit secret store")
+	}
+	if !strings.Contains(err.Error(), "secret_store is required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

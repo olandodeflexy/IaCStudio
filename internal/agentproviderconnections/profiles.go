@@ -159,7 +159,7 @@ func (m *Manager) Save(input Profile) (PublicProfile, error) {
 	}
 
 	now := time.Now().UTC()
-	replaced := false
+	replaceIndex := -1
 	if input.ID == "" {
 		input.ID = newID()
 		input.CreatedAt = now
@@ -177,15 +177,16 @@ func (m *Manager) Save(input Profile) (PublicProfile, error) {
 			if input.SecretStore == "" || input.SecretStore == existing.SecretStore {
 				input.SecretRefs = mergeRefs(existing.SecretRefs, input.SecretRefs)
 			}
-			profiles[index] = input
-			replaced = true
+			replaceIndex = index
 			break
 		}
 	}
 	input.UpdatedAt = now
 	applyLocalSecretReferenceDefaults(&input)
 
-	if !replaced {
+	if replaceIndex >= 0 {
+		profiles[replaceIndex] = input
+	} else {
 		profiles = append(profiles, input)
 	}
 
@@ -401,6 +402,14 @@ func (m *Manager) normalizeAndValidate(profile *Profile) error {
 	for key := range profile.SecretRefs {
 		if !isSafeFieldKey(key) {
 			return fmt.Errorf("secret ref field %q contains unsupported characters", key)
+		}
+	}
+	if len(profile.SecretRefs) > 0 {
+		if profile.SecretStore == "" {
+			return errors.New("secret_store is required when secret_refs are provided")
+		}
+		if profile.SecretStore == cloudconnections.SecretStoreLocalEncrypted {
+			return errors.New("local encrypted secret refs require stored secret values")
 		}
 	}
 	if profile.SecretStore != "" && !m.supportsSecretStore(profile.SecretStore) && hasNonEmptySecrets(profile.Secrets) {

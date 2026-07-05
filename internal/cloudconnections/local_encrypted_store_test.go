@@ -118,6 +118,7 @@ func TestLocalEncryptedSecretStoreMemoizesKeysPerInstance(t *testing.T) {
 }
 
 func TestNewLocalEncryptedFileSecretStoreReportsKeyPathOnLoadError(t *testing.T) {
+	t.Setenv(connectionsKeyEnv, "")
 	keyPath := filepath.Join(t.TempDir(), "agent-provider-connections.key")
 	store := NewLocalEncryptedFileSecretStore(keyPath)
 
