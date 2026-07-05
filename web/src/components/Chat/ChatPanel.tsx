@@ -137,7 +137,7 @@ const PROVIDER_GROUPS: Record<ProviderTab, {
 };
 
 const PROVIDER_CONNECTION_FAMILIES: Record<ProviderTab, string[]> = {
-  codex: ['openai', 'gateway'],
+  codex: ['openai', 'azure_openai', 'gateway'],
   claude: ['anthropic', 'gateway'],
   gemini: ['vertex', 'gateway'],
   copilot: ['gateway'],
@@ -467,7 +467,7 @@ function ConnectionCatalog({
           </div>
           <div style={hubStyles.providerMeta}>
             <span style={hubStyles.badge}>{credentialLabel(provider.credential_mode)}</span>
-            <span style={hubStyles.badge}>{provider.family}</span>
+            <span style={hubStyles.badge}>{provider.family.replaceAll('_', ' ')}</span>
           </div>
           <div style={hubStyles.connectionHint}>{provider.billing_hint}</div>
           <div style={hubStyles.connectionHint}>{provider.data_handling_hint}</div>
@@ -488,14 +488,14 @@ function ConnectionCatalog({
           </div>
           {provider.capabilities.length > 0 && (
             <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} capabilities`}>
-              {provider.capabilities.slice(0, 4).map(capability => (
+              {provider.capabilities.map(capability => (
                 <span key={capability} style={hubStyles.badge}>{capability.replaceAll('_', ' ')}</span>
               ))}
             </div>
           )}
           {provider.cost_controls.length > 0 && (
             <div style={hubStyles.providerCapabilityList} aria-label={`${provider.name} cost controls`}>
-              {provider.cost_controls.slice(0, 3).map(control => (
+              {provider.cost_controls.map(control => (
                 <span key={control} style={hubStyles.badge}>{control.replaceAll('_', ' ')}</span>
               ))}
             </div>

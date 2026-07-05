@@ -191,7 +191,7 @@ describe('ChatPanel', () => {
         required_fields: ['model'],
         secret_fields: ['api_key'],
         capabilities: ['chat', 'code_editing', 'iac_assistance', 'tool_calling', 'vision'],
-        cost_controls: ['monthly_budget', 'per_run_token_limit', 'allowed_models'],
+        cost_controls: ['monthly_budget', 'per_run_token_limit', 'allowed_models', 'hard_stop'],
         billing_hint: 'Billed through the OpenAI Platform API account, separate from ChatGPT subscriptions.',
         data_handling_hint: 'Prompts and selected project context are sent to the configured OpenAI API endpoint.',
         secret_storage_hint: 'Store API keys through IaC Studio secret stores; keys are never returned to the browser after save.',
@@ -213,9 +213,9 @@ describe('ChatPanel', () => {
         setup_hint: 'Use for private routing, SSO, audit, and platform-team rollouts.',
       },
       {
-        id: 'minimal-openai',
-        name: 'Minimal OpenAI',
-        family: 'openai',
+        id: 'minimal-azure-openai',
+        name: 'Minimal Azure OpenAI',
+        family: 'azure_openai',
         category: 'api',
         credential_mode: 'secret_store',
         required_fields: ['model'],
@@ -237,16 +237,22 @@ describe('ChatPanel', () => {
       expect(within(codexPanel).getByRole('region', { name: 'Codex API and enterprise connection catalog' })).toBeInTheDocument();
     });
     const catalog = within(codexPanel).getByRole('region', { name: 'Codex API and enterprise connection catalog' });
-    expect(within(catalog).getByLabelText('OpenAI API connection')).toBeInTheDocument();
+    const openAiConnection = within(catalog).getByLabelText('OpenAI API connection');
+    expect(openAiConnection).toBeInTheDocument();
     expect(within(catalog).getByText(/separate from ChatGPT subscriptions/)).toBeInTheDocument();
     expect(within(catalog).getByText(/configured OpenAI API endpoint/)).toBeInTheDocument();
     expect(within(catalog).getByText(/keys are never returned to the browser after save/)).toBeInTheDocument();
     expect(within(catalog).getAllByText('Secret store').length).toBeGreaterThan(0);
-    expect(within(catalog).getByText('monthly budget')).toBeInTheDocument();
+    expect(within(catalog).getByText('azure openai')).toBeInTheDocument();
+    expect(within(openAiConnection).getByText('monthly budget')).toBeInTheDocument();
+    expect(within(openAiConnection).getByText('per run token limit')).toBeInTheDocument();
+    expect(within(openAiConnection).getByText('allowed models')).toBeInTheDocument();
+    expect(within(openAiConnection).getByText('hard stop')).toBeInTheDocument();
+    expect(within(openAiConnection).getByText('vision')).toBeInTheDocument();
     expect(within(catalog).getByText('Enterprise SSO')).toBeInTheDocument();
-    expect(within(catalog).getByLabelText('Minimal OpenAI connection')).toBeInTheDocument();
-    expect(within(catalog).queryByLabelText('Minimal OpenAI capabilities')).not.toBeInTheDocument();
-    expect(within(catalog).queryByLabelText('Minimal OpenAI cost controls')).not.toBeInTheDocument();
+    expect(within(catalog).getByLabelText('Minimal Azure OpenAI connection')).toBeInTheDocument();
+    expect(within(catalog).queryByLabelText('Minimal Azure OpenAI capabilities')).not.toBeInTheDocument();
+    expect(within(catalog).queryByLabelText('Minimal Azure OpenAI cost controls')).not.toBeInTheDocument();
     expect(within(catalog).queryByText('sk-test-secret')).not.toBeInTheDocument();
   });
 
