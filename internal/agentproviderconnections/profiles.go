@@ -187,13 +187,6 @@ func (m *Manager) Save(input Profile) (PublicProfile, error) {
 
 	if !replaced {
 		profiles = append(profiles, input)
-	} else {
-		for index := range profiles {
-			if profiles[index].ID == input.ID {
-				profiles[index] = input
-				break
-			}
-		}
 	}
 
 	if err := m.saveProfilesUnlocked(profiles); err != nil {
@@ -695,5 +688,15 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	cleanup = false
+	syncDirBestEffort(dir)
 	return nil
+}
+
+func syncDirBestEffort(dir string) {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	defer func() { _ = handle.Close() }()
+	_ = handle.Sync()
 }
