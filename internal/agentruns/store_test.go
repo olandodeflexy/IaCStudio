@@ -553,6 +553,19 @@ func TestStoreDecideApproval(t *testing.T) {
 	if a.DecidedAt == nil || *a.DecidedAt != decideTime {
 		t.Fatalf("decided_at = %v, want %s", a.DecidedAt, decideTime)
 	}
+	if len(run.Logs) != 1 {
+		t.Fatalf("approval decision logs = %+v, want one audit log", run.Logs)
+	}
+	auditLog := run.Logs[0]
+	if auditLog.ID != "log_000001" || auditLog.Level != LogAudit || auditLog.At != decideTime {
+		t.Fatalf("approval audit log metadata = %+v, want first audit log at %s", auditLog, decideTime)
+	}
+	if auditLog.Message != "Approval gate approval_000001 (command) approved." {
+		t.Fatalf("approval audit log message = %q", auditLog.Message)
+	}
+	if strings.Contains(auditLog.Message, "abc123") {
+		t.Fatalf("approval audit log leaked decided_by token: %q", auditLog.Message)
+	}
 
 	// Re-deciding an already-decided gate should error.
 	if _, err := store.DecideApproval(run.ID, approvalID, ApprovalApproved, "alice"); err == nil {
@@ -640,6 +653,12 @@ func TestStoreDecideApprovalRejectsRun(t *testing.T) {
 	}
 	if run.CompletedAt == nil || *run.CompletedAt != rejectTime {
 		t.Fatalf("completed_at = %v, want %s", run.CompletedAt, rejectTime)
+	}
+	if len(run.Logs) != 1 {
+		t.Fatalf("rejected approval logs = %+v, want one audit log", run.Logs)
+	}
+	if got := run.Logs[0].Message; got != "Approval gate approval_000001 (command) rejected." {
+		t.Fatalf("rejected approval audit log = %q", got)
 	}
 }
 

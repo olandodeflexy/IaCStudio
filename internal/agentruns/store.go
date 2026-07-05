@@ -341,12 +341,7 @@ func (s *Store) AddLog(id string, level LogLevel, message string) (Run, error) {
 		if terminalStatus(run.Status) {
 			return ErrTerminated
 		}
-		run.Logs = append(run.Logs, LogEntry{
-			ID:      fmt.Sprintf("log_%06d", len(run.Logs)+1),
-			At:      now,
-			Level:   level,
-			Message: truncate(redactText(message), maxLogMessageLen),
-		})
+		appendLog(run, now, level, message)
 		return nil
 	})
 }
@@ -406,6 +401,12 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 				run.Approvals[i].Status = decision
 				run.Approvals[i].DecidedAt = timePtr(now)
 				run.Approvals[i].DecidedBy = truncate(redactText(decidedBy), maxLogMessageLen)
+				appendLog(run, now, LogAudit, fmt.Sprintf(
+					"Approval gate %s (%s) %s.",
+					run.Approvals[i].ID,
+					run.Approvals[i].Kind,
+					decision,
+				))
 				if decision == ApprovalRejected {
 					run.Status = StatusFailed
 					run.Error = "approval gate rejected"
@@ -424,6 +425,15 @@ func (s *Store) DecideApproval(id, approvalID string, decision ApprovalStatus, d
 			}
 		}
 		return ErrApprovalNotFound
+	})
+}
+
+func appendLog(run *Run, at time.Time, level LogLevel, message string) {
+	run.Logs = append(run.Logs, LogEntry{
+		ID:      fmt.Sprintf("log_%06d", len(run.Logs)+1),
+		At:      at,
+		Level:   level,
+		Message: truncate(redactText(message), maxLogMessageLen),
 	})
 }
 
