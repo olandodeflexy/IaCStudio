@@ -723,6 +723,14 @@ describe('ChatPanel', () => {
         updated_at: '2026-07-01T10:00:05Z',
         completed_at: '2026-07-01T10:00:05Z',
         log_count: 1,
+      })])
+      .mockResolvedValue([agentRunSummaryFixture({
+        id: 'run_000001',
+        status: 'completed',
+        prompt_preview: 'Watch the live run',
+        updated_at: '2026-07-01T10:00:05Z',
+        completed_at: '2026-07-01T10:00:05Z',
+        log_count: 1,
       })]);
 
     render(<ChatPanel {...baseProps} projectName="demo" />);
@@ -806,7 +814,7 @@ describe('ChatPanel', () => {
     expect(getAgentRunMock).toHaveBeenCalledTimes(2);
   });
 
-  it('does not block showAgentRunDetails or createAgentRun while a detail poll is in flight', async () => {
+  it('does not block switching run details while a detail poll is in flight', async () => {
     vi.useFakeTimers();
 
     // Two active runs so both detail buttons are visible
@@ -818,14 +826,12 @@ describe('ChatPanel', () => {
     // First user-initiated detail fetch for run_000001 (running)
     // Then poll fires for run_000001
     // Then user switches to run_000002
-    let resolveFirstPoll!: (v: AgentRun) => void;
+    let resolveFirstPoll!: (_value: AgentRun) => void;
     const firstPollPromise = new Promise<AgentRun>(res => { resolveFirstPoll = res; });
     getAgentRunMock
       .mockResolvedValueOnce(agentRunFixture({ id: 'run_000001', status: 'running' }))
       .mockReturnValueOnce(firstPollPromise) // stalled poll for run_000001
       .mockResolvedValue(agentRunFixture({ id: 'run_000002', status: 'running' }));
-
-    createAgentRunMock.mockResolvedValue(undefined);
 
     render(<ChatPanel {...baseProps} projectName="demo" input="new task" />);
     fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));

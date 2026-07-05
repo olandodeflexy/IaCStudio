@@ -1159,10 +1159,28 @@ export function ChatPanel({
     let cancelled = false;
     const timer = window.setInterval(() => {
       if (agentRunsRefreshInFlightRef.current) return;
+      const requestProjectName = projectName;
+      agentRunsListSeqRef.current += 1;
+      const requestSeq = agentRunsListSeqRef.current;
+      const isCurrentListRequest = () => (
+        !cancelled
+        && agentRunsListSeqRef.current === requestSeq
+        && latestProjectNameRef.current === requestProjectName
+      );
       agentRunsRefreshInFlightRef.current = true;
-      void refreshAgentRunsForProject(projectName).finally(() => {
-        if (!cancelled) agentRunsRefreshInFlightRef.current = false;
-      });
+      void api.listAgentRuns(requestProjectName)
+        .then(runs => {
+          if (!isCurrentListRequest()) return;
+          setAgentRuns(runs);
+        })
+        .catch((err: unknown) => {
+          if (!isCurrentListRequest()) return;
+          setAgentRunsError(agentRunRefreshErrorMessage(err));
+        })
+        .finally(() => {
+          if (isCurrentListRequest()) setAgentRunsLoading(false);
+          if (!cancelled) agentRunsRefreshInFlightRef.current = false;
+        });
     }, AGENT_RUN_REFRESH_INTERVAL_MS);
     return () => {
       cancelled = true;
