@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactNode, RefObject } from 'react';
 
-import { api, type AgentProviderConnectionDefinition, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
+import { api, type AgentProviderConnectionDefinition, type AgentProviderConnectionProfile, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
 
 export interface ChatMessage {
@@ -313,6 +313,31 @@ function connectionProvidersForTab(
   return providers.filter(provider => families.includes(provider.family));
 }
 
+function inferredProviderConnectionFamily(providerId: string) {
+  const id = providerId.toLowerCase();
+  if (id.includes('azure') && id.includes('openai')) return 'azure_openai';
+  if (id.includes('openai')) return 'openai';
+  if (id.includes('anthropic') || id.includes('claude')) return 'anthropic';
+  if (id.includes('bedrock')) return 'bedrock';
+  if (id.includes('vertex') || id.includes('gemini')) return 'vertex';
+  if (id.includes('gateway') || id.includes('enterprise')) return 'gateway';
+  return '';
+}
+
+function connectionProfilesForTab(
+  tab: ProviderTab,
+  profiles: AgentProviderConnectionProfile[],
+  providers: AgentProviderConnectionDefinition[],
+) {
+  const families = PROVIDER_CONNECTION_FAMILIES[tab];
+  if (families.length === 0) return [];
+  const familiesByProviderID = new Map(providers.map(provider => [provider.id, provider.family]));
+  return profiles.filter(profile => {
+    const family = familiesByProviderID.get(profile.provider_id) || inferredProviderConnectionFamily(profile.provider_id);
+    return families.includes(family);
+  });
+}
+
 function providerDisplay(provider: Pick<ProviderDefinition, 'state' | 'note'>, status?: LocalAgentProviderStatus) {
   if (!status) {
     return { state: provider.state, note: provider.note };
@@ -506,11 +531,70 @@ function ConnectionCatalog({
   );
 }
 
+function SavedConnectionProfiles({
+  title,
+  profiles,
+}: {
+  title: string;
+  profiles: AgentProviderConnectionProfile[];
+}) {
+  if (profiles.length === 0) return null;
+  return (
+    <section
+      role="region"
+      aria-label={`${title} saved provider connections`}
+      style={hubStyles.connectionCatalog}
+    >
+      <div style={hubStyles.connectionCatalogIntro}>
+        <strong style={{ color: 'var(--text-main)' }}>Saved provider profiles</strong>
+        <span> - redacted inventory only. Secret values and external refs are never shown here.</span>
+      </div>
+      {profiles.map(profile => (
+        <article key={profile.id} style={hubStyles.connectionCard} aria-label={`${profile.name} saved provider connection`}>
+          <div style={hubStyles.providerHead}>
+            <span style={{ ...hubStyles.providerName, flex: 1 }}>{profile.name}</span>
+            <span style={hubStyles.badge}>{profile.provider_id}</span>
+          </div>
+          <div style={hubStyles.providerMeta}>
+            <span style={hubStyles.badge}>{credentialLabel(profile.credential_mode)}</span>
+            <span style={hubStyles.badge}>{profile.secret_store || 'No secret store'}</span>
+            <span style={hubStyles.badge}>
+              {(profile.secret_fields || []).length} secret {(profile.secret_fields || []).length === 1 ? 'field' : 'fields'}
+            </span>
+          </div>
+          <div style={hubStyles.providerDetailsGrid}>
+            <div>
+              <div style={hubStyles.providerDetailLabel}>Metadata</div>
+              <div style={hubStyles.providerDetailValue} title={compactList(Object.keys(profile.metadata || {}))}>
+                {compactList(Object.keys(profile.metadata || {}))}
+              </div>
+            </div>
+            <div>
+              <div style={hubStyles.providerDetailLabel}>Cost controls</div>
+              <div style={hubStyles.providerDetailValue} title={compactList(Object.keys(profile.cost_controls || {}))}>
+                {compactList(Object.keys(profile.cost_controls || {}))}
+              </div>
+            </div>
+          </div>
+          {(profile.secret_fields || []).length > 0 && (
+            <div style={hubStyles.providerCapabilityList} aria-label={`${profile.name} secret fields`}>
+              {(profile.secret_fields || []).map(field => (
+                <span key={field} style={hubStyles.badge}>{field.replaceAll('_', ' ')}</span>
+              ))}
+            </div>
+          )}
+        </article>
+      ))}
+    </section>
+  );
+}
+
 function ProviderGroup({
   tab,
   active,
   localProviders,
   connectionProviders,
+  connectionProfiles,
   selectedProviderName,
   onSelectProvider,
 }: {
@@ -518,11 +602,13 @@ function ProviderGroup({
   active: boolean;
   localProviders: Record<string, LocalAgentProviderStatus>;
   connectionProviders: AgentProviderConnectionDefinition[];
+  connectionProfiles: AgentProviderConnectionProfile[];
   selectedProviderName?: string;
   onSelectProvider: (tab: ProviderTab, providerName: string) => void;
 }) {
   const group = PROVIDER_GROUPS[tab];
   const visibleConnectionProviders = connectionProvidersForTab(tab, connectionProviders);
+  const visibleConnectionProfiles = connectionProfilesForTab(tab, connectionProfiles, connectionProviders);
   const selectedProvider = group.providers.find(provider => provider.name === selectedProviderName) ?? group.providers[0];
   const selectedLocalStatus = selectedProvider.localProviderId ? localProviders[selectedProvider.localProviderId] : undefined;
   const selectedDisplay = providerDisplay(selectedProvider, selectedLocalStatus);
@@ -587,6 +673,7 @@ function ProviderGroup({
         localStatus={selectedLocalStatus}
       />
       <ConnectionCatalog title={group.title} providers={visibleConnectionProviders} />
+      <SavedConnectionProfiles title={group.title} profiles={visibleConnectionProfiles} />
     </div>
   );
 }
@@ -1110,6 +1197,7 @@ export function ChatPanel({
   const [selectedProviders, setSelectedProviders] = useState<Partial<Record<ProviderTab, string>>>({});
   const [localProviders, setLocalProviders] = useState<Record<string, LocalAgentProviderStatus>>({});
   const [connectionProviders, setConnectionProviders] = useState<AgentProviderConnectionDefinition[]>([]);
+  const [connectionProfiles, setConnectionProfiles] = useState<AgentProviderConnectionProfile[]>([]);
   const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
   const [agentRunsLoading, setAgentRunsLoading] = useState(false);
   const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
@@ -1151,6 +1239,20 @@ export function ChatPanel({
       })
       .catch(() => {
         if (!cancelled) setConnectionProviders([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api.listAgentProviderConnectionProfiles()
+      .then(profiles => {
+        if (!cancelled) setConnectionProfiles(profiles);
+      })
+      .catch(() => {
+        if (!cancelled) setConnectionProfiles([]);
       });
     return () => {
       cancelled = true;
@@ -1602,6 +1704,7 @@ export function ChatPanel({
               active={activeTab === tab}
               localProviders={localProviders}
               connectionProviders={connectionProviders}
+              connectionProfiles={connectionProfiles}
               selectedProviderName={selectedProviders[tab]}
               onSelectProvider={selectProvider}
             />
