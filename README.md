@@ -72,6 +72,7 @@ start the local server for you.
 | **Import Projects** | Browse filesystem, scan existing .tf/.yml files, auto-detect topology |
 | **Cloud Connections** | Save, test, and select named AWS, Azure, or GCP targets before plan/apply |
 | **MCP Server** | Local stdio server for AI clients to inspect projects, classify plans, run policy/drift checks, and draft remediation workflows |
+| **Agent Hub Runs** | Queue AI tasks as auditable read-only, propose-only, or approved-execute runs with logs, patches, approval gates, and cancellation |
 | **Semantic Plan Gate** | Classifies Terraform/OpenTofu changes as safe, risky, destructive, or unknown before apply |
 | **Live Code Preview** | Every canvas change updates the code in real time |
 | **Project Persistence** | Auto-save canvas state, restore on reopen |
@@ -94,6 +95,7 @@ Browser (React/TS)                   Go Backend (single binary)
 │ Resource Palette     │◄────────────►│ File Watcher (debounce)     │
 │ Properties Panel     │              │ SafeRunner (timeouts/kill)  │
 │ AI Chat + Fix        │              │ AI Bridge (Ollama/OpenAI)   │
+│ Agent Hub Runs       │              │ Agent Run Store             │
 │ Code Preview         │              │ Security Scanner            │
 │ Terminal             │              │ Drift Detector              │
 │ Smart Suggestions    │              │ Recovery Checkpoints        │
@@ -123,6 +125,33 @@ IaC Studio works with **any AI provider**:
 | **Any OpenAI-compatible API** | Set endpoint + key in settings | Varies |
 
 Click **gear icon** in the app header to switch providers at any time.
+
+## Agent Hub Run Lifecycle
+
+The Agent Hub gives AI work a reviewable run lifecycle instead of letting an
+assistant freely edit files, run commands, or touch cloud credentials.
+
+1. **Queue a run** from the Agent Hub Runs tab. New runs default to
+   `read_only`; callers can also request `propose_only` or `approved_execute`.
+2. **Watch the audit trail** in the Runs tab. IaC Studio records status,
+   provider, prompt preview, prompt hash, logs, proposed patches, and pending
+   approval gates for the active project only.
+3. **Review gates before action.** File writes, command execution, IaC actions,
+   cloud writes, secret reads, and networked MCP calls are represented as
+   explicit approval gates. Rejected gates fail closed.
+4. **Cancel when needed.** Non-terminal runs can be canceled from the UI, and
+   active run summaries/details refresh while the Runs tab is open.
+
+Run modes are intentionally conservative:
+
+| Mode | Behavior |
+|------|----------|
+| `read_only` | Inspect project context and produce logs without proposing mutations |
+| `propose_only` | Produce diffs or review artifacts, but do not apply them |
+| `approved_execute` | Allow gated actions only after explicit approval |
+
+The run model stores prompt previews and HMAC fingerprints instead of raw prompt
+history. Cloud secrets are not returned in run responses or logs.
 
 ## MCP Server for AI Clients
 
@@ -201,6 +230,7 @@ IaC Studio runs locally and is designed to be secure by default:
 - **Semantic plan review** — Terraform/OpenTofu plans are classified before apply; risky, destructive, or unknown changes require explicit acknowledgement
 - **Recovery checkpoints** — successful apply-style runs write metadata and state/plan hashes under `.iac-studio/snapshots`; rollback requests generate review artifacts, not automatic undo actions
 - **Review-branch handoff** — drift and rollback PR workflows create local branches that commit only generated `.iac-studio/remediations` or `.iac-studio/rollbacks` artifacts, reject unrelated dirty source files, and return explicit `git push` / `gh pr create` commands instead of collecting GitHub tokens
+- **Agent run lifecycle** — AI tasks are auditable and cancellable, default to read-only, expose proposed patches as diffs, and require approval gates for file writes, commands, IaC actions, cloud writes, secret reads, and networked MCP calls
 - **MCP approval and audit** — AI clients can inspect and propose, while mutating or high-risk MCP tools require explicit approval and are logged to `.iac-studio/mcp-audit.jsonl`
 - **Cloud target checks** — selected Cloud Connections are tested before command execution
 - **Encrypted local secrets** — Cloud Connection secret fields are encrypted at rest and never echoed in API responses, terminal messages, or generated IaC
@@ -270,6 +300,7 @@ All flags have sensible defaults. Just run `iac-studio` and go.
 - [x] Reviewed rollback proposal artifacts from recovery checkpoints
 - [x] PR-ready local review branches for drift and rollback artifacts
 - [x] MCP server for AI-native project inspection, plan classification, drift/policy checks, runbooks, and approval-gated workflows
+- [x] Agent Hub run lifecycle with logs, proposed patches, approval gates, cancellation, and run history
 - [x] Cost estimation (30+ resource types)
 - [x] CI/CD pipeline generator (GitHub Actions, GitLab CI)
 - [x] Environment promotion (dev/staging/prod workspaces)
