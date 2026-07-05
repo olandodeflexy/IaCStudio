@@ -22,6 +22,8 @@ const (
 	profilesKeyFileName = ".iac-studio-agent-provider-connections.key"
 )
 
+var ErrInvalidProfile = errors.New("invalid agent provider connection")
+
 // Profile is the persisted form of an Agent Hub model-provider connection.
 // Secrets are stored through a cloudconnections.SecretStore and must never be
 // returned directly from API handlers.
@@ -147,7 +149,7 @@ func (m *Manager) GetForUse(id string) (*Profile, error) {
 
 func (m *Manager) Save(input Profile) (PublicProfile, error) {
 	if err := m.normalizeAndValidate(&input); err != nil {
-		return PublicProfile{}, err
+		return PublicProfile{}, fmt.Errorf("%w: %v", ErrInvalidProfile, err)
 	}
 
 	m.mu.Lock()
@@ -621,7 +623,7 @@ func isMasked(value string) bool {
 		return false
 	}
 	for _, r := range value {
-		if r != '*' {
+		if r != '*' && r != '\u2022' {
 			return false
 		}
 	}

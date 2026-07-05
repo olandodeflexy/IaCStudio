@@ -1034,6 +1034,19 @@ func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool
 	return true
 }
 
+func writeAgentProviderProfileInternalError(w http.ResponseWriter, operation string, err error) {
+	log.Printf("agent provider connection %s failed: %v", operation, err)
+	http.Error(w, "agent provider connection operation failed", http.StatusInternalServerError)
+}
+
+func writeAgentProviderProfileSaveError(w http.ResponseWriter, operation string, err error) {
+	if errors.Is(err, agentproviderconnections.ErrInvalidProfile) {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	writeAgentProviderProfileInternalError(w, operation, err)
+}
+
 // RouterOptions allows callers to provide services and configuration that need
 // explicit ownership outside the router.
 type RouterOptions struct {
@@ -1123,7 +1136,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	mux.HandleFunc("GET /api/agent-hub/provider-connections", func(w http.ResponseWriter, _ *http.Request) {
 		profiles, err := agentProviderProfiles.List()
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeAgentProviderProfileInternalError(w, "list", err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1143,7 +1156,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		req.ID = ""
 		profile, err := agentProviderProfiles.Save(req)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeAgentProviderProfileSaveError(w, "create", err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1158,7 +1171,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 				http.Error(w, "agent provider connection not found", http.StatusNotFound)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeAgentProviderProfileInternalError(w, "get", err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1176,7 +1189,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 				http.Error(w, "agent provider connection not found", http.StatusNotFound)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeAgentProviderProfileInternalError(w, "check update target", err)
 			return
 		}
 		var req agentproviderconnections.Profile
@@ -1187,7 +1200,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		req.ID = id
 		profile, err := agentProviderProfiles.Save(req)
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
+			writeAgentProviderProfileSaveError(w, "update", err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
@@ -1200,7 +1213,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 				http.Error(w, "agent provider connection not found", http.StatusNotFound)
 				return
 			}
-			http.Error(w, err.Error(), http.StatusInternalServerError)
+			writeAgentProviderProfileInternalError(w, "delete", err)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")

@@ -160,6 +160,43 @@ func TestSavePersistsUpdatedFieldsAfterPartialUpdate(t *testing.T) {
 	}
 }
 
+func TestSaveIgnoresBulletMaskedSecretsOnPartialUpdate(t *testing.T) {
+	root := t.TempDir()
+	manager := NewManager(root)
+
+	created, err := manager.Save(Profile{
+		Name:           "OpenAI automation",
+		ProviderID:     "openai-api",
+		CredentialMode: "secret_store",
+		Secrets: map[string]string{
+			"api_key": "sk-original",
+		},
+	})
+	if err != nil {
+		t.Fatalf("save profile: %v", err)
+	}
+
+	if _, err := manager.Save(Profile{
+		ID:             created.ID,
+		Name:           "OpenAI automation",
+		ProviderID:     "openai-api",
+		CredentialMode: "secret_store",
+		Secrets: map[string]string{
+			"api_key": "\u2022\u2022\u2022\u2022",
+		},
+	}); err != nil {
+		t.Fatalf("partial update with masked secret: %v", err)
+	}
+
+	stored, err := manager.GetForUse(created.ID)
+	if err != nil {
+		t.Fatalf("GetForUse: %v", err)
+	}
+	if got := stored.Secrets["api_key"]; got != "sk-original" {
+		t.Fatalf("masked placeholder should not replace existing secret, got %q", got)
+	}
+}
+
 func TestSaveRejectsSecretRefsWithoutExplicitExternalStore(t *testing.T) {
 	manager := NewManager(t.TempDir())
 

@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -145,5 +147,74 @@ func TestAgentProviderConnectionPartialUpdatePreservesSecretFields(t *testing.T)
 	}
 	if !strings.Contains(bodyText, "claude-opus") || !strings.Contains(bodyText, "api_key") {
 		t.Fatalf("updated metadata and secret field should be returned: %s", bodyText)
+	}
+}
+
+func TestAgentProviderConnectionRoutesHideInternalErrors(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".iac-studio-agent-provider-connections.json"), []byte(`{`), 0o600); err != nil {
+		t.Fatalf("write invalid profile store: %v", err)
+	}
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/api/agent-hub/provider-connections")
+	if err != nil {
+		t.Fatalf("GET provider connections: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", resp.StatusCode)
+	}
+	var raw bytes.Buffer
+	if _, err := raw.ReadFrom(resp.Body); err != nil {
+		t.Fatalf("read error response: %v", err)
+	}
+	bodyText := raw.String()
+	if strings.Contains(bodyText, "parse agent provider connections") ||
+		strings.Contains(bodyText, root) ||
+		strings.Contains(bodyText, ".iac-studio-agent-provider-connections.json") {
+		t.Fatalf("internal detail leaked in response: %s", bodyText)
+	}
+	if !strings.Contains(bodyText, "agent provider connection operation failed") {
+		t.Fatalf("expected generic internal error, got %s", bodyText)
+	}
+}
+
+func TestAgentProviderConnectionSaveHidesSecretStoreErrors(t *testing.T) {
+	root := t.TempDir()
+	keyPath := filepath.Join(root, ".iac-studio-agent-provider-connections.key")
+	if err := os.MkdirAll(keyPath, 0o755); err != nil {
+		t.Fatalf("create directory at key path: %v", err)
+	}
+	srv := httptest.NewServer(fullRouterForTest(t, root))
+	defer srv.Close()
+
+	body := `{
+		"name":"OpenAI automation",
+		"provider_id":"openai-api",
+		"credential_mode":"secret_store",
+		"secrets":{"api_key":"sk-agent-secret"}
+	}`
+	resp, err := http.Post(srv.URL+"/api/agent-hub/provider-connections", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST provider connection: %v", err)
+	}
+	defer closeBody(resp.Body)
+	if resp.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", resp.StatusCode)
+	}
+	var raw bytes.Buffer
+	if _, err := raw.ReadFrom(resp.Body); err != nil {
+		t.Fatalf("read error response: %v", err)
+	}
+	bodyText := raw.String()
+	if strings.Contains(bodyText, keyPath) ||
+		strings.Contains(bodyText, root) ||
+		strings.Contains(bodyText, ".iac-studio-agent-provider-connections.key") {
+		t.Fatalf("secret-store detail leaked in response: %s", bodyText)
+	}
+	if !strings.Contains(bodyText, "agent provider connection operation failed") {
+		t.Fatalf("expected generic internal error, got %s", bodyText)
 	}
 }
