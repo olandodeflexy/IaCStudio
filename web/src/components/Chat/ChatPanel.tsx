@@ -1024,6 +1024,7 @@ export function ChatPanel({
   const agentRunsListSeqRef = useRef(0);
   const agentRunsRefreshInFlightRef = useRef(false);
   const detailRequestKeyRef = useRef<string | null>(null);
+  const detailPollInFlightRef = useRef(false);
   const detailRequestSeqRef = useRef(0);
   latestProjectNameRef.current = projectName;
 
@@ -1121,6 +1122,7 @@ export function ChatPanel({
 
   useEffect(() => {
     detailRequestKeyRef.current = null;
+    detailPollInFlightRef.current = false;
     setCreatingRun(false);
     setCancelingRunId(null);
     setDecidingGateKey(null);
@@ -1184,39 +1186,32 @@ export function ChatPanel({
 
     let cancelled = false;
     const timer = window.setInterval(() => {
-      if (detailRequestKeyRef.current) return;
-      detailRequestSeqRef.current += 1;
-      const requestKey = `${requestProjectName}:${requestRunId}:poll:${detailRequestSeqRef.current}`;
-      detailRequestKeyRef.current = requestKey;
-      const isCurrentDetailRequest = () => (
+      if (detailRequestKeyRef.current || detailPollInFlightRef.current) return;
+      detailPollInFlightRef.current = true;
+      const isCurrentDetailPoll = () => (
         !cancelled
-        && detailRequestKeyRef.current === requestKey
         && latestProjectNameRef.current === requestProjectName
         && selectedRunId === requestRunId
       );
       api.getAgentRun(requestProjectName, requestRunId)
         .then(run => {
-          if (!isCurrentDetailRequest()) return;
+          if (!isCurrentDetailPoll()) return;
           setSelectedRunId(run.id);
           setSelectedRun(run);
           setDetailError(null);
         })
         .catch((err: unknown) => {
-          if (!isCurrentDetailRequest()) return;
+          if (!isCurrentDetailPoll()) return;
           setDetailError(agentRunDetailErrorMessage(err));
         })
         .finally(() => {
-          if (detailRequestKeyRef.current === requestKey) {
-            detailRequestKeyRef.current = null;
-          }
+          if (!cancelled) detailPollInFlightRef.current = false;
         });
     }, AGENT_RUN_REFRESH_INTERVAL_MS);
 
     return () => {
       cancelled = true;
-      if (detailRequestKeyRef.current?.startsWith(`${requestProjectName}:${requestRunId}:poll:`)) {
-        detailRequestKeyRef.current = null;
-      }
+      detailPollInFlightRef.current = false;
       window.clearInterval(timer);
     };
   }, [activeTab, projectName, selectedRun?.id, selectedRun?.status, selectedRunId]);

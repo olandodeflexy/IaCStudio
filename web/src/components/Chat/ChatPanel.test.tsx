@@ -806,6 +806,52 @@ describe('ChatPanel', () => {
     expect(getAgentRunMock).toHaveBeenCalledTimes(2);
   });
 
+  it('does not block showAgentRunDetails or createAgentRun while a detail poll is in flight', async () => {
+    vi.useFakeTimers();
+
+    // Two active runs so both detail buttons are visible
+    listAgentRunsMock.mockResolvedValue([
+      agentRunSummaryFixture({ id: 'run_000001', status: 'running', prompt_preview: 'Run one' }),
+      agentRunSummaryFixture({ id: 'run_000002', status: 'running', prompt_preview: 'Run two' }),
+    ]);
+
+    // First user-initiated detail fetch for run_000001 (running)
+    // Then poll fires for run_000001
+    // Then user switches to run_000002
+    let resolveFirstPoll!: (v: AgentRun) => void;
+    const firstPollPromise = new Promise<AgentRun>(res => { resolveFirstPoll = res; });
+    getAgentRunMock
+      .mockResolvedValueOnce(agentRunFixture({ id: 'run_000001', status: 'running' }))
+      .mockReturnValueOnce(firstPollPromise) // stalled poll for run_000001
+      .mockResolvedValue(agentRunFixture({ id: 'run_000002', status: 'running' }));
+
+    createAgentRunMock.mockResolvedValue(undefined);
+
+    render(<ChatPanel {...baseProps} projectName="demo" input="new task" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await flushAsyncUpdates();
+
+    // Open details for run_000001
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+    await flushAsyncUpdates();
+    expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+
+    // Advance timer so the detail poll fires (firstPollPromise stalls in flight)
+    await act(async () => { await vi.advanceTimersByTimeAsync(5000); });
+    expect(getAgentRunMock).toHaveBeenCalledTimes(2); // 1 user-init + 1 poll
+
+    // While poll is stalled, switching to run_000002 must succeed immediately
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000002' }));
+    await flushAsyncUpdates();
+    expect(within(runsPanel).getByRole('region', { name: 'run_000002 details' })).toBeInTheDocument();
+
+    // Resolve the stalled poll — its response must be silently discarded
+    await act(async () => { resolveFirstPoll(agentRunFixture({ id: 'run_000001', status: 'running' })); });
+    expect(within(runsPanel).getByRole('region', { name: 'run_000002 details' })).toBeInTheDocument();
+  });
+
   it('loads one run detail record with logs, patches, and approvals', async () => {
     listAgentRunsMock.mockResolvedValueOnce([{
       id: 'run_000001',
