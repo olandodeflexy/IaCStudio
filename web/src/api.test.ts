@@ -309,6 +309,144 @@ describe('api.listAgentProviderConnections', () => {
   });
 });
 
+describe('api.agentProviderConnectionProfiles', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('lists redacted saved provider connection profiles', async () => {
+    const response = {
+      connections: [{
+        id: 'agent_provider_connection_000001',
+        name: 'OpenAI automation',
+        provider_id: 'openai-api',
+        credential_mode: 'secret_store',
+        metadata: { model: 'gpt-5' },
+        cost_controls: { monthly_budget: '100' },
+        secret_fields: ['api_key'],
+        secret_store: 'local_encrypted',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+      }],
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.listAgentProviderConnectionProfiles()).resolves.toEqual(response.connections);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/agent-hub/provider-connections');
+  });
+
+  it('coerces null saved provider connection responses to an empty array', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response('null', {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    ));
+
+    await expect(api.listAgentProviderConnectionProfiles()).resolves.toEqual([]);
+  });
+
+  it('creates saved provider connection profiles with secret payloads', async () => {
+    const response = {
+      id: 'agent_provider_connection_000001',
+      name: 'OpenAI automation',
+      provider_id: 'openai-api',
+      credential_mode: 'secret_store',
+      secret_fields: ['api_key'],
+      secret_store: 'local_encrypted',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:00:00Z',
+    };
+    const input = {
+      name: 'OpenAI automation',
+      provider_id: 'openai-api',
+      credential_mode: 'secret_store' as const,
+      metadata: { model: 'gpt-5' },
+      cost_controls: { monthly_budget: '100' },
+      secrets: { api_key: 'sk-test' },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 201,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.createAgentProviderConnectionProfile(input)).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/agent-hub/provider-connections', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+  });
+
+  it('gets and updates saved provider connection profiles by encoded id', async () => {
+    const response = {
+      id: 'profile with/slash',
+      name: 'Anthropic automation',
+      provider_id: 'anthropic-api',
+      credential_mode: 'secret_store',
+      metadata: { model: 'claude-sonnet' },
+      secret_fields: ['api_key'],
+      secret_store: 'local_encrypted',
+      created_at: '2026-07-01T10:00:00Z',
+      updated_at: '2026-07-01T10:00:00Z',
+    };
+    const input = {
+      name: 'Anthropic automation',
+      provider_id: 'anthropic-api',
+      credential_mode: 'secret_store' as const,
+      metadata: { model: 'claude-opus' },
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }))
+      .mockResolvedValueOnce(new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.getAgentProviderConnectionProfile('profile with/slash')).resolves.toEqual(response);
+    await expect(api.updateAgentProviderConnectionProfile('profile with/slash', input)).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenNthCalledWith(1, '/api/agent-hub/provider-connections/profile%20with%2Fslash');
+    expect(fetchMock).toHaveBeenNthCalledWith(2, '/api/agent-hub/provider-connections/profile%20with%2Fslash', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+  });
+
+  it('deletes saved provider connection profiles by encoded id', async () => {
+    const response = { status: 'deleted' };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.deleteAgentProviderConnectionProfile('profile with/slash')).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/agent-hub/provider-connections/profile%20with%2Fslash', {
+      method: 'DELETE',
+    });
+  });
+});
+
 describe('api.agentRuns', () => {
   afterEach(() => {
     vi.unstubAllGlobals();

@@ -292,6 +292,35 @@ export interface AgentProviderConnectionsResponse {
   providers: AgentProviderConnectionDefinition[];
 }
 
+export interface AgentProviderConnectionProfile {
+  id: string;
+  name: string;
+  provider_id: string;
+  credential_mode: AgentProviderConnectionCredentialMode;
+  metadata?: Record<string, string>;
+  cost_controls?: Record<string, string>;
+  secret_fields?: string[];
+  secret_store?: CloudSecretStore;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentProviderConnectionProfileInput {
+  id?: string;
+  name: string;
+  provider_id: string;
+  credential_mode: AgentProviderConnectionCredentialMode;
+  metadata?: Record<string, string>;
+  cost_controls?: Record<string, string>;
+  secrets?: Record<string, string>;
+  secret_store?: CloudSecretStore;
+  secret_refs?: Record<string, string>;
+}
+
+export interface AgentProviderConnectionProfilesResponse {
+  connections: AgentProviderConnectionProfile[];
+}
+
 export type AgentRunMode = 'read_only' | 'propose_only' | 'approved_execute';
 export type AgentRunStatus =
   | 'queued'
@@ -681,6 +710,49 @@ export const api = {
     if (!body || typeof body !== 'object') return [];
     const providers = (body as Partial<AgentProviderConnectionsResponse>).providers;
     return Array.isArray(providers) ? providers : [];
+  },
+
+  async listAgentProviderConnectionProfiles(): Promise<AgentProviderConnectionProfile[]> {
+    const res = await fetch(`${BASE}/api/agent-hub/provider-connections`);
+    const body = (await (await check(res)).json()) as unknown;
+    if (!body || typeof body !== 'object') return [];
+    const connections = (body as Partial<AgentProviderConnectionProfilesResponse>).connections;
+    return Array.isArray(connections) ? connections : [];
+  },
+
+  async createAgentProviderConnectionProfile(
+    input: AgentProviderConnectionProfileInput,
+  ): Promise<AgentProviderConnectionProfile> {
+    const res = await fetch(`${BASE}/api/agent-hub/provider-connections`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return (await check(res)).json();
+  },
+
+  async getAgentProviderConnectionProfile(id: string): Promise<AgentProviderConnectionProfile> {
+    const res = await fetch(`${BASE}/api/agent-hub/provider-connections/${encodeURIComponent(id)}`);
+    return (await check(res)).json();
+  },
+
+  async updateAgentProviderConnectionProfile(
+    id: string,
+    input: AgentProviderConnectionProfileInput,
+  ): Promise<AgentProviderConnectionProfile> {
+    const res = await fetch(`${BASE}/api/agent-hub/provider-connections/${encodeURIComponent(id)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+    return (await check(res)).json();
+  },
+
+  async deleteAgentProviderConnectionProfile(id: string): Promise<{ status: string }> {
+    const res = await fetch(`${BASE}/api/agent-hub/provider-connections/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+    });
+    return (await check(res)).json();
   },
 
   async listAgentRuns(projectName: string): Promise<AgentRunSummary[]> {
