@@ -3,6 +3,7 @@ package cloudconnections
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -113,5 +114,27 @@ func TestLocalEncryptedSecretStoreMemoizesKeysPerInstance(t *testing.T) {
 	}
 	if decryptLoads != 1 {
 		t.Fatalf("decryption key should load once per store instance, got %d loads", decryptLoads)
+	}
+}
+
+func TestNewLocalEncryptedFileSecretStoreReportsKeyPathOnLoadError(t *testing.T) {
+	t.Setenv(connectionsKeyEnv, "")
+	keyPath := filepath.Join(t.TempDir(), "agent-provider-connections.key")
+	store := NewLocalEncryptedFileSecretStore(keyPath)
+
+	_, err := store.Load(context.Background(), SecretScope{
+		ConnectionID: "apc_test",
+		Provider:     "openai-api",
+		AuthMethod:   "secret_store",
+	}, StoredSecrets{
+		Values: map[string]string{
+			"api_key": encryptedSecretPrefix + "AAAAAAAAAAAAAAAA:AA",
+		},
+	})
+	if err == nil {
+		t.Fatal("Load should fail when the file-backed key is missing")
+	}
+	if !strings.Contains(err.Error(), keyPath) {
+		t.Fatalf("error should include concrete key path %q, got %q", keyPath, err.Error())
 	}
 }
