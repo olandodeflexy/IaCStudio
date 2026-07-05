@@ -261,6 +261,37 @@ export interface LocalAgentProvidersResponse {
   providers: LocalAgentProviderStatus[];
 }
 
+export type AgentProviderConnectionCategory =
+  | 'api'
+  | 'enterprise_gateway'
+  | (string & Record<never, never>);
+
+export type AgentProviderConnectionCredentialMode =
+  | 'secret_store'
+  | 'cloud_connection'
+  | 'enterprise_sso'
+  | (string & Record<never, never>);
+
+export interface AgentProviderConnectionDefinition {
+  id: string;
+  name: string;
+  family: string;
+  category: AgentProviderConnectionCategory;
+  credential_mode: AgentProviderConnectionCredentialMode;
+  required_fields: string[];
+  secret_fields: string[];
+  capabilities: string[];
+  cost_controls: string[];
+  billing_hint: string;
+  data_handling_hint: string;
+  secret_storage_hint: string;
+  setup_hint: string;
+}
+
+export interface AgentProviderConnectionsResponse {
+  providers: AgentProviderConnectionDefinition[];
+}
+
 export type AgentRunMode = 'read_only' | 'propose_only' | 'approved_execute';
 export type AgentRunStatus =
   | 'queued'
@@ -641,6 +672,14 @@ export const api = {
     const body = (await (await check(res)).json()) as unknown;
     if (!body || typeof body !== 'object') return [];
     const providers = (body as Partial<LocalAgentProvidersResponse>).providers;
+    return Array.isArray(providers) ? providers : [];
+  },
+
+  async listAgentProviderConnections(): Promise<AgentProviderConnectionDefinition[]> {
+    const res = await fetch(`${BASE}/api/agent-hub/providers/connections`);
+    const body = (await (await check(res)).json()) as unknown;
+    if (!body || typeof body !== 'object') return [];
+    const providers = (body as Partial<AgentProviderConnectionsResponse>).providers;
     return Array.isArray(providers) ? providers : [];
   },
 

@@ -1036,10 +1036,11 @@ func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool
 // RouterOptions allows callers to provide services and configuration that need
 // explicit ownership outside the router.
 type RouterOptions struct {
-	MCPAirlock          *mcpairlock.Manager
-	AgentRuns           *agentruns.Store
-	AppVersion          string
-	LocalAgentProviders func() []agentproviders.LocalProviderStatus
+	MCPAirlock               *mcpairlock.Manager
+	AgentRuns                *agentruns.Store
+	AppVersion               string
+	LocalAgentProviders      func() []agentproviders.LocalProviderStatus
+	AgentProviderConnections func() []agentproviders.ConnectionProviderDefinition
 }
 
 const defaultAppVersion = "0.1.0"
@@ -1057,6 +1058,13 @@ func (opts RouterOptions) localAgentProviders() []agentproviders.LocalProviderSt
 		return opts.LocalAgentProviders()
 	}
 	return agentproviders.DiscoverLocal()
+}
+
+func (opts RouterOptions) agentProviderConnections() []agentproviders.ConnectionProviderDefinition {
+	if opts.AgentProviderConnections != nil {
+		return opts.AgentProviderConnections()
+	}
+	return agentproviders.DefaultConnectionProviders()
 }
 
 // NewRouter creates the HTTP router with all endpoints.
@@ -1094,8 +1102,15 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	// absolute executable paths; local endpoint checks only call loopback
 	// /v1/models probes with short timeouts and no credentials.
 	mux.HandleFunc("GET /api/agent-hub/providers/local", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"providers": opts.localAgentProviders(),
+		})
+	})
+	mux.HandleFunc("GET /api/agent-hub/providers/connections", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"providers": opts.agentProviderConnections(),
 		})
 	})
 	registerAgentRunRoutes(mux, projectsDir, agentRuns)
