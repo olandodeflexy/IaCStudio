@@ -452,6 +452,7 @@ describe('ChatPanel', () => {
     });
     expect(within(runsPanel).getByText('Apply the reviewed Terraform plan')).toBeInTheDocument();
     expect(within(runsPanel).getByText('propose only')).toBeInTheDocument();
+    expect(within(runsPanel).getByText('ollama')).toBeInTheDocument();
 
     fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
 
@@ -459,9 +460,34 @@ describe('ChatPanel', () => {
       expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
         prompt: 'Apply the reviewed Terraform plan',
         mode: 'propose_only',
+        provider_id: 'ollama',
       });
       expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
       expect(within(runsPanel).getByText('queued')).toBeInTheDocument();
+    });
+  });
+
+  it('queues the selected Agent Hub provider id with audited runs', async () => {
+    render(<ChatPanel {...baseProps} projectName="demo" input="Review this project with API context" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    fireEvent.click(within(codexPanel).getByRole('button', { name: /OpenAI API/ }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' })).toBeEnabled();
+    });
+    expect(within(runsPanel).getByText('codex-openai-api')).toBeInTheDocument();
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'Queue current prompt as agent run' }));
+
+    await waitFor(() => {
+      expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
+        prompt: 'Review this project with API context',
+        mode: 'read_only',
+        provider_id: 'codex-openai-api',
+      });
     });
   });
 
@@ -498,6 +524,7 @@ describe('ChatPanel', () => {
       expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
         prompt: 'Review the current plan',
         mode: 'read_only',
+        provider_id: 'ollama',
       });
       expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
     });
@@ -615,6 +642,7 @@ describe('ChatPanel', () => {
       expect(createAgentRunMock).toHaveBeenCalledWith('demo', {
         prompt: 'Review the current plan',
         mode: 'read_only',
+        provider_id: 'ollama',
       });
       expect(listAgentRunsMock).toHaveBeenCalledTimes(2);
       expect(within(runsPanel).getByText('running')).toBeInTheDocument();

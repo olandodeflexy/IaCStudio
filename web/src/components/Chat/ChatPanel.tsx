@@ -47,6 +47,8 @@ type ProviderLane =
 type ProviderActionLabel = 'Configure API' | 'Use enterprise policy' | 'Use local CLI';
 type ProviderDefinition = { name: string; lane: ProviderLane; state: ProviderState; note: string; localProviderId?: string };
 
+const PROVIDER_TABS: ProviderTab[] = ['codex', 'claude', 'gemini', 'copilot', 'local', 'mcp'];
+
 const AGENT_TABS: { key: AgentHubTab; label: string }[] = [
   { key: 'chat', label: 'Chat' },
   { key: 'codex', label: 'Codex' },
@@ -172,6 +174,9 @@ const isAgentHubTab = (value: string | null): value is AgentHubTab => (
 );
 const isTaskMode = (value: string | null): value is typeof TASK_MODES[number] => (
   TASK_MODES.some(task => task === value)
+);
+const isProviderTab = (tab: AgentHubTab): tab is ProviderTab => (
+  PROVIDER_TABS.includes(tab as ProviderTab)
 );
 
 function readStoredAgentHubTab(): AgentHubTab {
@@ -314,6 +319,20 @@ function localStatusDetails(localProviderId?: string, status?: LocalAgentProvide
 
 function providerActionLabel(provider: ProviderDefinition) {
   return providerActionByLane[provider.lane];
+}
+
+function providerSlug(name: string) {
+  return name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+}
+
+function providerIdForRun(tab: ProviderTab, provider: ProviderDefinition) {
+  return provider.localProviderId ?? `${tab}-${providerSlug(provider.name)}`;
+}
+
+function selectedRunProviderId(tab: ProviderTab, selectedProviderName?: string) {
+  const group = PROVIDER_GROUPS[tab];
+  const provider = group.providers.find(item => item.name === selectedProviderName) ?? group.providers[0];
+  return providerIdForRun(tab, provider);
 }
 
 function ProviderDetails({
@@ -661,12 +680,14 @@ function RunDetailPanel({
 function RunQueueCard({
   task,
   prompt,
+  providerId,
   creating,
   disabled,
   onCreate,
 }: {
   task: typeof TASK_MODES[number];
   prompt: string;
+  providerId: string;
   creating: boolean;
   disabled: boolean;
   onCreate: () => void;
@@ -680,6 +701,7 @@ function RunQueueCard({
         <strong style={{ color: 'var(--text-main)', fontSize: 12, flex: 1 }}>Queue audited run</strong>
         <span style={hubStyles.badge}>{task}</span>
         <span style={hubStyles.badge}>{runModeLabel(mode)}</span>
+        <span style={hubStyles.badge}>{providerId}</span>
         <button
           type="button"
           style={{
@@ -840,6 +862,7 @@ function RunsPanel({
   error,
   task,
   prompt,
+  providerId,
   creatingRun,
   cancelingRunId,
   selectedRun,
@@ -859,6 +882,7 @@ function RunsPanel({
   error: string | null;
   task: typeof TASK_MODES[number];
   prompt: string;
+  providerId: string;
   creatingRun: boolean;
   cancelingRunId: string | null;
   selectedRun: AgentRun | null;
@@ -885,6 +909,7 @@ function RunsPanel({
       <RunQueueCard
         task={task}
         prompt={prompt}
+        providerId={providerId}
         creating={creatingRun}
         disabled={cancelingRunId !== null || decidingGateKey !== null || detailLoadingRunId !== null}
         onCreate={onCreateRun}
@@ -951,6 +976,10 @@ export function ChatPanel({
   projectName,
 }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<AgentHubTab>(() => readStoredAgentHubTab());
+  const [runProviderTab, setRunProviderTab] = useState<ProviderTab>(() => {
+    const storedTab = readStoredAgentHubTab();
+    return isProviderTab(storedTab) ? storedTab : 'local';
+  });
   const [activeTask, setActiveTask] = useState<typeof TASK_MODES[number]>(() => readStoredTaskMode());
   const [selectedProviders, setSelectedProviders] = useState<Partial<Record<ProviderTab, string>>>({});
   const [localProviders, setLocalProviders] = useState<Record<string, LocalAgentProviderStatus>>({});
@@ -995,6 +1024,10 @@ export function ChatPanel({
     if (activeTab === 'runs') return 'Run history';
     return providerLabel;
   }, [activeTab, providerLabel]);
+  const runProviderId = useMemo(
+    () => selectedRunProviderId(runProviderTab, selectedProviders[runProviderTab]),
+    [runProviderTab, selectedProviders],
+  );
 
   const panelStyle = (tab: AgentHubTab) => (
     activeTab === tab ? hubStyles.tabPanel : hubStyles.hiddenTabPanel
@@ -1007,6 +1040,7 @@ export function ChatPanel({
 
   const selectTab = (tab: AgentHubTab, focus = false) => {
     setActiveTab(tab);
+    if (isProviderTab(tab)) setRunProviderTab(tab);
     writeStoredAgentHubValue(AGENT_HUB_STORAGE_KEYS.activeTab, tab);
     if (focus) focusSelectedTab(tab);
   };
@@ -1017,6 +1051,7 @@ export function ChatPanel({
   };
 
   const selectProvider = (tab: ProviderTab, providerName: string) => {
+    setRunProviderTab(tab);
     setSelectedProviders(current => ({ ...current, [tab]: providerName }));
   };
 
@@ -1097,6 +1132,7 @@ export function ChatPanel({
     api.createAgentRun(requestProjectName, {
       prompt,
       mode: modeForTask(activeTask),
+      provider_id: runProviderId,
     })
       .then(() => refreshAgentRunsForProject(requestProjectName))
       .catch((err: unknown) => {
@@ -1333,7 +1369,7 @@ export function ChatPanel({
             </div>
           </div>
 
-          {(['codex', 'claude', 'gemini', 'copilot', 'local', 'mcp'] as const).map(tab => (
+          {PROVIDER_TABS.map(tab => (
             <ProviderGroup
               key={tab}
               tab={tab}
@@ -1358,6 +1394,7 @@ export function ChatPanel({
               error={agentRunsError}
               task={activeTask}
               prompt={input}
+              providerId={runProviderId}
               creatingRun={creatingRun}
               cancelingRunId={cancelingRunId}
               selectedRun={selectedRun}
