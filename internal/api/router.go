@@ -20,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/iac-studio/iac-studio/internal/agentproviderconnections"
 	"github.com/iac-studio/iac-studio/internal/agentproviders"
 	"github.com/iac-studio/iac-studio/internal/agentruns"
 	"github.com/iac-studio/iac-studio/internal/ai"
@@ -1038,6 +1039,7 @@ func requireOptionalJSONContentType(w http.ResponseWriter, r *http.Request) bool
 type RouterOptions struct {
 	MCPAirlock               *mcpairlock.Manager
 	AgentRuns                *agentruns.Store
+	AgentProviderProfiles    *agentproviderconnections.Manager
 	AppVersion               string
 	LocalAgentProviders      func() []agentproviders.LocalProviderStatus
 	AgentProviderConnections func() []agentproviders.ConnectionProviderDefinition
@@ -1080,6 +1082,10 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	if agentRuns == nil {
 		agentRuns = agentruns.NewStore()
 	}
+	agentProviderProfiles := opts.AgentProviderProfiles
+	if agentProviderProfiles == nil {
+		agentProviderProfiles = agentproviderconnections.NewManager(projectsDir)
+	}
 	if fw != nil {
 		fw.OnChange(func(file, _ string) {
 			invalidatePlanForChangedFile(projectsDir, file)
@@ -1113,6 +1119,94 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 			"providers": opts.agentProviderConnections(),
 		})
 	})
+
+	mux.HandleFunc("GET /api/agent-hub/provider-connections", func(w http.ResponseWriter, _ *http.Request) {
+		profiles, err := agentProviderProfiles.List()
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"connections": profiles})
+	})
+
+	mux.HandleFunc("POST /api/agent-hub/provider-connections", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var req agentproviderconnections.Profile
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		req.ID = ""
+		profile, err := agentProviderProfiles.Save(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusCreated)
+		_ = json.NewEncoder(w).Encode(profile)
+	})
+
+	mux.HandleFunc("GET /api/agent-hub/provider-connections/{id}", func(w http.ResponseWriter, r *http.Request) {
+		profile, err := agentProviderProfiles.Get(r.PathValue("id"))
+		if err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				http.Error(w, "agent provider connection not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(profile)
+	})
+
+	mux.HandleFunc("PUT /api/agent-hub/provider-connections/{id}", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		id := r.PathValue("id")
+		if _, err := agentProviderProfiles.Get(id); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				http.Error(w, "agent provider connection not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		var req agentproviderconnections.Profile
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid request", http.StatusBadRequest)
+			return
+		}
+		req.ID = id
+		profile, err := agentProviderProfiles.Save(req)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(profile)
+	})
+
+	mux.HandleFunc("DELETE /api/agent-hub/provider-connections/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if err := agentProviderProfiles.Delete(r.PathValue("id")); err != nil {
+			if errors.Is(err, os.ErrNotExist) {
+				http.Error(w, "agent provider connection not found", http.StatusNotFound)
+				return
+			}
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "deleted"})
+	})
+
 	registerAgentRunRoutes(mux, projectsDir, agentRuns)
 
 	// Resource catalog — returns all resources for a tool, optionally filtered by provider

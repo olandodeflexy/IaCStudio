@@ -25,6 +25,25 @@ func newLocalEncryptedSecretStore(keyForEncrypt, keyForDecrypt func() ([]byte, e
 	}
 }
 
+// NewLocalEncryptedFileSecretStore returns the same local encrypted secret
+// backend used by Cloud Connections, backed by key material at keyPath.
+func NewLocalEncryptedFileSecretStore(keyPath string) SecretStore {
+	return newLocalEncryptedSecretStore(
+		func() ([]byte, error) {
+			if key, ok := environmentEncryptionKey(); ok {
+				return key, nil
+			}
+			return loadOrCreateLocalKey(keyPath)
+		},
+		func() ([]byte, error) {
+			if key, ok := environmentEncryptionKey(); ok {
+				return key, nil
+			}
+			return loadExistingLocalKey(keyPath)
+		},
+	)
+}
+
 func (s *localEncryptedSecretStore) Kind() string {
 	return SecretStoreLocalEncrypted
 }
