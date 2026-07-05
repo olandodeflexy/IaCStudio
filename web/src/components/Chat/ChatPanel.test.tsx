@@ -7,6 +7,7 @@ import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
 const listAgentProviderConnectionsMock = vi.hoisted(() => vi.fn());
+const listAgentProviderConnectionProfilesMock = vi.hoisted(() => vi.fn());
 const listAgentRunsMock = vi.hoisted(() => vi.fn());
 const createAgentRunMock = vi.hoisted(() => vi.fn());
 const getAgentRunMock = vi.hoisted(() => vi.fn());
@@ -17,6 +18,7 @@ vi.mock('../../api', () => ({
   api: {
     listLocalAgentProviders: listLocalAgentProvidersMock,
     listAgentProviderConnections: listAgentProviderConnectionsMock,
+    listAgentProviderConnectionProfiles: listAgentProviderConnectionProfilesMock,
     listAgentRuns: listAgentRunsMock,
     createAgentRun: createAgentRunMock,
     getAgentRun: getAgentRunMock,
@@ -83,6 +85,8 @@ describe('ChatPanel', () => {
     listLocalAgentProvidersMock.mockReturnValue(new Promise(() => {}));
     listAgentProviderConnectionsMock.mockReset();
     listAgentProviderConnectionsMock.mockReturnValue(new Promise(() => {}));
+    listAgentProviderConnectionProfilesMock.mockReset();
+    listAgentProviderConnectionProfilesMock.mockReturnValue(new Promise(() => {}));
     listAgentRunsMock.mockReset();
     listAgentRunsMock.mockResolvedValue([]);
     createAgentRunMock.mockReset();
@@ -256,8 +260,71 @@ describe('ChatPanel', () => {
     expect(within(catalog).queryByText('sk-test-secret')).not.toBeInTheDocument();
   });
 
+  it('shows redacted saved provider profiles for the matching provider lane', async () => {
+    listAgentProviderConnectionsMock.mockResolvedValueOnce([
+      {
+        id: 'openai-api',
+        name: 'OpenAI API',
+        family: 'openai',
+        category: 'api',
+        credential_mode: 'secret_store',
+        required_fields: ['model'],
+        secret_fields: ['api_key'],
+        capabilities: ['chat'],
+        cost_controls: ['monthly_budget'],
+        billing_hint: 'Billed through the OpenAI Platform API account.',
+        data_handling_hint: 'Prompts are sent to the configured OpenAI API endpoint.',
+        secret_storage_hint: 'Keys stay in a secret store.',
+        setup_hint: 'Use for automation.',
+      },
+    ]);
+    listAgentProviderConnectionProfilesMock.mockResolvedValueOnce([
+      {
+        id: 'agent_provider_connection_000001',
+        name: 'OpenAI prod automation',
+        provider_id: 'openai-api',
+        credential_mode: 'secret_store',
+        metadata: { model: 'gpt-5' },
+        cost_controls: { monthly_budget: '100' },
+        secret_fields: ['api_key'],
+        secret_store: 'local_encrypted',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+      },
+      {
+        id: 'agent_provider_connection_000002',
+        name: 'Anthropic team automation',
+        provider_id: 'anthropic-api',
+        credential_mode: 'secret_store',
+        secret_fields: ['api_key'],
+        secret_store: 'local_encrypted',
+        created_at: '2026-07-01T10:00:00Z',
+        updated_at: '2026-07-01T10:00:00Z',
+      },
+    ]);
+
+    render(<ChatPanel {...baseProps} />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+
+    await waitFor(() => {
+      expect(within(codexPanel).getByRole('region', { name: 'Codex saved provider connections' })).toBeInTheDocument();
+    });
+    const savedProfiles = within(codexPanel).getByRole('region', { name: 'Codex saved provider connections' });
+    const openAiProfile = within(savedProfiles).getByLabelText('OpenAI prod automation saved provider connection');
+    expect(openAiProfile).toBeInTheDocument();
+    expect(within(openAiProfile).getByText('local_encrypted')).toBeInTheDocument();
+    expect(within(openAiProfile).getByText('1 secret field')).toBeInTheDocument();
+    expect(within(openAiProfile).getByText('model')).toBeInTheDocument();
+    expect(within(openAiProfile).getByText('monthly budget')).toBeInTheDocument();
+    expect(within(savedProfiles).getByText(/Secret values and external refs are never shown/)).toBeInTheDocument();
+    expect(within(savedProfiles).queryByText('Anthropic team automation')).not.toBeInTheDocument();
+    expect(within(savedProfiles).queryByText('sk-test-secret')).not.toBeInTheDocument();
+  });
+
   it('keeps provider panels usable when the connection catalog cannot load', async () => {
     listAgentProviderConnectionsMock.mockRejectedValueOnce(new Error('catalog unavailable'));
+    listAgentProviderConnectionProfilesMock.mockRejectedValueOnce(new Error('profiles unavailable'));
 
     render(<ChatPanel {...baseProps} />);
     fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
