@@ -256,18 +256,6 @@ func (m *Manager) Save(input Connection) (PublicConnection, error) {
 	input.SecretRefs = secretRefsMetadata(input.AuthMethod, input.SecretRefs)
 	applySecretReferenceDefaults(&input)
 
-	replaced := false
-	for index, existing := range connections {
-		if existing.ID == input.ID {
-			connections[index] = input
-			replaced = true
-			break
-		}
-	}
-	if !replaced {
-		connections = append(connections, input)
-	}
-
 	persistedInput, err := m.storeConnectionSecrets([]Connection{input})
 	if err != nil {
 		return PublicConnection{}, err
@@ -526,22 +514,6 @@ func (m *Manager) saveUnlocked(connections []Connection) error {
 	if err != nil {
 		return err
 	}
-	return m.writeConnectionsUnlocked(persisted)
-}
-
-func (m *Manager) saveOneUnlocked(connections []Connection, index int) error {
-	if index < 0 || index >= len(connections) {
-		return os.ErrNotExist
-	}
-	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
-		return fmt.Errorf("create cloud connections directory: %w", err)
-	}
-	persistedOne, err := m.storeConnectionSecrets([]Connection{connections[index]})
-	if err != nil {
-		return err
-	}
-	persisted := slices.Clone(connections)
-	persisted[index] = persistedOne[0]
 	return m.writeConnectionsUnlocked(persisted)
 }
 
