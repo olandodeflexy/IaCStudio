@@ -261,32 +261,24 @@ func (m *Manager) Save(input Connection) (PublicConnection, error) {
 		return PublicConnection{}, err
 	}
 
-	// Re-read after the backend call so local file migrations discovered by a
-	// concurrent reader are preserved. Save/Delete mutations are serialized by
-	// mutationsMu, but the file mutex is intentionally not held during I/O.
-	current, _, err := m.loadSnapshot(false)
-	if err != nil {
-		return PublicConnection{}, err
-	}
-	persisted, err := m.storeConnectionSecrets(current)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, err := m.readConnectionsUnlocked()
 	if err != nil {
 		return PublicConnection{}, err
 	}
 	committed := false
-	for index, existing := range persisted {
+	for index, existing := range current {
 		if existing.ID == input.ID {
-			persisted[index] = persistedInput[0]
+			current[index] = persistedInput[0]
 			committed = true
 			break
 		}
 	}
 	if !committed {
-		persisted = append(persisted, persistedInput[0])
+		current = append(current, persistedInput[0])
 	}
-
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if err := m.writeConnectionsUnlocked(persisted); err != nil {
+	if err := m.writeConnectionsUnlocked(current); err != nil {
 		return PublicConnection{}, err
 	}
 	return publicConnection(input), nil
