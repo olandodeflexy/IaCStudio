@@ -114,6 +114,7 @@ type Manager struct {
 	secretStores   map[string]SecretStore
 	secretStoresMu sync.RWMutex
 	mu             sync.RWMutex
+	mutationsMu    sync.Mutex
 }
 
 func NewManager(projectsDir string, opts ...Option) *Manager {
@@ -226,10 +227,10 @@ func (m *Manager) Save(input Connection) (PublicConnection, error) {
 		return PublicConnection{}, err
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mutationsMu.Lock()
+	defer m.mutationsMu.Unlock()
 
-	connections, err := m.loadUnlocked()
+	connections, _, err := m.loadSnapshot(false)
 	if err != nil {
 		return PublicConnection{}, err
 	}
@@ -255,40 +256,70 @@ func (m *Manager) Save(input Connection) (PublicConnection, error) {
 	input.SecretRefs = secretRefsMetadata(input.AuthMethod, input.SecretRefs)
 	applySecretReferenceDefaults(&input)
 
-	replaced := false
-	for index, existing := range connections {
+	persistedInput, err := m.storeConnectionSecrets([]Connection{input})
+	if err != nil {
+		return PublicConnection{}, err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, err := m.readConnectionsUnlocked()
+	if err != nil {
+		return PublicConnection{}, err
+	}
+	committed := false
+	for index, existing := range current {
 		if existing.ID == input.ID {
-			connections[index] = input
-			replaced = true
+			current[index] = persistedInput[0]
+			committed = true
 			break
 		}
 	}
-	if !replaced {
-		connections = append(connections, input)
+	if !committed {
+		current = append(current, persistedInput[0])
 	}
-
-	if err := m.saveUnlocked(connections); err != nil {
+	if err := m.writeConnectionsUnlocked(current); err != nil {
 		return PublicConnection{}, err
 	}
 	return publicConnection(input), nil
 }
 
 func (m *Manager) Delete(id string) error {
-	m.mu.Lock()
-	defer m.mu.Unlock()
+	m.mutationsMu.Lock()
+	defer m.mutationsMu.Unlock()
 
+	m.mu.RLock()
 	connections, err := m.readConnectionsUnlocked()
+	m.mu.RUnlock()
 	if err != nil {
 		return err
 	}
-	next := connections[:0]
+
+	var target *Connection
+	for index := range connections {
+		if connections[index].ID == id {
+			target = cloneConnection(connections[index])
+			break
+		}
+	}
+	if target == nil {
+		return os.ErrNotExist
+	}
+	if err := m.deleteConnectionSecrets(*target); err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	connections, err = m.readConnectionsUnlocked()
+	if err != nil {
+		return err
+	}
+	next := make([]Connection, 0, len(connections)-1)
 	found := false
 	for _, connection := range connections {
 		if connection.ID == id {
 			found = true
-			if err := m.deleteConnectionSecrets(connection); err != nil {
-				return err
-			}
 			continue
 		}
 		next = append(next, connection)
@@ -296,7 +327,7 @@ func (m *Manager) Delete(id string) error {
 	if !found {
 		return os.ErrNotExist
 	}
-	return m.saveUnlocked(next)
+	return m.writeConnectionsUnlocked(next)
 }
 
 func (m *Manager) Test(id string) (TestResult, error) {
@@ -325,9 +356,7 @@ func (m *Manager) Test(id string) (TestResult, error) {
 }
 
 func (m *Manager) load() ([]Connection, error) {
-	m.mu.RLock()
-	connections, needsMigration, err := m.loadUnlockedWithMigrationFlag(false)
-	m.mu.RUnlock()
+	connections, needsMigration, err := m.loadSnapshot(false)
 	if err != nil {
 		return nil, err
 	}
@@ -335,25 +364,14 @@ func (m *Manager) load() ([]Connection, error) {
 		return connections, nil
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	connections, needsMigration, err = m.loadUnlockedWithMigrationFlag(false)
-	if err != nil {
-		return nil, err
-	}
-	if !needsMigration {
-		return connections, nil
-	}
-	if err := m.saveUnlocked(connections); err != nil {
+	if err := m.persistMigration(false); err != nil {
 		return nil, err
 	}
 	return connections, nil
 }
 
 func (m *Manager) loadOne(id string, resolveSecretRefs bool) (*Connection, error) {
-	m.mu.RLock()
-	connections, index, needsMigration, err := m.loadOneUnlockedWithMigrationFlag(id, resolveSecretRefs)
-	m.mu.RUnlock()
+	connections, index, needsMigration, err := m.loadOneSnapshot(id, resolveSecretRefs)
 	if err != nil {
 		return nil, err
 	}
@@ -364,22 +382,10 @@ func (m *Manager) loadOne(id string, resolveSecretRefs bool) (*Connection, error
 		return cloneConnection(connections[index]), nil
 	}
 
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	connections, index, needsMigration, err = m.loadOneUnlockedWithMigrationFlag(id, resolveSecretRefs)
-	if err != nil {
+	if err := m.persistOneMigration(id, resolveSecretRefs); err != nil {
 		return nil, err
 	}
-	if index < 0 {
-		return nil, os.ErrNotExist
-	}
-	if !needsMigration {
-		return cloneConnection(connections[index]), nil
-	}
-	if err := m.saveOneUnlocked(connections, index); err != nil {
-		return nil, err
-	}
-	connections, index, _, err = m.loadOneUnlockedWithMigrationFlag(id, resolveSecretRefs)
+	connections, index, _, err = m.loadOneSnapshot(id, resolveSecretRefs)
 	if err != nil {
 		return nil, err
 	}
@@ -389,13 +395,13 @@ func (m *Manager) loadOne(id string, resolveSecretRefs bool) (*Connection, error
 	return cloneConnection(connections[index]), nil
 }
 
-func (m *Manager) loadUnlocked() ([]Connection, error) {
-	connections, _, err := m.loadUnlockedWithMigrationFlag(false)
-	return connections, err
-}
-
-func (m *Manager) loadUnlockedWithMigrationFlag(resolveSecretRefs bool) ([]Connection, bool, error) {
+// loadSnapshot reads the connection file under the file lock, then resolves
+// any requested secret values after releasing it. This keeps network-backed
+// SecretStore calls out of Manager.mu.
+func (m *Manager) loadSnapshot(resolveSecretRefs bool) ([]Connection, bool, error) {
+	m.mu.RLock()
 	connections, err := m.readConnectionsUnlocked()
+	m.mu.RUnlock()
 	if err != nil {
 		return nil, false, err
 	}
@@ -409,8 +415,10 @@ func (m *Manager) loadUnlockedWithMigrationFlag(resolveSecretRefs bool) ([]Conne
 	return connections, needsMigration, nil
 }
 
-func (m *Manager) loadOneUnlockedWithMigrationFlag(id string, resolveSecretRefs bool) ([]Connection, int, bool, error) {
+func (m *Manager) loadOneSnapshot(id string, resolveSecretRefs bool) ([]Connection, int, bool, error) {
+	m.mu.RLock()
 	connections, err := m.readConnectionsUnlocked()
+	m.mu.RUnlock()
 	if err != nil {
 		return nil, -1, false, err
 	}
@@ -428,6 +436,51 @@ func (m *Manager) loadOneUnlockedWithMigrationFlag(id string, resolveSecretRefs 
 		return connections, index, needsMigration, nil
 	}
 	return connections, -1, false, nil
+}
+
+func (m *Manager) persistMigration(resolveSecretRefs bool) error {
+	m.mutationsMu.Lock()
+	defer m.mutationsMu.Unlock()
+
+	connections, needsMigration, err := m.loadSnapshot(resolveSecretRefs)
+	if err != nil || !needsMigration {
+		return err
+	}
+	persisted, err := m.storeConnectionSecrets(connections)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.writeConnectionsUnlocked(persisted)
+}
+
+func (m *Manager) persistOneMigration(id string, resolveSecretRefs bool) error {
+	m.mutationsMu.Lock()
+	defer m.mutationsMu.Unlock()
+
+	connections, index, needsMigration, err := m.loadOneSnapshot(id, resolveSecretRefs)
+	if err != nil || index < 0 || !needsMigration {
+		return err
+	}
+	persisted, err := m.storeConnectionSecrets([]Connection{connections[index]})
+	if err != nil {
+		return err
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	current, err := m.readConnectionsUnlocked()
+	if err != nil {
+		return err
+	}
+	for currentIndex := range current {
+		if current[currentIndex].ID == id {
+			current[currentIndex] = persisted[0]
+			return m.writeConnectionsUnlocked(current)
+		}
+	}
+	return os.ErrNotExist
 }
 
 func (m *Manager) readConnectionsUnlocked() ([]Connection, error) {
@@ -453,22 +506,6 @@ func (m *Manager) saveUnlocked(connections []Connection) error {
 	if err != nil {
 		return err
 	}
-	return m.writeConnectionsUnlocked(persisted)
-}
-
-func (m *Manager) saveOneUnlocked(connections []Connection, index int) error {
-	if index < 0 || index >= len(connections) {
-		return os.ErrNotExist
-	}
-	if err := os.MkdirAll(filepath.Dir(m.path), 0o755); err != nil {
-		return fmt.Errorf("create cloud connections directory: %w", err)
-	}
-	persistedOne, err := m.storeConnectionSecrets([]Connection{connections[index]})
-	if err != nil {
-		return err
-	}
-	persisted := slices.Clone(connections)
-	persisted[index] = persistedOne[0]
 	return m.writeConnectionsUnlocked(persisted)
 }
 

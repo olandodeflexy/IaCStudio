@@ -68,6 +68,226 @@ func (s *fakeSecretStore) Delete(_ context.Context, _ SecretScope, stored Stored
 	return nil
 }
 
+type blockingSecretStore struct {
+	fakeSecretStore
+	operation string
+	started   chan struct{}
+	release   chan struct{}
+	startOnce sync.Once
+}
+
+func (s *blockingSecretStore) block(operation string) {
+	if s.operation != operation {
+		return
+	}
+	s.startOnce.Do(func() { close(s.started) })
+	<-s.release
+}
+
+func (s *blockingSecretStore) Save(ctx context.Context, scope SecretScope, secrets map[string]string) (StoredSecrets, error) {
+	s.block("save")
+	return s.fakeSecretStore.Save(ctx, scope, secrets)
+}
+
+func (s *blockingSecretStore) Load(ctx context.Context, scope SecretScope, stored StoredSecrets) (LoadedSecrets, error) {
+	s.block("load")
+	return s.fakeSecretStore.Load(ctx, scope, stored)
+}
+
+func (s *blockingSecretStore) Delete(ctx context.Context, scope SecretScope, stored StoredSecrets) error {
+	s.block("delete")
+	return s.fakeSecretStore.Delete(ctx, scope, stored)
+}
+
+func TestManagerDoesNotHoldFileLockDuringSecretStoreSave(t *testing.T) {
+	store := &blockingSecretStore{
+		fakeSecretStore: fakeSecretStore{kind: "vault"},
+		operation:       "save",
+		started:         make(chan struct{}),
+		release:         make(chan struct{}),
+	}
+	manager := NewManager(t.TempDir(), WithSecretStore(store))
+	saveDone := make(chan error, 1)
+	go func() {
+		_, err := manager.Save(Connection{
+			Name:        "external",
+			Provider:    ProviderAWS,
+			AuthMethod:  "aws_static",
+			Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+			Secrets:     map[string]string{"secret_access_key": "super-secret"},
+			SecretStore: "vault",
+		})
+		saveDone <- err
+	}()
+
+	<-store.started
+	listDone := make(chan error, 1)
+	go func() {
+		_, err := manager.List()
+		listDone <- err
+	}()
+	select {
+	case err := <-listDone:
+		if err != nil {
+			t.Fatalf("List while secret store Save is blocked: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("List blocked behind secret store Save")
+	}
+
+	close(store.release)
+	if err := <-saveDone; err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+}
+
+func TestManagerDoesNotHoldFileLockDuringSecretStoreLoad(t *testing.T) {
+	ref := "vault://connections/conn_external/secret_access_key"
+	store := &blockingSecretStore{
+		fakeSecretStore: fakeSecretStore{
+			kind:   "vault",
+			values: map[string]string{ref: "super-secret"},
+		},
+		operation: "load",
+		started:   make(chan struct{}),
+		release:   make(chan struct{}),
+	}
+	manager := NewManager(t.TempDir(), WithSecretStore(store))
+	record := []Connection{{
+		ID:          "conn_external",
+		Name:        "external",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		SecretStore: "vault",
+		SecretRefs:  map[string]string{"secret_access_key": ref},
+	}}
+	data, err := json.Marshal(record)
+	if err != nil {
+		t.Fatalf("marshal external connection: %v", err)
+	}
+	if err := os.WriteFile(manager.path, data, 0o600); err != nil {
+		t.Fatalf("write external connection: %v", err)
+	}
+
+	loadDone := make(chan error, 1)
+	go func() {
+		_, err := manager.GetForUse("conn_external")
+		loadDone <- err
+	}()
+	<-store.started
+
+	saveDone := make(chan error, 1)
+	go func() {
+		_, err := manager.Save(Connection{
+			Name:       "writer",
+			Provider:   ProviderAWS,
+			AuthMethod: "aws_profile",
+			Metadata:   map[string]string{"profile": "writer"},
+		})
+		saveDone <- err
+	}()
+	select {
+	case err := <-saveDone:
+		if err != nil {
+			t.Fatalf("Save while secret store Load is blocked: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Save blocked behind secret store Load")
+	}
+
+	close(store.release)
+	if err := <-loadDone; err != nil {
+		t.Fatalf("GetForUse: %v", err)
+	}
+}
+
+func TestManagerDoesNotHoldFileLockDuringSecretStoreDelete(t *testing.T) {
+	store := &blockingSecretStore{fakeSecretStore: fakeSecretStore{kind: "vault"}}
+	manager := NewManager(t.TempDir(), WithSecretStore(store))
+	created, err := manager.Save(Connection{
+		Name:        "external",
+		Provider:    ProviderAWS,
+		AuthMethod:  "aws_static",
+		Metadata:    map[string]string{"access_key_id": "AKIAEXAMPLE"},
+		Secrets:     map[string]string{"secret_access_key": "super-secret"},
+		SecretStore: "vault",
+	})
+	if err != nil {
+		t.Fatalf("initial Save: %v", err)
+	}
+	store.operation = "delete"
+	store.started = make(chan struct{})
+	store.release = make(chan struct{})
+	store.startOnce = sync.Once{}
+
+	deleteDone := make(chan error, 1)
+	go func() { deleteDone <- manager.Delete(created.ID) }()
+	<-store.started
+
+	listDone := make(chan error, 1)
+	go func() {
+		_, err := manager.List()
+		listDone <- err
+	}()
+	select {
+	case err := <-listDone:
+		if err != nil {
+			t.Fatalf("List while secret store Delete is blocked: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("List blocked behind secret store Delete")
+	}
+
+	close(store.release)
+	if err := <-deleteDone; err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+}
+
+func TestManagerSerializesConcurrentSavesWithoutDroppingConnections(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	inputs := []Connection{
+		{
+			Name:       "first",
+			Provider:   ProviderAWS,
+			AuthMethod: "aws_profile",
+			Metadata:   map[string]string{"profile": "first"},
+		},
+		{
+			Name:       "second",
+			Provider:   ProviderAWS,
+			AuthMethod: "aws_profile",
+			Metadata:   map[string]string{"profile": "second"},
+		},
+	}
+	errs := make(chan error, len(inputs))
+	var waitGroup sync.WaitGroup
+	for _, input := range inputs {
+		waitGroup.Add(1)
+		go func(input Connection) {
+			defer waitGroup.Done()
+			_, err := manager.Save(input)
+			errs <- err
+		}(input)
+	}
+	waitGroup.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Save: %v", err)
+		}
+	}
+
+	connections, err := manager.List()
+	if err != nil {
+		t.Fatalf("List after concurrent Save: %v", err)
+	}
+	if len(connections) != len(inputs) {
+		t.Fatalf("concurrent Save dropped a connection: got %d, want %d", len(connections), len(inputs))
+	}
+}
+
 func TestManagerRedactsStaticSecrets(t *testing.T) {
 	manager := NewManager(t.TempDir())
 
