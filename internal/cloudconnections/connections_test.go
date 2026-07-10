@@ -177,18 +177,23 @@ func TestManagerDoesNotHoldFileLockDuringSecretStoreLoad(t *testing.T) {
 	}()
 	<-store.started
 
-	listDone := make(chan error, 1)
+	saveDone := make(chan error, 1)
 	go func() {
-		_, err := manager.List()
-		listDone <- err
+		_, err := manager.Save(Connection{
+			Name:       "writer",
+			Provider:   ProviderAWS,
+			AuthMethod: "aws_profile",
+			Metadata:   map[string]string{"profile": "writer"},
+		})
+		saveDone <- err
 	}()
 	select {
-	case err := <-listDone:
+	case err := <-saveDone:
 		if err != nil {
-			t.Fatalf("List while secret store Load is blocked: %v", err)
+			t.Fatalf("Save while secret store Load is blocked: %v", err)
 		}
 	case <-time.After(time.Second):
-		t.Fatal("List blocked behind secret store Load")
+		t.Fatal("Save blocked behind secret store Load")
 	}
 
 	close(store.release)
