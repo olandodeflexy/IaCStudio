@@ -60,6 +60,7 @@ func (a *Authorizer) Authorize(request Request) Decision {
 	}
 	if entry.ServerID != request.ServerID ||
 		entry.Name != request.ToolName ||
+		entry.Risk != request.Risk ||
 		entry.Risk != entry.Decision.Risk {
 		return denied(ReasonAirlockToolMismatch)
 	}
