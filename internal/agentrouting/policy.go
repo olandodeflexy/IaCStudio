@@ -161,11 +161,15 @@ func (p Policy) Validate() error {
 // Match returns the first matching rule. Callers must treat a false result as
 // deny; this package does not provide an implicit allow decision.
 func (p Policy) Match(request Request) (Rule, bool) {
-	if request.Validate() != nil {
+	if request.Validate() != nil || p.Validate() != nil {
 		return Rule{}, false
 	}
+	return p.matchValidated(request)
+}
+
+func (p Policy) matchValidated(request Request) (Rule, bool) {
 	for _, rule := range p.Rules {
-		if rule.Validate() == nil && rule.matchesValidated(request) {
+		if rule.matchesValidated(request) {
 			return rule, true
 		}
 	}
