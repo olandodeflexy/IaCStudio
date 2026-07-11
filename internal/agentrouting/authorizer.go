@@ -62,10 +62,11 @@ func (a *Authorizer) Authorize(request Request) Decision {
 		return denied(ReasonAirlockUnavailable)
 	}
 	if entry.ServerID != request.ServerID ||
-		entry.Name != request.ToolName ||
-		entry.Risk != request.Risk ||
-		entry.Risk != entry.Decision.Risk {
+		entry.Name != request.ToolName {
 		return denied(ReasonAirlockToolMismatch)
+	}
+	if entry.Risk != entry.Decision.Risk {
+		return denied(ReasonInvalidAirlockDecision)
 	}
 	return evaluateMatched(rule, request, entry.Decision)
 }

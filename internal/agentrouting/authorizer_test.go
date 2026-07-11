@@ -109,13 +109,13 @@ func TestAuthorizerFailsClosedOnAirlockErrorsAndMismatches(t *testing.T) {
 		{name: "tool mismatch", mutate: func(evaluator *fakeToolEvaluator) {
 			evaluator.entry.Name = "other_tool"
 		}, wantReason: ReasonAirlockToolMismatch},
-		{name: "inventory risk mismatch", mutate: func(evaluator *fakeToolEvaluator) {
+		{name: "inventory and decision risk mismatch", mutate: func(evaluator *fakeToolEvaluator) {
 			evaluator.entry.Risk = mcpairlock.RiskCloudMutation
-		}, wantReason: ReasonAirlockToolMismatch},
-		{name: "consistent entry risk differs from request risk", mutate: func(evaluator *fakeToolEvaluator) {
+		}, wantReason: ReasonInvalidAirlockDecision},
+		{name: "airlock risk differs from request", mutate: func(evaluator *fakeToolEvaluator) {
 			evaluator.entry.Risk = mcpairlock.RiskGenerateCode
 			evaluator.entry.Decision.Risk = mcpairlock.RiskGenerateCode
-		}, wantReason: ReasonAirlockToolMismatch},
+		}, wantReason: ReasonAirlockRiskMismatch},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
