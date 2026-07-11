@@ -41,6 +41,16 @@ const (
 	ModeApprovedExecute Mode = "approved_execute"
 )
 
+// Valid reports whether the mode is supported by agent runs.
+func (m Mode) Valid() bool {
+	switch m {
+	case ModeReadOnly, ModeProposeOnly, ModeApprovedExecute:
+		return true
+	default:
+		return false
+	}
+}
+
 type LogLevel string
 
 const (
@@ -215,7 +225,7 @@ func (s *Store) Create(req CreateRequest) (Run, error) {
 	if mode == "" {
 		mode = ModeReadOnly
 	}
-	if !validMode(mode) {
+	if !mode.Valid() {
 		return Run{}, fmt.Errorf("invalid agent run mode: %s", mode)
 	}
 
@@ -544,15 +554,6 @@ var (
 	ErrApprovalDecided  = errors.New("approval gate is already decided")
 	ErrUnsafePatchPath  = errors.New("patch path must be a relative path within the project")
 )
-
-func validMode(mode Mode) bool {
-	switch mode {
-	case ModeReadOnly, ModeProposeOnly, ModeApprovedExecute:
-		return true
-	default:
-		return false
-	}
-}
 
 func validStatus(status Status) bool {
 	switch status {

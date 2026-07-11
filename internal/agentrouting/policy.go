@@ -73,7 +73,7 @@ func (r Request) Validate() error {
 	); err != nil {
 		return err
 	}
-	if !validMode(r.Mode) {
+	if !r.Mode.Valid() {
 		return fmt.Errorf("%w: unsupported mode %q", ErrInvalidRequest, r.Mode)
 	}
 	if !validRisk(r.Risk) {
@@ -96,7 +96,7 @@ func (r Rule) Validate() error {
 		return fmt.Errorf("%w: at least one mode is required", ErrInvalidRule)
 	}
 	for _, mode := range r.Modes {
-		if !validMode(mode) {
+		if !mode.Valid() {
 			return fmt.Errorf("%w: unsupported mode %q", ErrInvalidRule, mode)
 		}
 	}
@@ -170,15 +170,6 @@ func (p Policy) Match(request Request) (Rule, bool) {
 		}
 	}
 	return Rule{}, false
-}
-
-func validMode(mode agentruns.Mode) bool {
-	switch mode {
-	case agentruns.ModeReadOnly, agentruns.ModeProposeOnly, agentruns.ModeApprovedExecute:
-		return true
-	default:
-		return false
-	}
 }
 
 func validateRequiredFields(root error, fields ...fieldValue) error {
