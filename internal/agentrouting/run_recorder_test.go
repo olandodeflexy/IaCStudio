@@ -74,6 +74,21 @@ func TestRunRecorderRecordsUnsafeModeDenial(t *testing.T) {
 	}
 }
 
+func TestRunRecorderRejectsMisleadingUnsafeDenialWithoutMutation(t *testing.T) {
+	request := validRequest()
+	request.Mode = agentruns.ModeReadOnly
+	request.Risk = mcpairlock.RiskCloudMutation
+	recorder, store, run := recorderFixture(t, request)
+
+	if _, err := recorder.Record(run.ID, request, denied(ReasonPolicyDenied)); !errors.Is(err, ErrInvalidDecision) {
+		t.Fatalf("Record(misleading denial) error = %v, want ErrInvalidDecision", err)
+	}
+	unchanged, ok := store.Get(run.ID)
+	if !ok || unchanged.Status != agentruns.StatusQueued || len(unchanged.Logs) != 0 || len(unchanged.Approvals) != 0 {
+		t.Fatalf("run mutated after misleading denial: %+v", unchanged)
+	}
+}
+
 func TestRunRecorderMapsApprovalKinds(t *testing.T) {
 	tests := []struct {
 		name string
