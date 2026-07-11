@@ -13,6 +13,24 @@ import (
 
 var testPromptHashKey = []byte("01234567890123456789012345678901")
 
+func TestModeValid(t *testing.T) {
+	tests := []struct {
+		mode Mode
+		want bool
+	}{
+		{mode: ModeReadOnly, want: true},
+		{mode: ModeProposeOnly, want: true},
+		{mode: ModeApprovedExecute, want: true},
+		{mode: "", want: false},
+		{mode: "unsafe", want: false},
+	}
+	for _, test := range tests {
+		if got := test.mode.Valid(); got != test.want {
+			t.Errorf("Mode(%q).Valid() = %v, want %v", test.mode, got, test.want)
+		}
+	}
+}
+
 func TestStoreCreateRedactsPromptAndDefaultsReadOnly(t *testing.T) {
 	now := fixedClock()
 	store := NewStore(WithClock(now.now), WithPromptHashKey(testPromptHashKey))
