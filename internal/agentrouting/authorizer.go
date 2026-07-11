@@ -46,6 +46,9 @@ func (a *Authorizer) Authorize(request Request) Decision {
 	if a == nil || missingToolEvaluator(a.evaluator) {
 		return denied(ReasonAirlockUnavailable)
 	}
+	if a.policy.Validate() != nil {
+		return denied(ReasonInvalidPolicy)
+	}
 	rule, matched := a.policy.matchValidated(request)
 	if !matched {
 		return denied(ReasonNoMatchingRule)
@@ -73,7 +76,7 @@ func missingToolEvaluator(evaluator ToolEvaluator) bool {
 	}
 	value := reflect.ValueOf(evaluator)
 	switch value.Kind() {
-	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Pointer, reflect.Slice:
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
 		return value.IsNil()
 	default:
 		return false

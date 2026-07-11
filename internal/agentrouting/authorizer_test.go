@@ -151,6 +151,18 @@ func TestAuthorizerSnapshotsValidatedPolicy(t *testing.T) {
 	}
 }
 
+func TestAuthorizerRejectsInvalidStoredPolicyBeforeCallingAirlock(t *testing.T) {
+	policy, request, decision := readOnlyEvaluation()
+	policy.Rules[0].Effect = "unsupported"
+	evaluator := &fakeToolEvaluator{entry: evaluationEntry(request, decision)}
+	authorizer := &Authorizer{policy: policy, evaluator: evaluator}
+
+	got := authorizer.Authorize(request)
+	if got.Status != DecisionDenied || got.Reason != ReasonInvalidPolicy || evaluator.calls != 0 {
+		t.Fatalf("Authorize() = %+v, calls = %d; want invalid policy denial without Airlock call", got, evaluator.calls)
+	}
+}
+
 func TestNewAuthorizerRejectsInvalidDependencies(t *testing.T) {
 	policy, _, _ := readOnlyEvaluation()
 	if _, err := NewAuthorizer(policy, nil); !errors.Is(err, ErrToolEvaluatorRequired) {
