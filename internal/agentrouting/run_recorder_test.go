@@ -222,6 +222,9 @@ func TestRunRecorderRejectsMissingDependenciesAndRuns(t *testing.T) {
 	if _, err := recorder.Record("", request, allowed()); !errors.Is(err, ErrRunIDRequired) {
 		t.Fatalf("Record(empty id) error = %v, want ErrRunIDRequired", err)
 	}
+	if _, err := recorder.Record(" run_000001", request, allowed()); !errors.Is(err, ErrInvalidRunID) {
+		t.Fatalf("Record(padded id) error = %v, want ErrInvalidRunID", err)
+	}
 	if _, err := recorder.Record("run_missing", request, allowed()); !errors.Is(err, agentruns.ErrNotFound) {
 		t.Fatalf("Record(missing run) error = %v, want ErrNotFound", err)
 	}

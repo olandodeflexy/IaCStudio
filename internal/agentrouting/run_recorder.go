@@ -12,6 +12,7 @@ import (
 var (
 	ErrRunStoreRequired = errors.New("agent run store is required")
 	ErrRunIDRequired    = errors.New("agent run id is required")
+	ErrInvalidRunID     = errors.New("agent run id must not contain leading or trailing whitespace")
 	ErrRunScopeMismatch = errors.New("agent run scope does not match tool route")
 )
 
@@ -35,8 +36,11 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 		return agentruns.Run{}, ErrRunStoreRequired
 	}
 	trimmedRunID := strings.TrimSpace(runID)
-	if trimmedRunID == "" || trimmedRunID != runID {
+	if trimmedRunID == "" {
 		return agentruns.Run{}, ErrRunIDRequired
+	}
+	if trimmedRunID != runID {
+		return agentruns.Run{}, ErrInvalidRunID
 	}
 	if err := request.Validate(); err != nil {
 		return agentruns.Run{}, err
