@@ -89,6 +89,19 @@ func TestRunRecorderRejectsMisleadingUnsafeDenialWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestRunRecorderRejectsContradictoryModeMismatchReasonWithoutMutation(t *testing.T) {
+	_, request, _ := readOnlyEvaluation()
+	recorder, store, run := recorderFixture(t, request)
+
+	if _, err := recorder.Record(run.ID, request, denied(ReasonModeRiskMismatch)); !errors.Is(err, ErrInvalidDecision) {
+		t.Fatalf("Record(contradictory mode mismatch) error = %v, want ErrInvalidDecision", err)
+	}
+	unchanged, ok := store.Get(run.ID)
+	if !ok || unchanged.Status != agentruns.StatusQueued || len(unchanged.Logs) != 0 || len(unchanged.Approvals) != 0 {
+		t.Fatalf("run mutated after contradictory mode mismatch denial: %+v", unchanged)
+	}
+}
+
 func TestRunRecorderMapsApprovalKinds(t *testing.T) {
 	tests := []struct {
 		name string

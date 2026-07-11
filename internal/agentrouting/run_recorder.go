@@ -44,13 +44,16 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 	if err := decision.Validate(); err != nil {
 		return agentruns.Run{}, err
 	}
-	if !modeAllowsRisk(request.Mode, request.Risk) {
+	modeRiskAllowed := modeAllowsRisk(request.Mode, request.Risk)
+	if !modeRiskAllowed {
 		if decision.Status != DecisionDenied {
 			return agentruns.Run{}, fmt.Errorf("%w: mode %q cannot authorize risk %q", ErrInvalidRequest, request.Mode, request.Risk)
 		}
 		if decision.Reason != ReasonModeRiskMismatch {
 			return agentruns.Run{}, fmt.Errorf("%w: unsafe mode and risk require reason %q", ErrInvalidDecision, ReasonModeRiskMismatch)
 		}
+	} else if decision.Status == DecisionDenied && decision.Reason == ReasonModeRiskMismatch {
+		return agentruns.Run{}, fmt.Errorf("%w: reason %q requires an unsafe mode and risk pair", ErrInvalidDecision, ReasonModeRiskMismatch)
 	}
 	if decision.Status == DecisionAllowed && request.Risk != mcpairlock.RiskReadOnly {
 		return agentruns.Run{}, fmt.Errorf("%w: non-read-only risks require approval", ErrInvalidDecision)
