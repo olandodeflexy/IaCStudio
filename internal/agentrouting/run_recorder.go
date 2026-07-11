@@ -48,6 +48,9 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 	if err := decision.Validate(); err != nil {
 		return agentruns.Run{}, err
 	}
+	if decision.Status == DecisionDenied && decision.Reason == ReasonInvalidRequest {
+		return agentruns.Run{}, fmt.Errorf("%w: reason %q requires an invalid request", ErrInvalidDecision, ReasonInvalidRequest)
+	}
 	modeRiskAllowed := modeAllowsRisk(request.Mode, request.Risk)
 	if !modeRiskAllowed {
 		if decision.Status != DecisionDenied {
