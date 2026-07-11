@@ -52,7 +52,8 @@ func TestRunRecorderFailsDeniedRun(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Record(): %v", err)
 	}
-	if got.Status != agentruns.StatusFailed || got.Error != "tool authorization denied: policy_denied" || len(got.Logs) != 1 || got.Logs[0].Level != agentruns.LogAudit {
+	wantError := `MCP tool "plan_workspace" on server "terraform-official" for connection "aws-prod" authorization denied (read_only risk, read_only mode): policy_denied.`
+	if got.Status != agentruns.StatusFailed || got.Error != wantError || len(got.Logs) != 1 || got.Logs[0].Level != agentruns.LogAudit {
 		t.Fatalf("recorded run = %+v, want failed run with denial audit", got)
 	}
 }
@@ -67,7 +68,8 @@ func TestRunRecorderRecordsUnsafeModeDenial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Record(): %v", err)
 	}
-	if got.Status != agentruns.StatusFailed || got.Error != "tool authorization denied: mode_risk_mismatch" || len(got.Logs) != 1 {
+	wantError := `MCP tool "plan_workspace" on server "terraform-official" for connection "aws-prod" authorization denied (cloud_mutation risk, read_only mode): mode_risk_mismatch.`
+	if got.Status != agentruns.StatusFailed || got.Error != wantError || len(got.Logs) != 1 {
 		t.Fatalf("recorded run = %+v, want unsafe mode denial audit", got)
 	}
 }
@@ -194,5 +196,32 @@ func TestRunRecorderRejectsMissingDependenciesAndRuns(t *testing.T) {
 	}
 	if _, err := recorder.Record("run_missing", request, allowed()); !errors.Is(err, agentruns.ErrNotFound) {
 		t.Fatalf("Record(missing run) error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestRunRecorderRejectsTerminalRunWithoutDuplicateMutation(t *testing.T) {
+	_, request, _ := readOnlyEvaluation()
+	outcomes := []Decision{
+		allowed(),
+		denied(ReasonPolicyDenied),
+		approvalRequired(),
+	}
+	for _, outcome := range outcomes {
+		t.Run(string(outcome.Status), func(t *testing.T) {
+			recorder, store, run := recorderFixture(t, request)
+			if _, err := store.Fail(run.ID, "pre-terminal"); err != nil {
+				t.Fatalf("Fail(): %v", err)
+			}
+			if _, err := recorder.Record(run.ID, request, outcome); !errors.Is(err, agentruns.ErrTerminated) {
+				t.Fatalf("Record(terminal run, %s) error = %v, want ErrTerminated", outcome.Status, err)
+			}
+			terminal, ok := store.Get(run.ID)
+			if !ok {
+				t.Fatal("run evicted unexpectedly")
+			}
+			if terminal.Status != agentruns.StatusFailed || len(terminal.Logs) != 1 || len(terminal.Approvals) != 0 {
+				t.Fatalf("terminal run mutated after Record(): %+v", terminal)
+			}
+		})
 	}
 }

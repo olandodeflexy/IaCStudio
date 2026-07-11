@@ -61,7 +61,11 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 
 	switch decision.Status {
 	case DecisionDenied:
-		return r.store.Fail(runID, "tool authorization denied: "+string(decision.Reason))
+		return r.store.Fail(runID, fmt.Sprintf(
+			"MCP tool %q on server %q for connection %q authorization denied (%s risk, %s mode): %s.",
+			request.ToolName, request.ServerID, request.ConnectionID,
+			request.Risk, request.Mode, decision.Reason,
+		))
 	case DecisionApprovalRequired:
 		kind, ok := approvalKind(request.Risk)
 		if !ok {
