@@ -23,6 +23,8 @@ const (
 	ReasonModeRiskMismatch       DecisionReason = "mode_risk_mismatch"
 	ReasonNoMatchingRule         DecisionReason = "no_matching_rule"
 	ReasonPolicyDenied           DecisionReason = "policy_denied"
+	ReasonAirlockUnavailable     DecisionReason = "airlock_unavailable"
+	ReasonAirlockToolMismatch    DecisionReason = "airlock_tool_mismatch"
 	ReasonAirlockRiskMismatch    DecisionReason = "airlock_risk_mismatch"
 	ReasonInvalidAirlockDecision DecisionReason = "invalid_airlock_decision"
 	ReasonAirlockBlocked         DecisionReason = "airlock_blocked"
@@ -43,20 +45,24 @@ type Decision struct {
 // Evaluate intersects the route policy, agent mode, and Airlock firewall
 // result. Missing, malformed, or contradictory inputs always fail closed.
 func Evaluate(policy Policy, request Request, airlock mcpairlock.ToolDecision) Decision {
-	if request.Validate() != nil {
-		return denied(ReasonInvalidRequest)
-	}
-	if !modeAllowsRisk(request.Mode, request.Risk) {
-		return denied(ReasonModeRiskMismatch)
+	if decision, stop := preflight(request); stop {
+		return decision
 	}
 	if policy.Validate() != nil {
 		return denied(ReasonInvalidPolicy)
 	}
+	return evaluateValidated(policy, request, airlock)
+}
 
+func evaluateValidated(policy Policy, request Request, airlock mcpairlock.ToolDecision) Decision {
 	rule, matched := policy.matchValidated(request)
 	if !matched {
 		return denied(ReasonNoMatchingRule)
 	}
+	return evaluateMatched(rule, request, airlock)
+}
+
+func evaluateMatched(rule Rule, request Request, airlock mcpairlock.ToolDecision) Decision {
 	if rule.Effect == EffectDeny {
 		return denied(ReasonPolicyDenied)
 	}
@@ -77,6 +83,16 @@ func Evaluate(policy Policy, request Request, airlock mcpairlock.ToolDecision) D
 	default:
 		return denied(ReasonInvalidAirlockDecision)
 	}
+}
+
+func preflight(request Request) (Decision, bool) {
+	if request.Validate() != nil {
+		return denied(ReasonInvalidRequest), true
+	}
+	if !modeAllowsRisk(request.Mode, request.Risk) {
+		return denied(ReasonModeRiskMismatch), true
+	}
+	return Decision{}, false
 }
 
 func modeAllowsRisk(mode agentruns.Mode, risk mcpairlock.ToolRisk) bool {
