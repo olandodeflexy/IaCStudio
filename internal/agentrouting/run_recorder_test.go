@@ -173,6 +173,20 @@ func TestRunRecorderRejectsScopeMismatchWithoutMutation(t *testing.T) {
 	}
 }
 
+func TestRunRecorderRejectsMalformedRequestWithoutMutation(t *testing.T) {
+	_, request, _ := readOnlyEvaluation()
+	recorder, store, run := recorderFixture(t, request)
+	request.ToolName = ""
+
+	if _, err := recorder.Record(run.ID, request, allowed()); !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Record(malformed request) error = %v, want ErrInvalidRequest", err)
+	}
+	unchanged, ok := store.Get(run.ID)
+	if !ok || unchanged.Status != agentruns.StatusQueued || len(unchanged.Logs) != 0 || len(unchanged.Approvals) != 0 {
+		t.Fatalf("run mutated after malformed request: %+v", unchanged)
+	}
+}
+
 func TestRunRecorderRejectsMalformedDecisionWithoutMutation(t *testing.T) {
 	_, request, _ := readOnlyEvaluation()
 	tests := []Decision{
