@@ -65,7 +65,7 @@ func Evaluate(policy Policy, request Request, airlock mcpairlock.ToolDecision) D
 	}
 
 	switch {
-	case airlock.Status == "blocked" && !airlock.Allowed && !airlock.ApprovalRequired:
+	case airlock.Status == "blocked" && !airlock.Allowed && !airlock.ApprovalRequired && airlock.UntrustedOutput:
 		return denied(ReasonAirlockBlocked)
 	case airlock.Status == "approval_required" && !airlock.Allowed && airlock.ApprovalRequired && airlock.UntrustedOutput:
 		return approvalRequired()

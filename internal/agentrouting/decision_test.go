@@ -119,6 +119,11 @@ func TestEvaluateFailsClosed(t *testing.T) {
 			airlock.Status = "blocked"
 			airlock.Allowed = false
 		}, wantReason: ReasonAirlockBlocked},
+		{name: "blocked trusted output", mutate: func(_ *Policy, _ *Request, airlock *mcpairlock.ToolDecision) {
+			airlock.Status = "blocked"
+			airlock.Allowed = false
+			airlock.UntrustedOutput = false
+		}, wantReason: ReasonInvalidAirlockDecision},
 		{name: "contradictory airlock flags", mutate: func(_ *Policy, _ *Request, airlock *mcpairlock.ToolDecision) {
 			airlock.ApprovalRequired = true
 		}, wantReason: ReasonInvalidAirlockDecision},
