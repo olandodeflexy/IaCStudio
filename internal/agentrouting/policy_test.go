@@ -114,6 +114,35 @@ func TestRuleRejectsApprovalOnDeny(t *testing.T) {
 	}
 }
 
+func TestPolicyValidateSurfacesMisconfiguredRules(t *testing.T) {
+	good := validRule()
+
+	badRule := validRule()
+	badRule.ConnectionID = ""
+
+	tests := []struct {
+		name    string
+		policy  Policy
+		wantErr bool
+	}{
+		{name: "valid policy", policy: Policy{Rules: []Rule{good}}, wantErr: false},
+		{name: "empty policy", policy: Policy{}, wantErr: false},
+		{name: "invalid rule at index 0", policy: Policy{Rules: []Rule{badRule}}, wantErr: true},
+		{name: "invalid rule after valid rule", policy: Policy{Rules: []Rule{good, badRule}}, wantErr: true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := test.policy.Validate()
+			if (err != nil) != test.wantErr {
+				t.Fatalf("Policy.Validate() error = %v, wantErr %v", err, test.wantErr)
+			}
+			if test.wantErr && !errors.Is(err, ErrInvalidRule) {
+				t.Fatalf("Policy.Validate() error = %v, want ErrInvalidRule", err)
+			}
+		})
+	}
+}
+
 func TestRuleRejectsUnsafeAllowDefaults(t *testing.T) {
 	tests := []struct {
 		name   string

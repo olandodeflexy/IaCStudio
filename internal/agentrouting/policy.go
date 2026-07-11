@@ -140,6 +140,19 @@ func (r Rule) Matches(request Request) bool {
 	return false
 }
 
+// Validate checks every rule in the policy and returns the first error found.
+// Callers should call Validate when loading a policy so that misconfigured
+// rules (e.g. empty required fields after a config write bug) are reported at
+// load time rather than silently skipped during Match.
+func (p Policy) Validate() error {
+	for i, rule := range p.Rules {
+		if err := rule.Validate(); err != nil {
+			return fmt.Errorf("rule[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
 // Match returns the first matching rule. Callers must treat a false result as
 // deny; this package does not provide an implicit allow decision.
 func (p Policy) Match(request Request) (Rule, bool) {
