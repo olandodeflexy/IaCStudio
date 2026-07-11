@@ -24,6 +24,7 @@ const (
 	ReasonNoMatchingRule         DecisionReason = "no_matching_rule"
 	ReasonPolicyDenied           DecisionReason = "policy_denied"
 	ReasonAirlockUnavailable     DecisionReason = "airlock_unavailable"
+	ReasonAirlockServerMismatch  DecisionReason = "airlock_server_mismatch"
 	ReasonAirlockToolMismatch    DecisionReason = "airlock_tool_mismatch"
 	ReasonAirlockRiskMismatch    DecisionReason = "airlock_risk_mismatch"
 	ReasonInvalidAirlockDecision DecisionReason = "invalid_airlock_decision"

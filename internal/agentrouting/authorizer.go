@@ -61,8 +61,10 @@ func (a *Authorizer) Authorize(request Request) Decision {
 	if err != nil {
 		return denied(ReasonAirlockUnavailable)
 	}
-	if entry.ServerID != request.ServerID ||
-		entry.Name != request.ToolName {
+	if entry.ServerID != request.ServerID {
+		return denied(ReasonAirlockServerMismatch)
+	}
+	if entry.Name != request.ToolName {
 		return denied(ReasonAirlockToolMismatch)
 	}
 	if entry.Risk != entry.Decision.Risk {

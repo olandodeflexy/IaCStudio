@@ -105,7 +105,7 @@ func TestAuthorizerFailsClosedOnAirlockErrorsAndMismatches(t *testing.T) {
 		}, wantReason: ReasonAirlockUnavailable},
 		{name: "server mismatch", mutate: func(evaluator *fakeToolEvaluator) {
 			evaluator.entry.ServerID = "other-server"
-		}, wantReason: ReasonAirlockToolMismatch},
+		}, wantReason: ReasonAirlockServerMismatch},
 		{name: "tool mismatch", mutate: func(evaluator *fakeToolEvaluator) {
 			evaluator.entry.Name = "other_tool"
 		}, wantReason: ReasonAirlockToolMismatch},
