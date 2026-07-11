@@ -118,12 +118,17 @@ func (r Rule) Validate() error {
 	return nil
 }
 
-// Matches reports whether a validated route request is covered by the rule.
-// Matching is exact across all scope and risk fields, including action mode.
+// Matches reports whether a route request is covered by the rule. Invalid
+// rules and requests fail closed. Matching is exact across every scope field,
+// risk, and action mode.
 func (r Rule) Matches(request Request) bool {
 	if r.Validate() != nil || request.Validate() != nil {
 		return false
 	}
+	return r.matchesValidated(request)
+}
+
+func (r Rule) matchesValidated(request Request) bool {
 	if r.Project != request.Project ||
 		r.ProviderID != request.ProviderID ||
 		r.ConnectionID != request.ConnectionID ||
@@ -160,7 +165,7 @@ func (p Policy) Match(request Request) (Rule, bool) {
 		return Rule{}, false
 	}
 	for _, rule := range p.Rules {
-		if rule.Matches(request) {
+		if rule.Validate() == nil && rule.matchesValidated(request) {
 			return rule, true
 		}
 	}
@@ -178,8 +183,12 @@ func validMode(mode agentruns.Mode) bool {
 
 func validateRequiredFields(root error, fields ...fieldValue) error {
 	for _, field := range fields {
-		if strings.TrimSpace(field.value) == "" {
+		trimmed := strings.TrimSpace(field.value)
+		if trimmed == "" {
 			return fmt.Errorf("%w: %s is required", root, field.name)
+		}
+		if trimmed != field.value {
+			return fmt.Errorf("%w: %s must not contain leading or trailing whitespace", root, field.name)
 		}
 	}
 	return nil

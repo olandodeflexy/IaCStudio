@@ -46,6 +46,8 @@ func TestRequestValidationRequiresCompleteScope(t *testing.T) {
 		{name: "connection", mutate: func(request *Request) { request.ConnectionID = "" }},
 		{name: "server", mutate: func(request *Request) { request.ServerID = "" }},
 		{name: "tool", mutate: func(request *Request) { request.ToolName = "" }},
+		{name: "padded server", mutate: func(request *Request) { request.ServerID = " terraform-official" }},
+		{name: "padded tool", mutate: func(request *Request) { request.ToolName = "plan_workspace\t" }},
 		{name: "mode", mutate: func(request *Request) { request.Mode = "execute" }},
 		{name: "risk", mutate: func(request *Request) { request.Risk = "unclassified" }},
 	}
@@ -58,6 +60,24 @@ func TestRequestValidationRequiresCompleteScope(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestRuleMatchesRejectsInvalidInputs(t *testing.T) {
+	t.Run("invalid request", func(t *testing.T) {
+		request := validRequest()
+		request.ServerID = " terraform-official"
+		if validRule().Matches(request) {
+			t.Fatal("rule should not match an invalid request")
+		}
+	})
+
+	t.Run("invalid rule", func(t *testing.T) {
+		rule := validRule()
+		rule.ConnectionID = ""
+		if rule.Matches(validRequest()) {
+			t.Fatal("invalid rule should not match a request")
+		}
+	})
 }
 
 func TestRuleMatchesEverySecurityDimension(t *testing.T) {
@@ -119,6 +139,8 @@ func TestPolicyValidateSurfacesMisconfiguredRules(t *testing.T) {
 
 	badRule := validRule()
 	badRule.ConnectionID = ""
+	paddedRule := validRule()
+	paddedRule.ServerID = "terraform-official "
 
 	tests := []struct {
 		name    string
@@ -129,6 +151,7 @@ func TestPolicyValidateSurfacesMisconfiguredRules(t *testing.T) {
 		{name: "empty policy", policy: Policy{}, wantErr: false},
 		{name: "invalid rule at index 0", policy: Policy{Rules: []Rule{badRule}}, wantErr: true},
 		{name: "invalid rule after valid rule", policy: Policy{Rules: []Rule{good, badRule}}, wantErr: true},
+		{name: "whitespace-padded rule", policy: Policy{Rules: []Rule{paddedRule}}, wantErr: true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
