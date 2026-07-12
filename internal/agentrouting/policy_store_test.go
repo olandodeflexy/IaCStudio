@@ -132,16 +132,24 @@ func TestPolicyStoreConcurrentSaveAndGetAreRaceFree(t *testing.T) {
 
 	const goroutines = 50
 	var wg sync.WaitGroup
+	errs := make(chan error, goroutines*2)
 	wg.Add(goroutines * 2)
 	for range goroutines {
 		go func() {
 			defer wg.Done()
-			_ = store.Save(scope, policy)
+			errs <- store.Save(scope, policy)
 		}()
 		go func() {
 			defer wg.Done()
-			_, _ = store.Get(scope)
+			_, err := store.Get(scope)
+			errs <- err
 		}()
 	}
 	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Errorf("concurrent policy-store operation failed: %v", err)
+		}
+	}
 }
