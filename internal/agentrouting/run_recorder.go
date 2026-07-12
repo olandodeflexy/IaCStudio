@@ -73,6 +73,9 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 	if run.Project != request.Project || run.ProviderID != request.ProviderID || run.Mode != request.Mode {
 		return agentruns.Run{}, ErrRunScopeMismatch
 	}
+	if run.Status == agentruns.StatusWaitingApproval && decision.Status == DecisionAllowed {
+		return agentruns.Run{}, fmt.Errorf("%w: cannot record an allowed decision for a run with pending approval gates", ErrInvalidDecision)
+	}
 
 	switch decision.Status {
 	case DecisionDenied:

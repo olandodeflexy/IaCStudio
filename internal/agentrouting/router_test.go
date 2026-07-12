@@ -106,6 +106,28 @@ func TestRouterDoesNotExposeUnrecordedDecision(t *testing.T) {
 	}
 }
 
+func TestRouterBlocksAllowedOnWaitingApprovalRun(t *testing.T) {
+	policy, request, airlock := readOnlyEvaluation()
+	router, _, store, run := routerFixture(t, policy, request, airlock)
+
+	// Pre-transition the run to StatusWaitingApproval by adding an approval gate directly.
+	if _, err := store.AddApproval(run.ID, agentruns.ApprovalGate{
+		Kind:    agentruns.ApprovalMCPNetwork,
+		Summary: "pending approval",
+	}); err != nil {
+		t.Fatalf("AddApproval(): %v", err)
+	}
+
+	// The airlock would allow this call, but the recorder must block it.
+	result, err := router.Route(run.ID, request)
+	if !errors.Is(err, ErrInvalidDecision) {
+		t.Fatalf("Route() error = %v, want ErrInvalidDecision", err)
+	}
+	if result.Decision != (Decision{}) || result.Run.ID != "" {
+		t.Fatalf("Route() result = %+v, want zero result after recorder rejection", result)
+	}
+}
+
 func TestRouterRejectsMissingDependencies(t *testing.T) {
 	policy, request, airlock := readOnlyEvaluation()
 	evaluator := &fakeToolEvaluator{entry: evaluationEntry(request, airlock)}
