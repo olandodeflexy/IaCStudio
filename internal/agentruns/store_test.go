@@ -578,6 +578,9 @@ func TestStoreTerminalStateGuard(t *testing.T) {
 	if _, err := store.AddLog(run.ID, LogInfo, "late log"); !errors.Is(err, ErrTerminated) {
 		t.Fatalf("AddLog on completed run: got %v, want ErrTerminated", err)
 	}
+	if _, err := store.AddLogIfNoPendingApprovals(run.ID, LogAudit, "late authorization"); !errors.Is(err, ErrTerminated) {
+		t.Fatalf("AddLogIfNoPendingApprovals on completed run: got %v, want ErrTerminated", err)
+	}
 	if _, err := store.AddApproval(run.ID, ApprovalGate{Kind: ApprovalCommand, Summary: "x"}); !errors.Is(err, ErrTerminated) {
 		t.Fatalf("AddApproval on completed run: got %v, want ErrTerminated", err)
 	}
@@ -586,6 +589,26 @@ func TestStoreTerminalStateGuard(t *testing.T) {
 	}
 	if _, err := store.DecideApproval(run.ID, approvalID, ApprovalApproved, "alice"); !errors.Is(err, ErrTerminated) {
 		t.Fatalf("DecideApproval on completed run: got %v, want ErrTerminated", err)
+	}
+}
+
+func TestStoreAddLogIfNoPendingApprovalsRejectsAtomically(t *testing.T) {
+	store := NewStore(WithClock(fixedClock().now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	run, err = store.AddApproval(run.ID, ApprovalGate{Kind: ApprovalMCPNetwork, Summary: "authorize route"})
+	if err != nil {
+		t.Fatalf("AddApproval returned error: %v", err)
+	}
+
+	if _, err := store.AddLogIfNoPendingApprovals(run.ID, LogAudit, "allowed route"); !errors.Is(err, ErrApprovalPending) {
+		t.Fatalf("AddLogIfNoPendingApprovals error = %v, want ErrApprovalPending", err)
+	}
+	unchanged, ok := store.Get(run.ID)
+	if !ok || unchanged.Status != StatusWaitingApproval || len(unchanged.Logs) != 0 || len(unchanged.Approvals) != 1 {
+		t.Fatalf("run mutated after pending-approval rejection: %+v", unchanged)
 	}
 }
 

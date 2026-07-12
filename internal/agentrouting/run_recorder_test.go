@@ -257,6 +257,31 @@ func TestRunRecorderRejectsMissingDependenciesAndRuns(t *testing.T) {
 	}
 }
 
+func TestRunRecorderRejectsAllowedOnWaitingApprovalRunWithoutMutation(t *testing.T) {
+	_, request, _ := readOnlyEvaluation()
+	recorder, store, run := recorderFixture(t, request)
+
+	if _, err := recorder.Record(run.ID, request, approvalRequired()); err != nil {
+		t.Fatalf("Record(approval_required): %v", err)
+	}
+	waiting, ok := store.Get(run.ID)
+	if !ok || waiting.Status != agentruns.StatusWaitingApproval {
+		t.Fatalf("run not in waiting_approval after approval gate: %+v", waiting)
+	}
+
+	_, err := recorder.Record(run.ID, request, allowed())
+	if !errors.Is(err, ErrInvalidDecision) {
+		t.Fatalf("Record(allowed on waiting_approval run) error = %v, want ErrInvalidDecision", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "allowed") {
+		t.Fatalf("Record() error leaked withheld decision: %v", err)
+	}
+	unchanged, ok := store.Get(run.ID)
+	if !ok || unchanged.Status != agentruns.StatusWaitingApproval || len(unchanged.Logs) != 0 || len(unchanged.Approvals) != 1 {
+		t.Fatalf("run mutated after allowed on waiting_approval run: %+v", unchanged)
+	}
+}
+
 func TestRunRecorderRejectsTerminalRunWithoutDuplicateMutation(t *testing.T) {
 	_, request, _ := readOnlyEvaluation()
 	outcomes := []Decision{
