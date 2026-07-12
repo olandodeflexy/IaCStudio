@@ -73,9 +73,6 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 	if run.Project != request.Project || run.ProviderID != request.ProviderID || run.Mode != request.Mode {
 		return agentruns.Run{}, ErrRunScopeMismatch
 	}
-	if run.Status == agentruns.StatusWaitingApproval && decision.Status == DecisionAllowed {
-		return agentruns.Run{}, fmt.Errorf("%w: cannot record an allowed decision for a run with pending approval gates", ErrInvalidDecision)
-	}
 
 	switch decision.Status {
 	case DecisionDenied:
@@ -94,7 +91,11 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 			Summary: routeAuditMessage("Authorize", request),
 		})
 	case DecisionAllowed:
-		return r.store.AddLog(runID, agentruns.LogAudit, routeAuditMessage("Allowed", request))
+		recorded, err := r.store.AddLogIfNoPendingApprovals(runID, agentruns.LogAudit, routeAuditMessage("Allowed", request))
+		if errors.Is(err, agentruns.ErrApprovalPending) {
+			return agentruns.Run{}, fmt.Errorf("%w: cannot record an allowed decision for a run with pending approval gates", ErrInvalidDecision)
+		}
+		return recorded, err
 	default:
 		return agentruns.Run{}, ErrInvalidDecision
 	}
