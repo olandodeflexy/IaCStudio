@@ -151,6 +151,71 @@ func TestAuthorizerSnapshotsValidatedPolicy(t *testing.T) {
 	}
 }
 
+func TestStoreAuthorizerResolvesCurrentScopedPolicy(t *testing.T) {
+	policy, request, decision := readOnlyEvaluation()
+	store := NewPolicyStore()
+	scope := PolicyScope{Project: request.Project, ProviderID: request.ProviderID}
+	if err := store.Save(scope, policy); err != nil {
+		t.Fatalf("Save(allow): %v", err)
+	}
+	evaluator := &fakeToolEvaluator{entry: evaluationEntry(request, decision)}
+	authorizer, err := NewStoreAuthorizer(store, evaluator)
+	if err != nil {
+		t.Fatalf("NewStoreAuthorizer(): %v", err)
+	}
+
+	if got := authorizer.Authorize(request); got.Status != DecisionAllowed {
+		t.Fatalf("Authorize(allow) = %+v, want allowed", got)
+	}
+	deniedPolicy := clonePolicy(policy)
+	deniedPolicy.Rules[0].Effect = EffectDeny
+	if err := store.Save(scope, deniedPolicy); err != nil {
+		t.Fatalf("Save(deny): %v", err)
+	}
+	if got := authorizer.Authorize(request); got.Status != DecisionDenied || got.Reason != ReasonPolicyDenied {
+		t.Fatalf("Authorize(deny) = %+v, want policy denial", got)
+	}
+	if evaluator.calls != 1 {
+		t.Fatalf("EvaluateTool calls = %d, want only the allowed-policy call", evaluator.calls)
+	}
+}
+
+func TestStoreAuthorizerFailsClosedWithoutExactScopedPolicy(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*Rule)
+	}{
+		{name: "other project", mutate: func(rule *Rule) { rule.Project = "other-project" }},
+		{name: "other provider", mutate: func(rule *Rule) { rule.ProviderID = "other-provider" }},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy, request, decision := readOnlyEvaluation()
+			test.mutate(&policy.Rules[0])
+			store := NewPolicyStore()
+			if err := store.Save(PolicyScope{
+				Project:    policy.Rules[0].Project,
+				ProviderID: policy.Rules[0].ProviderID,
+			}, policy); err != nil {
+				t.Fatalf("Save(%s): %v", test.name, err)
+			}
+			evaluator := &fakeToolEvaluator{entry: evaluationEntry(request, decision)}
+			authorizer, err := NewStoreAuthorizer(store, evaluator)
+			if err != nil {
+				t.Fatalf("NewStoreAuthorizer(): %v", err)
+			}
+
+			got := authorizer.Authorize(request)
+			if got.Status != DecisionDenied || got.Reason != ReasonPolicyUnavailable || evaluator.calls != 0 {
+				t.Fatalf("Authorize() = %+v, calls = %d; want unavailable policy denial without Airlock call", got, evaluator.calls)
+			}
+			if err := got.Validate(); err != nil {
+				t.Fatalf("Authorize() decision validation: %v", err)
+			}
+		})
+	}
+}
+
 func TestAuthorizerRejectsInvalidStoredPolicyBeforeCallingAirlock(t *testing.T) {
 	policy, request, decision := readOnlyEvaluation()
 	policy.Rules[0].Effect = "unsupported"
@@ -171,6 +236,12 @@ func TestNewAuthorizerRejectsInvalidDependencies(t *testing.T) {
 	var typedNil *fakeToolEvaluator
 	if _, err := NewAuthorizer(policy, typedNil); !errors.Is(err, ErrToolEvaluatorRequired) {
 		t.Fatalf("NewAuthorizer(typed nil) error = %v, want ErrToolEvaluatorRequired", err)
+	}
+	if _, err := NewStoreAuthorizer(nil, &fakeToolEvaluator{}); !errors.Is(err, ErrPolicyStoreRequired) {
+		t.Fatalf("NewStoreAuthorizer(nil store) error = %v, want ErrPolicyStoreRequired", err)
+	}
+	if _, err := NewStoreAuthorizer(NewPolicyStore(), nil); !errors.Is(err, ErrToolEvaluatorRequired) {
+		t.Fatalf("NewStoreAuthorizer(nil evaluator) error = %v, want ErrToolEvaluatorRequired", err)
 	}
 
 	bad := validRule()

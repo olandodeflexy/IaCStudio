@@ -25,6 +25,7 @@ type DecisionReason string
 const (
 	ReasonInvalidRequest         DecisionReason = "invalid_request"
 	ReasonInvalidPolicy          DecisionReason = "invalid_policy"
+	ReasonPolicyUnavailable      DecisionReason = "policy_unavailable"
 	ReasonModeRiskMismatch       DecisionReason = "mode_risk_mismatch"
 	ReasonNoMatchingRule         DecisionReason = "no_matching_rule"
 	ReasonPolicyDenied           DecisionReason = "policy_denied"
@@ -77,6 +78,7 @@ func validDeniedReason(reason DecisionReason) bool {
 	switch reason {
 	case ReasonInvalidRequest,
 		ReasonInvalidPolicy,
+		ReasonPolicyUnavailable,
 		ReasonModeRiskMismatch,
 		ReasonNoMatchingRule,
 		ReasonPolicyDenied,
