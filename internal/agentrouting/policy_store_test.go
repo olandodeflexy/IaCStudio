@@ -2,6 +2,7 @@ package agentrouting
 
 import (
 	"errors"
+	"sync"
 	"testing"
 
 	"github.com/iac-studio/iac-studio/internal/agentruns"
@@ -120,4 +121,27 @@ func TestPolicyStoreFailsClosedForMissingOrInvalidScopes(t *testing.T) {
 	if _, err := nilStore.Get(scope); !errors.Is(err, ErrPolicyStoreRequired) {
 		t.Fatalf("nil Get() error = %v, want ErrPolicyStoreRequired", err)
 	}
+}
+
+func TestPolicyStoreConcurrentSaveAndGetAreRaceFree(t *testing.T) {
+	scope, policy := validPolicyStoreInput()
+	store := NewPolicyStore()
+	if err := store.Save(scope, policy); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+
+	const goroutines = 50
+	var wg sync.WaitGroup
+	wg.Add(goroutines * 2)
+	for range goroutines {
+		go func() {
+			defer wg.Done()
+			_ = store.Save(scope, policy)
+		}()
+		go func() {
+			defer wg.Done()
+			_, _ = store.Get(scope)
+		}()
+	}
+	wg.Wait()
 }
