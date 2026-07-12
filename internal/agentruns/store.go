@@ -354,8 +354,9 @@ func (s *Store) AddLog(id string, level LogLevel, message string) (Run, error) {
 	return s.addLog(id, level, message, false)
 }
 
-// AddLogIfNoPendingApprovals appends a log only when the run has no unresolved
-// approval gates. The check and append occur under the same store lock.
+// AddLogIfNoPendingApprovals appends a log only when the run is not waiting for
+// approval and has no unresolved approval gates. The check and append occur
+// under the same store lock.
 func (s *Store) AddLogIfNoPendingApprovals(id string, level LogLevel, message string) (Run, error) {
 	return s.addLog(id, level, message, true)
 }
