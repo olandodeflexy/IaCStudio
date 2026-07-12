@@ -1,9 +1,14 @@
 package agentrouting
 
 import (
+	"errors"
+	"fmt"
+
 	"github.com/iac-studio/iac-studio/internal/agentruns"
 	"github.com/iac-studio/iac-studio/internal/mcpairlock"
 )
+
+var ErrInvalidDecision = errors.New("invalid tool authorization decision")
 
 // DecisionStatus is the authorization outcome for one Agent Hub tool route.
 type DecisionStatus string
@@ -41,6 +46,50 @@ type Decision struct {
 	Allowed          bool           `json:"allowed"`
 	ApprovalRequired bool           `json:"approval_required"`
 	UntrustedOutput  bool           `json:"untrusted_output"`
+}
+
+// Validate rejects contradictory or incomplete authorization outcomes before
+// they can mutate Agent Run state.
+func (d Decision) Validate() error {
+	if !d.UntrustedOutput {
+		return fmt.Errorf("%w: external MCP output must remain untrusted", ErrInvalidDecision)
+	}
+	switch d.Status {
+	case DecisionDenied:
+		if d.Allowed || d.ApprovalRequired || !validDeniedReason(d.Reason) {
+			return fmt.Errorf("%w: inconsistent denied outcome", ErrInvalidDecision)
+		}
+	case DecisionApprovalRequired:
+		if d.Allowed || !d.ApprovalRequired || d.Reason != ReasonApprovalRequired {
+			return fmt.Errorf("%w: inconsistent approval outcome", ErrInvalidDecision)
+		}
+	case DecisionAllowed:
+		if !d.Allowed || d.ApprovalRequired || d.Reason != ReasonAllowed {
+			return fmt.Errorf("%w: inconsistent allowed outcome", ErrInvalidDecision)
+		}
+	default:
+		return fmt.Errorf("%w: unsupported status %q", ErrInvalidDecision, d.Status)
+	}
+	return nil
+}
+
+func validDeniedReason(reason DecisionReason) bool {
+	switch reason {
+	case ReasonInvalidRequest,
+		ReasonInvalidPolicy,
+		ReasonModeRiskMismatch,
+		ReasonNoMatchingRule,
+		ReasonPolicyDenied,
+		ReasonAirlockUnavailable,
+		ReasonAirlockServerMismatch,
+		ReasonAirlockToolMismatch,
+		ReasonAirlockRiskMismatch,
+		ReasonInvalidAirlockDecision,
+		ReasonAirlockBlocked:
+		return true
+	default:
+		return false
+	}
 }
 
 // Evaluate intersects the route policy, agent mode, and Airlock firewall
