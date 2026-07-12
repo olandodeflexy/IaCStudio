@@ -17,10 +17,11 @@ type ToolEvaluator interface {
 	EvaluateTool(serverID, project, toolName string) (mcpairlock.ToolInventoryEntry, error)
 }
 
-// Authorizer combines an immutable routing policy snapshot with live MCP
-// Airlock inventory decisions. It never invokes an external tool.
+// Authorizer combines a routing policy with live MCP Airlock inventory
+// decisions. It never invokes an external tool.
 type Authorizer struct {
 	policy    Policy
+	policies  *PolicyStore
 	evaluator ToolEvaluator
 }
 
@@ -37,6 +38,18 @@ func NewAuthorizer(policy Policy, evaluator ToolEvaluator) (*Authorizer, error) 
 	return &Authorizer{policy: snapshot, evaluator: evaluator}, nil
 }
 
+// NewStoreAuthorizer resolves the exact project/provider policy snapshot for
+// every request. Missing scoped policies fail closed without calling Airlock.
+func NewStoreAuthorizer(policies *PolicyStore, evaluator ToolEvaluator) (*Authorizer, error) {
+	if policies == nil {
+		return nil, ErrPolicyStoreRequired
+	}
+	if missingToolEvaluator(evaluator) {
+		return nil, ErrToolEvaluatorRequired
+	}
+	return &Authorizer{policies: policies, evaluator: evaluator}, nil
+}
+
 // Authorize evaluates the current Airlock decision for one fully scoped tool
 // route. Airlock errors and inconsistent inventory identities fail closed.
 func (a *Authorizer) Authorize(request Request) Decision {
@@ -46,10 +59,21 @@ func (a *Authorizer) Authorize(request Request) Decision {
 	if a == nil || missingToolEvaluator(a.evaluator) {
 		return denied(ReasonAirlockUnavailable)
 	}
-	if a.policy.Validate() != nil {
+	policy := a.policy
+	if a.policies != nil {
+		var err error
+		policy, err = a.policies.Get(PolicyScope{
+			Project:    request.Project,
+			ProviderID: request.ProviderID,
+		})
+		if err != nil {
+			return denied(ReasonPolicyUnavailable)
+		}
+	}
+	if policy.Validate() != nil {
 		return denied(ReasonInvalidPolicy)
 	}
-	rule, matched := a.policy.matchValidated(request)
+	rule, matched := policy.matchValidated(request)
 	if !matched {
 		return denied(ReasonNoMatchingRule)
 	}
