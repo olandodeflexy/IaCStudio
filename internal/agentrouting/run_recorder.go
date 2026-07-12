@@ -93,7 +93,7 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 	case DecisionAllowed:
 		recorded, err := r.store.AddLogIfNoPendingApprovals(runID, agentruns.LogAudit, routeAuditMessage("Allowed", request))
 		if errors.Is(err, agentruns.ErrApprovalPending) {
-			return agentruns.Run{}, fmt.Errorf("%w: cannot record an allowed decision for a run with pending approval gates", ErrInvalidDecision)
+			return agentruns.Run{}, fmt.Errorf("%w: cannot record authorization while approval gates are pending", ErrInvalidDecision)
 		}
 		return recorded, err
 	default:

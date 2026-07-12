@@ -269,8 +269,12 @@ func TestRunRecorderRejectsAllowedOnWaitingApprovalRunWithoutMutation(t *testing
 		t.Fatalf("run not in waiting_approval after approval gate: %+v", waiting)
 	}
 
-	if _, err := recorder.Record(run.ID, request, allowed()); !errors.Is(err, ErrInvalidDecision) {
+	_, err := recorder.Record(run.ID, request, allowed())
+	if !errors.Is(err, ErrInvalidDecision) {
 		t.Fatalf("Record(allowed on waiting_approval run) error = %v, want ErrInvalidDecision", err)
+	}
+	if strings.Contains(strings.ToLower(err.Error()), "allowed") {
+		t.Fatalf("Record() error leaked withheld decision: %v", err)
 	}
 	unchanged, ok := store.Get(run.ID)
 	if !ok || unchanged.Status != agentruns.StatusWaitingApproval || len(unchanged.Logs) != 0 || len(unchanged.Approvals) != 1 {
