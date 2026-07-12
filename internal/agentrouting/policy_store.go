@@ -75,8 +75,8 @@ func (s *PolicyStore) Get(scope PolicyScope) (Policy, error) {
 	}
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
 	policy, ok := s.policies[scope]
+	s.mu.RUnlock()
 	if !ok {
 		return Policy{}, ErrPolicyNotFound
 	}
