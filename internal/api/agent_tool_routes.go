@@ -34,10 +34,15 @@ func registerAgentToolRouteRoutes(
 	if router == nil {
 		return
 	}
+	attempts := newAgentToolRouteAttemptStore(maxAgentToolRouteAttempts)
 
 	mux.HandleFunc("POST /api/projects/{name}/agent-runs/{id}/tool-routes/authorize", func(w http.ResponseWriter, r *http.Request) {
 		limitBody(w, r)
 		if !requireJSONContentType(w, r) {
+			return
+		}
+		idempotencyKey, ok := requireAgentToolRouteIdempotencyKey(w, r)
+		if !ok {
 			return
 		}
 		name := r.PathValue("name")
@@ -80,10 +85,21 @@ func registerAgentToolRouteRoutes(
 			return
 		}
 
-		result, err := router.Route(run.ID, routeRequest)
+		result, replayed, err := attempts.authorize(r.Context(), run.ID, idempotencyKey, routeRequest, func() (agentrouting.RouteResult, error) {
+			return router.Route(run.ID, routeRequest)
+		})
 		if err != nil {
 			writeAgentToolRouteError(w, err)
 			return
+		}
+		if replayed {
+			current, ok := store.Get(run.ID)
+			if !ok {
+				http.Error(w, "agent run not found", http.StatusNotFound)
+				return
+			}
+			result.Run = current
+			w.Header().Set("Idempotency-Replayed", "true")
 		}
 		setAgentRunJSONHeader(w)
 		_ = json.NewEncoder(w).Encode(result)
@@ -101,6 +117,10 @@ func writeAgentToolRouteBodyError(w http.ResponseWriter, err error) {
 
 func writeAgentToolRouteError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, errAgentToolRouteIdempotencyConflict):
+		http.Error(w, "idempotency key was already used for a different tool route", http.StatusConflict)
+	case errors.Is(err, errAgentToolRouteAttemptCapacity):
+		http.Error(w, "tool route authorization is temporarily unavailable", http.StatusServiceUnavailable)
 	case errors.Is(err, agentrouting.ErrInvalidRequest):
 		http.Error(w, "invalid tool route request", http.StatusBadRequest)
 	case errors.Is(err, agentruns.ErrNotFound):
@@ -110,7 +130,19 @@ func writeAgentToolRouteError(w http.ResponseWriter, err error) {
 		errors.Is(err, agentrouting.ErrInvalidDecision):
 		http.Error(w, "agent run cannot authorize this tool route", http.StatusConflict)
 	default:
-		log.Printf("agent tool route authorization failed (%T)", err)
+		log.Printf("agent tool route authorization failed (%T)", agentToolRouteRootError(err))
 		http.Error(w, "agent tool route authorization failed", http.StatusInternalServerError)
 	}
+}
+
+func agentToolRouteRootError(err error) error {
+	const maxUnwrapDepth = 32
+	for range maxUnwrapDepth {
+		unwrapped := errors.Unwrap(err)
+		if unwrapped == nil {
+			return err
+		}
+		err = unwrapped
+	}
+	return err
 }
