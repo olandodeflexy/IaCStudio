@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactNode, RefObject } from 'react';
 
-import { api, type AgentProviderConnectionDefinition, type AgentProviderConnectionProfile, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type LocalAgentProviderStatus } from '../../api';
+import { api, type AgentProviderConnectionDefinition, type AgentProviderConnectionProfile, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type AgentToolPolicyResponse, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
 
 export interface ChatMessage {
@@ -47,6 +47,10 @@ type ProviderLane =
 type ProviderActionLabel = 'Configure API' | 'Use enterprise policy' | 'Use local CLI';
 type ProviderDefinition = { name: string; lane: ProviderLane; state: ProviderState; note: string; localProviderId?: string };
 type RunProviderIdentity = { id: string; label: string };
+type AgentToolPolicyView =
+  | { status: 'idle' }
+  | { status: 'loading' | 'missing' | 'error'; project: string; providerId: string }
+  | { status: 'ready'; project: string; providerId: string; response: AgentToolPolicyResponse };
 
 const PROVIDER_TABS: ProviderTab[] = ['codex', 'claude', 'gemini', 'copilot', 'local', 'mcp'];
 
@@ -69,6 +73,7 @@ const TASK_MODES = [
   'Prepare deploy',
 ] as const;
 const AGENT_RUN_REFRESH_INTERVAL_MS = 5000;
+const IDLE_AGENT_TOOL_POLICY_VIEW: AgentToolPolicyView = { status: 'idle' };
 
 const AGENT_HUB_STORAGE_KEYS = {
   activeTab: 'iac-studio.agentHub.activeTab',
@@ -247,6 +252,13 @@ const hubStyles: Record<string, CSSProperties> = {
   providerActions: { display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginTop: 10 },
   providerActionButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-muted)', cursor: 'not-allowed', fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '6px 9px', opacity: 0.72 },
   providerActionHint: { color: '#77847d', fontSize: 11 },
+  toolPolicy: { borderTop: '1px solid var(--border-soft)', marginTop: 10, paddingTop: 8 },
+  toolPolicyHead: { display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' },
+  toolPolicyTitle: { color: 'var(--text-main)', fontSize: 11, fontWeight: 700, textTransform: 'uppercase', letterSpacing: 0.4, marginRight: 'auto' },
+  toolPolicyMessage: { color: 'var(--text-muted)', fontSize: 11, lineHeight: 1.4, marginTop: 6 },
+  toolPolicyRule: { borderTop: '1px solid var(--border-soft)', paddingTop: 7, marginTop: 7, minWidth: 0 },
+  toolPolicyRuleName: { color: 'var(--text-main)', fontSize: 11, fontWeight: 700, overflowWrap: 'anywhere' },
+  toolPolicyRuleMeta: { color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', fontSize: 10, lineHeight: 1.4, marginTop: 3, overflowWrap: 'anywhere' },
   connectionCatalog: { gridColumn: '1 / -1', borderTop: '1px solid var(--border-soft)', paddingTop: 10, marginTop: 2, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 8 },
   connectionCatalogIntro: { gridColumn: '1 / -1', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45 },
   connectionCard: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-main)', borderRadius: 8, background: 'rgba(23, 29, 27, 0.68)', padding: 10, minWidth: 0 },
@@ -403,16 +415,107 @@ function providerIdentityForRunId(providerId?: string): RunProviderIdentity | nu
   return { id: providerId, label: providerId };
 }
 
+function hasHTTPStatus(err: unknown, status: number) {
+  return (
+    typeof err === 'object'
+    && err !== null
+    && 'status' in err
+    && (err as { status?: unknown }).status === status
+  );
+}
+
+function matchesToolPolicyScope(
+  response: AgentToolPolicyResponse,
+  project: string,
+  providerId: string,
+) {
+  return (
+    response?.scope?.project === project
+    && response.scope.provider_id === providerId
+    && Array.isArray(response.policy?.rules)
+    && response.policy.rules.every(rule => (
+      rule.project === project && rule.provider_id === providerId
+    ))
+  );
+}
+
+function toolPolicyViewForScope(
+  view: AgentToolPolicyView,
+  project: string | undefined,
+  providerId: string,
+): AgentToolPolicyView {
+  if (!project) return IDLE_AGENT_TOOL_POLICY_VIEW;
+  if (view.status !== 'idle' && view.project === project && view.providerId === providerId) {
+    return view;
+  }
+  return { status: 'loading', project, providerId };
+}
+
+function ToolPolicySummary({
+  providerName,
+  view,
+}: {
+  providerName: string;
+  view: AgentToolPolicyView;
+}) {
+  const rules = view.status === 'ready' ? view.response.policy.rules : [];
+  const allowed = rules.filter(rule => rule.effect === 'allow').length;
+  const denied = rules.filter(rule => rule.effect === 'deny').length;
+  const approvals = rules.filter(rule => rule.approval_required).length;
+
+  let message = '';
+  if (view.status === 'idle') message = 'Project scope required. MCP tool access is blocked.';
+  if (view.status === 'loading') message = 'Checking scoped tool permissions...';
+  if (view.status === 'missing') message = 'No scoped policy. MCP tool access is blocked.';
+  if (view.status === 'error') message = 'Policy unavailable. MCP tool access remains blocked.';
+  if (view.status === 'ready' && rules.length === 0) message = 'No routes allowed. MCP tool access is blocked.';
+
+  return (
+    <section style={hubStyles.toolPolicy} aria-label={`${providerName} tool permissions`}>
+      <div style={hubStyles.toolPolicyHead}>
+        <span style={hubStyles.toolPolicyTitle}>Tool permissions</span>
+        {view.status === 'ready' && (
+          <>
+            <span style={hubStyles.badge}>{allowed} allowed</span>
+            <span style={hubStyles.badge}>{denied} denied</span>
+            <span style={hubStyles.badge}>{approvals} approvals</span>
+          </>
+        )}
+      </div>
+      {message && <div style={hubStyles.toolPolicyMessage}>{message}</div>}
+      {rules.map((rule, index) => (
+        <div
+          key={`${rule.connection_id}:${rule.server_id}:${rule.tool_name}:${index}`}
+          style={hubStyles.toolPolicyRule}
+        >
+          <div style={hubStyles.toolPolicyHead}>
+            <span style={{ ...hubStyles.toolPolicyRuleName, flex: 1 }}>
+              {rule.server_id} / {rule.tool_name}
+            </span>
+            <span style={hubStyles.badge}>{rule.effect}</span>
+            {rule.approval_required && <span style={hubStyles.badge}>approval required</span>}
+          </div>
+          <div style={hubStyles.toolPolicyRuleMeta}>
+            {rule.connection_id} · {rule.modes.map(mode => mode.replaceAll('_', ' ')).join(', ')} · {rule.risk.replaceAll('_', ' ')}
+          </div>
+        </div>
+      ))}
+    </section>
+  );
+}
+
 function ProviderDetails({
   provider,
   displayState,
   displayNote,
   localStatus,
+  toolPolicyView,
 }: {
   provider: ProviderDefinition;
   displayState: ProviderState;
   displayNote: string;
   localStatus?: LocalAgentProviderStatus;
+  toolPolicyView: AgentToolPolicyView;
 }) {
   const details = localStatusDetails(provider.localProviderId, localStatus);
   return (
@@ -452,6 +555,7 @@ function ProviderDetails({
           ))}
         </div>
       )}
+      <ToolPolicySummary providerName={provider.name} view={toolPolicyView} />
       <div role="group" style={hubStyles.providerActions} aria-label={`${provider.name} actions`}>
         <button
           type="button"
@@ -595,6 +699,7 @@ function ProviderGroup({
   localProviders,
   connectionProviders,
   connectionProfiles,
+  toolPolicyView,
   selectedProviderName,
   onSelectProvider,
 }: {
@@ -603,6 +708,7 @@ function ProviderGroup({
   localProviders: Record<string, LocalAgentProviderStatus>;
   connectionProviders: AgentProviderConnectionDefinition[];
   connectionProfiles: AgentProviderConnectionProfile[];
+  toolPolicyView: AgentToolPolicyView;
   selectedProviderName?: string;
   onSelectProvider: (tab: ProviderTab, providerName: string) => void;
 }) {
@@ -671,6 +777,7 @@ function ProviderGroup({
         displayState={selectedDisplay.state}
         displayNote={selectedDisplay.note}
         localStatus={selectedLocalStatus}
+        toolPolicyView={toolPolicyView}
       />
       <ConnectionCatalog title={group.title} providers={visibleConnectionProviders} />
       <SavedConnectionProfiles title={group.title} profiles={visibleConnectionProfiles} />
@@ -1198,6 +1305,7 @@ export function ChatPanel({
   const [localProviders, setLocalProviders] = useState<Record<string, LocalAgentProviderStatus>>({});
   const [connectionProviders, setConnectionProviders] = useState<AgentProviderConnectionDefinition[]>([]);
   const [connectionProfiles, setConnectionProfiles] = useState<AgentProviderConnectionProfile[]>([]);
+  const [toolPolicyView, setToolPolicyView] = useState<AgentToolPolicyView>(IDLE_AGENT_TOOL_POLICY_VIEW);
   const [agentRuns, setAgentRuns] = useState<AgentRunSummary[]>([]);
   const [agentRunsLoading, setAgentRunsLoading] = useState(false);
   const [agentRunsError, setAgentRunsError] = useState<string | null>(null);
@@ -1274,6 +1382,39 @@ export function ChatPanel({
     [runProviderTab, selectedProviders],
   );
   const hasActiveAgentRuns = agentRuns.some(run => !isTerminalAgentRun(run.status));
+
+  useEffect(() => {
+    if (!projectName || !isProviderTab(activeTab)) {
+      setToolPolicyView(IDLE_AGENT_TOOL_POLICY_VIEW);
+      return;
+    }
+
+    let cancelled = false;
+    const requestProject = projectName;
+    const requestProvider = runProviderId;
+    const requestScope = { project: requestProject, providerId: requestProvider };
+    setToolPolicyView({ status: 'loading', ...requestScope });
+    api.getAgentToolPolicy(requestProject, requestProvider)
+      .then(response => {
+        if (cancelled) return;
+        if (!matchesToolPolicyScope(response, requestProject, requestProvider)) {
+          setToolPolicyView({ status: 'error', ...requestScope });
+          return;
+        }
+        setToolPolicyView({ status: 'ready', response, ...requestScope });
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setToolPolicyView({
+          status: hasHTTPStatus(err, 404) ? 'missing' : 'error',
+          ...requestScope,
+        });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, projectName, runProviderId]);
 
   const panelStyle = (tab: AgentHubTab) => (
     activeTab === tab ? hubStyles.tabPanel : hubStyles.hiddenTabPanel
@@ -1705,6 +1846,9 @@ export function ChatPanel({
               localProviders={localProviders}
               connectionProviders={connectionProviders}
               connectionProfiles={connectionProfiles}
+              toolPolicyView={activeTab === tab
+                ? toolPolicyViewForScope(toolPolicyView, projectName, runProviderId)
+                : IDLE_AGENT_TOOL_POLICY_VIEW}
               selectedProviderName={selectedProviders[tab]}
               onSelectProvider={selectProvider}
             />

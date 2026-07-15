@@ -8,6 +8,7 @@ import { ChatPanel } from './ChatPanel';
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
 const listAgentProviderConnectionsMock = vi.hoisted(() => vi.fn());
 const listAgentProviderConnectionProfilesMock = vi.hoisted(() => vi.fn());
+const getAgentToolPolicyMock = vi.hoisted(() => vi.fn());
 const listAgentRunsMock = vi.hoisted(() => vi.fn());
 const createAgentRunMock = vi.hoisted(() => vi.fn());
 const getAgentRunMock = vi.hoisted(() => vi.fn());
@@ -19,6 +20,7 @@ vi.mock('../../api', () => ({
     listLocalAgentProviders: listLocalAgentProvidersMock,
     listAgentProviderConnections: listAgentProviderConnectionsMock,
     listAgentProviderConnectionProfiles: listAgentProviderConnectionProfilesMock,
+    getAgentToolPolicy: getAgentToolPolicyMock,
     listAgentRuns: listAgentRunsMock,
     createAgentRun: createAgentRunMock,
     getAgentRun: getAgentRunMock,
@@ -87,6 +89,8 @@ describe('ChatPanel', () => {
     listAgentProviderConnectionsMock.mockReturnValue(new Promise(() => {}));
     listAgentProviderConnectionProfilesMock.mockReset();
     listAgentProviderConnectionProfilesMock.mockReturnValue(new Promise(() => {}));
+    getAgentToolPolicyMock.mockReset();
+    getAgentToolPolicyMock.mockReturnValue(new Promise(() => {}));
     listAgentRunsMock.mockReset();
     listAgentRunsMock.mockResolvedValue([]);
     createAgentRunMock.mockReset();
@@ -359,6 +363,72 @@ describe('ChatPanel', () => {
     fireEvent.click(within(codexPanel).getByRole('button', { name: /Managed Codex token/ }));
     const enterpriseDetails = within(codexPanel).getByRole('region', { name: 'Managed Codex token details' });
     expect(within(enterpriseDetails).getByRole('button', { name: 'Use enterprise policy' })).toBeDisabled();
+  });
+
+  it('shows exact scoped tool permissions for the selected provider', async () => {
+    getAgentToolPolicyMock.mockResolvedValueOnce({
+      scope: { project: 'demo', provider_id: 'codex' },
+      policy: {
+        rules: [
+          {
+            project: 'demo',
+            provider_id: 'codex',
+            connection_id: 'aws-prod',
+            server_id: 'aws-official',
+            tool_name: 'list_resources',
+            modes: ['read_only'],
+            risk: 'read_only',
+            effect: 'allow',
+          },
+          {
+            project: 'demo',
+            provider_id: 'codex',
+            connection_id: 'aws-prod',
+            server_id: 'aws-official',
+            tool_name: 'apply_change',
+            modes: ['approved_execute'],
+            risk: 'cloud_mutation',
+            effect: 'deny',
+          },
+        ],
+      },
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    await waitFor(() => {
+      expect(getAgentToolPolicyMock).toHaveBeenCalledWith('demo', 'codex');
+    });
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const permissions = within(codexPanel).getByRole('region', { name: 'Codex CLI tool permissions' });
+    expect(within(permissions).getByText('1 allowed')).toBeInTheDocument();
+    expect(within(permissions).getByText('1 denied')).toBeInTheDocument();
+    expect(within(permissions).getByText('aws-official / list_resources')).toBeInTheDocument();
+    expect(within(permissions).getByText('aws-official / apply_change')).toBeInTheDocument();
+
+    fireEvent.click(within(codexPanel).getByRole('button', { name: /OpenAI API/ }));
+    await waitFor(() => {
+      expect(getAgentToolPolicyMock).toHaveBeenLastCalledWith('demo', 'codex-openai-api');
+    });
+    const nextPermissions = within(codexPanel).getByRole('region', { name: 'OpenAI API tool permissions' });
+    expect(within(nextPermissions).getByText('Checking scoped tool permissions...')).toBeInTheDocument();
+    expect(within(nextPermissions).queryByText('aws-official / list_resources')).not.toBeInTheDocument();
+  });
+
+  it('shows missing policies as blocked without exposing request details', async () => {
+    getAgentToolPolicyMock.mockRejectedValueOnce({ status: 404, message: 'sensitive backend detail' });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const permissions = within(codexPanel).getByRole('region', { name: 'Codex CLI tool permissions' });
+    await waitFor(() => {
+      expect(within(permissions).getByText('No scoped policy. MCP tool access is blocked.')).toBeInTheDocument();
+    });
+    expect(within(permissions).queryByText(/sensitive backend detail/)).not.toBeInTheDocument();
   });
 
   it('includes detected local provider details in the selected provider panel', async () => {
