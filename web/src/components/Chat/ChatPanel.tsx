@@ -74,6 +74,16 @@ const TASK_MODES = [
 ] as const;
 const AGENT_RUN_REFRESH_INTERVAL_MS = 5000;
 const IDLE_AGENT_TOOL_POLICY_VIEW: AgentToolPolicyView = { status: 'idle' };
+const AGENT_TOOL_POLICY_MODES = new Set(['read_only', 'propose_only', 'approved_execute']);
+const AGENT_TOOL_POLICY_RISKS = new Set([
+  'read_only',
+  'generate_code',
+  'modify_workspace',
+  'cloud_mutation',
+  'secret_sensitive',
+  'destructive',
+  'unknown',
+]);
 
 const AGENT_HUB_STORAGE_KEYS = {
   activeTab: 'iac-studio.agentHub.activeTab',
@@ -433,10 +443,41 @@ function matchesToolPolicyScope(
     response?.scope?.project === project
     && response.scope.provider_id === providerId
     && Array.isArray(response.policy?.rules)
-    && response.policy.rules.every(rule => (
-      rule.project === project && rule.provider_id === providerId
-    ))
+    && response.policy.rules.every(rule => matchesToolPolicyRule(rule, project, providerId))
   );
+}
+
+function matchesToolPolicyRule(value: unknown, project: string, providerId: string) {
+  if (!value || typeof value !== 'object') return false;
+  const rule = value as Record<string, unknown>;
+  const modes = rule.modes;
+  const risk = rule.risk;
+  const effect = rule.effect;
+  const approvalRequired = rule.approval_required;
+
+  if (
+    rule.project !== project
+    || rule.provider_id !== providerId
+    || !validPolicyField(rule.connection_id)
+    || !validPolicyField(rule.server_id)
+    || !validPolicyField(rule.tool_name)
+    || !Array.isArray(modes)
+    || modes.length === 0
+    || !modes.every(mode => typeof mode === 'string' && AGENT_TOOL_POLICY_MODES.has(mode))
+    || typeof risk !== 'string'
+    || !AGENT_TOOL_POLICY_RISKS.has(risk)
+    || (effect !== 'allow' && effect !== 'deny')
+    || (approvalRequired !== undefined && typeof approvalRequired !== 'boolean')
+  ) {
+    return false;
+  }
+  if (effect === 'deny') return approvalRequired !== true;
+  if (risk === 'unknown') return false;
+  return risk === 'read_only' || approvalRequired === true;
+}
+
+function validPolicyField(value: unknown) {
+  return typeof value === 'string' && value.length > 0 && value.trim() === value;
 }
 
 function toolPolicyViewForScope(
@@ -482,7 +523,7 @@ function ToolPolicySummary({
           </>
         )}
       </div>
-      <div role="status" style={message ? hubStyles.toolPolicyMessage : undefined}>{message}</div>
+      {message && <div role="status" style={hubStyles.toolPolicyMessage}>{message}</div>}
       {rules.map((rule, index) => (
         <div
           key={`${rule.connection_id}:${rule.server_id}:${rule.tool_name}:${index}`}

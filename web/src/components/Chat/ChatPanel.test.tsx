@@ -407,6 +407,7 @@ describe('ChatPanel', () => {
     expect(within(permissions).getByText('1 denied')).toBeInTheDocument();
     expect(within(permissions).getByText('aws-official / list_resources')).toBeInTheDocument();
     expect(within(permissions).getByText('aws-official / apply_change')).toBeInTheDocument();
+    expect(within(permissions).queryByRole('status')).not.toBeInTheDocument();
 
     fireEvent.click(within(codexPanel).getByRole('button', { name: /OpenAI API/ }));
     await waitFor(() => {
@@ -471,6 +472,38 @@ describe('ChatPanel', () => {
       expect(within(permissions).getByText('Policy unavailable. MCP tool access remains blocked.')).toBeInTheDocument();
     });
     expect(within(permissions).queryByText('injected_tool')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['modes', { modes: null }],
+    ['risk', { risk: null }],
+  ])('blocks access when a policy rule has malformed %s', async (_field, override) => {
+    getAgentToolPolicyMock.mockResolvedValueOnce({
+      scope: { project: 'demo', provider_id: 'codex' },
+      policy: {
+        rules: [{
+          project: 'demo',
+          provider_id: 'codex',
+          connection_id: 'c1',
+          server_id: 'srv',
+          tool_name: 'malformed_tool',
+          modes: ['read_only'],
+          risk: 'read_only',
+          effect: 'allow',
+          ...override,
+        }],
+      },
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const permissions = within(codexPanel).getByRole('region', { name: 'Codex CLI tool permissions' });
+    await waitFor(() => {
+      expect(within(permissions).getByText('Policy unavailable. MCP tool access remains blocked.')).toBeInTheDocument();
+    });
+    expect(within(permissions).queryByText('malformed_tool')).not.toBeInTheDocument();
   });
 
   it('blocks access when the scoped policy has no allowed routes', async () => {
