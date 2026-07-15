@@ -1052,6 +1052,7 @@ func writeAgentProviderProfileSaveError(w http.ResponseWriter, operation string,
 type RouterOptions struct {
 	MCPAirlock               *mcpairlock.Manager
 	AgentRuns                *agentruns.Store
+	AgentToolPolicies        AgentToolPolicyReader
 	AgentToolRouter          AgentToolRouter
 	AgentProviderProfiles    *agentproviderconnections.Manager
 	AppVersion               string
@@ -1222,6 +1223,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	})
 
 	registerAgentRunRoutes(mux, projectsDir, agentRuns)
+	registerAgentToolPolicyRoutes(mux, projectsDir, opts.AgentToolPolicies)
 	registerAgentToolRouteRoutes(mux, projectsDir, agentRuns, opts.AgentToolRouter)
 
 	// Resource catalog — returns all resources for a tool, optionally filtered by provider

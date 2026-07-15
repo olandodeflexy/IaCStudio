@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 	"os"
 
@@ -168,7 +169,8 @@ func setAgentRunJSONHeader(w http.ResponseWriter) {
 func requireExistingAgentRunProject(w http.ResponseWriter, projectsDir, name string) bool {
 	projectPath, err := safeProjectPath(projectsDir, name)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		log.Printf("agent project path validation failed: %v", err)
+		http.Error(w, "invalid project", http.StatusBadRequest)
 		return false
 	}
 	info, err := os.Stat(projectPath)
@@ -177,7 +179,8 @@ func requireExistingAgentRunProject(w http.ResponseWriter, projectsDir, name str
 		return false
 	}
 	if err != nil {
-		http.Error(w, "stat project: "+err.Error(), http.StatusInternalServerError)
+		log.Printf("agent project stat failed: %v", err)
+		http.Error(w, "project lookup failed", http.StatusInternalServerError)
 		return false
 	}
 	if !info.IsDir() {
