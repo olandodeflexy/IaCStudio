@@ -409,6 +409,34 @@ export interface AgentRunsResponse {
   runs?: AgentRunSummary[] | null;
 }
 
+export type AgentToolPolicyEffect = 'allow' | 'deny';
+
+export interface AgentToolPolicyScope {
+  project: string;
+  provider_id: string;
+}
+
+export interface AgentToolPolicyRule {
+  project: string;
+  provider_id: string;
+  connection_id: string;
+  server_id: string;
+  tool_name: string;
+  modes: AgentRunMode[];
+  risk: MCPAirlockToolRisk;
+  effect: AgentToolPolicyEffect;
+  approval_required?: boolean;
+}
+
+export interface AgentToolPolicy {
+  rules: AgentToolPolicyRule[];
+}
+
+export interface AgentToolPolicyResponse {
+  scope: AgentToolPolicyScope;
+  policy: AgentToolPolicy;
+}
+
 export type PlanRiskLevel = 'safe' | 'risky' | 'destructive' | 'unknown';
 
 export interface PlanFieldChange {
@@ -797,6 +825,13 @@ export const api = {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision }),
       },
+    );
+    return (await check(res)).json();
+  },
+
+  async getAgentToolPolicy(projectName: string, providerId: string): Promise<AgentToolPolicyResponse> {
+    const res = await fetch(
+      `${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-routing/policies/${encodeURIComponent(providerId)}`,
     );
     return (await check(res)).json();
   },

@@ -646,6 +646,46 @@ describe('api.agentRuns', () => {
   });
 });
 
+describe('api.agentToolPolicies', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('gets one exact project and provider routing policy', async () => {
+    const response = {
+      scope: {
+        project: 'demo',
+        provider_id: 'codex-cli',
+      },
+      policy: {
+        rules: [{
+          project: 'demo',
+          provider_id: 'codex-cli',
+          connection_id: 'aws-prod',
+          server_id: 'aws-official',
+          tool_name: 'list_resources',
+          modes: ['read_only'],
+          risk: 'read_only',
+          effect: 'allow',
+        }],
+      },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.getAgentToolPolicy('demo', 'codex-cli')).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects/demo/agent-routing/policies/codex-cli',
+    );
+  });
+});
+
 describe('api.listProjectStates', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
