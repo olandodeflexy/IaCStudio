@@ -5,6 +5,8 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -109,5 +111,23 @@ func TestAgentToolPolicyRouteRejectsInvalidScopeAndSanitizesErrors(t *testing.T)
 				t.Fatalf("response leaked reader error: %s", rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestAgentToolPolicyRouteSanitizesProjectFilesystemErrors(t *testing.T) {
+	root := t.TempDir()
+	missingTarget := filepath.Join(root, "private-policy-target")
+	if err := os.Symlink(missingTarget, filepath.Join(root, "demo")); err != nil {
+		t.Fatalf("Symlink(): %v", err)
+	}
+
+	rec := httptest.NewRecorder()
+	agentToolPolicyMux(root, agentrouting.NewPolicyStore()).ServeHTTP(rec,
+		httptest.NewRequest(http.MethodGet, "/api/projects/demo/agent-routing/policies/codex", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusBadRequest, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), root) || strings.Contains(rec.Body.String(), missingTarget) {
+		t.Fatalf("response leaked filesystem path: %s", rec.Body.String())
 	}
 }
