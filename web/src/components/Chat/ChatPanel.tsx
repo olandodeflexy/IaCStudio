@@ -482,7 +482,7 @@ function ToolPolicySummary({
           </>
         )}
       </div>
-      {message && <div style={hubStyles.toolPolicyMessage}>{message}</div>}
+      <div role="status" style={message ? hubStyles.toolPolicyMessage : undefined}>{message}</div>
       {rules.map((rule, index) => (
         <div
           key={`${rule.connection_id}:${rule.server_id}:${rule.tool_name}:${index}`}
