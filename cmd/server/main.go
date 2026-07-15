@@ -102,7 +102,8 @@ func main() {
 	}()
 	agentRouting, err := newAgentRoutingServices(mcpAirlock)
 	if err != nil {
-		log.Fatalf("initialize Agent Hub tool routing: %v", err)
+		log.Printf("initialize Agent Hub tool routing: %v", err)
+		return
 	}
 
 	// Build router
