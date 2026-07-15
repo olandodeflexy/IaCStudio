@@ -100,11 +100,17 @@ func main() {
 			log.Printf("mcp airlock cleanup: %v", err)
 		}
 	}()
+	agentRouting, err := newAgentRoutingServices(mcpAirlock)
+	if err != nil {
+		log.Fatalf("initialize Agent Hub tool routing: %v", err)
+	}
 
 	// Build router
 	router := api.NewRouterWithOptions(hub, fw, aiClient, safeRun, *projectsDir, api.RouterOptions{
-		MCPAirlock: mcpAirlock,
-		AppVersion: AppVersion,
+		MCPAirlock:      mcpAirlock,
+		AgentRuns:       agentRouting.runs,
+		AgentToolRouter: agentRouting.router,
+		AppVersion:      AppVersion,
 	})
 
 	// Serve embedded frontend
