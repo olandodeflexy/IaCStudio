@@ -40,6 +40,13 @@ var AppVersion = "0.1.0"
 var frontendFS embed.FS
 
 func main() {
+	if err := runServer(); err != nil {
+		log.Printf("server startup failed: %v", err)
+		os.Exit(1)
+	}
+}
+
+func runServer() error {
 	host := flag.String("host", "127.0.0.1", "Host to bind to")
 	port := flag.Int("port", 3000, "Port to listen on")
 	projectsDir := flag.String("projects-dir", defaultProjectsDir(), "Directory for IaC projects")
@@ -100,11 +107,17 @@ func main() {
 			log.Printf("mcp airlock cleanup: %v", err)
 		}
 	}()
+	agentRouting, err := newAgentRoutingServices(mcpAirlock)
+	if err != nil {
+		return fmt.Errorf("initialize Agent Hub tool routing: %w", err)
+	}
 
 	// Build router
 	router := api.NewRouterWithOptions(hub, fw, aiClient, safeRun, *projectsDir, api.RouterOptions{
-		MCPAirlock: mcpAirlock,
-		AppVersion: AppVersion,
+		MCPAirlock:      mcpAirlock,
+		AgentRuns:       agentRouting.runs,
+		AgentToolRouter: agentRouting.router,
+		AppVersion:      AppVersion,
 	})
 
 	// Serve embedded frontend
@@ -137,6 +150,7 @@ func main() {
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		log.Printf("shutdown: %v", err)
 	}
+	return nil
 }
 
 func defaultProjectsDir() string {
