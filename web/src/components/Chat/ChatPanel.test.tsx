@@ -2,12 +2,13 @@ import { createRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 
-import type { AgentRun, AgentRunSummary } from '../../api';
+import type { AgentRun, AgentRunSummary, AgentToolPolicyResponse } from '../../api';
 import { ChatPanel } from './ChatPanel';
 
 const listLocalAgentProvidersMock = vi.hoisted(() => vi.fn());
 const listAgentProviderConnectionsMock = vi.hoisted(() => vi.fn());
 const listAgentProviderConnectionProfilesMock = vi.hoisted(() => vi.fn());
+const getAgentToolPolicyMock = vi.hoisted(() => vi.fn());
 const listAgentRunsMock = vi.hoisted(() => vi.fn());
 const createAgentRunMock = vi.hoisted(() => vi.fn());
 const getAgentRunMock = vi.hoisted(() => vi.fn());
@@ -19,6 +20,7 @@ vi.mock('../../api', () => ({
     listLocalAgentProviders: listLocalAgentProvidersMock,
     listAgentProviderConnections: listAgentProviderConnectionsMock,
     listAgentProviderConnectionProfiles: listAgentProviderConnectionProfilesMock,
+    getAgentToolPolicy: getAgentToolPolicyMock,
     listAgentRuns: listAgentRunsMock,
     createAgentRun: createAgentRunMock,
     getAgentRun: getAgentRunMock,
@@ -87,6 +89,8 @@ describe('ChatPanel', () => {
     listAgentProviderConnectionsMock.mockReturnValue(new Promise(() => {}));
     listAgentProviderConnectionProfilesMock.mockReset();
     listAgentProviderConnectionProfilesMock.mockReturnValue(new Promise(() => {}));
+    getAgentToolPolicyMock.mockReset();
+    getAgentToolPolicyMock.mockReturnValue(new Promise(() => {}));
     listAgentRunsMock.mockReset();
     listAgentRunsMock.mockResolvedValue([]);
     createAgentRunMock.mockReset();
@@ -359,6 +363,212 @@ describe('ChatPanel', () => {
     fireEvent.click(within(codexPanel).getByRole('button', { name: /Managed Codex token/ }));
     const enterpriseDetails = within(codexPanel).getByRole('region', { name: 'Managed Codex token details' });
     expect(within(enterpriseDetails).getByRole('button', { name: 'Use enterprise policy' })).toBeDisabled();
+  });
+
+  it('shows exact scoped tool permissions for the selected provider', async () => {
+    getAgentToolPolicyMock.mockResolvedValueOnce({
+      scope: { project: 'demo', provider_id: 'codex' },
+      policy: {
+        rules: [
+          {
+            project: 'demo',
+            provider_id: 'codex',
+            connection_id: 'aws-prod',
+            server_id: 'aws-official',
+            tool_name: 'list_resources',
+            modes: ['read_only'],
+            risk: 'read_only',
+            effect: 'allow',
+          },
+          {
+            project: 'demo',
+            provider_id: 'codex',
+            connection_id: 'aws-prod',
+            server_id: 'aws-official',
+            tool_name: 'apply_change',
+            modes: ['approved_execute'],
+            risk: 'cloud_mutation',
+            effect: 'deny',
+          },
+        ],
+      },
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    await waitFor(() => {
+      expect(getAgentToolPolicyMock).toHaveBeenCalledWith('demo', 'codex');
+    });
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const permissions = within(codexPanel).getByRole('region', { name: 'Codex CLI tool permissions' });
+    expect(within(permissions).getByText('1 allowed')).toBeInTheDocument();
+    expect(within(permissions).getByText('1 denied')).toBeInTheDocument();
+    expect(within(permissions).getByText('aws-official / list_resources')).toBeInTheDocument();
+    expect(within(permissions).getByText('aws-official / apply_change')).toBeInTheDocument();
+    expect(within(permissions).queryByRole('status')).not.toBeInTheDocument();
+
+    fireEvent.click(within(codexPanel).getByRole('button', { name: /OpenAI API/ }));
+    await waitFor(() => {
+      expect(getAgentToolPolicyMock).toHaveBeenLastCalledWith('demo', 'codex-openai-api');
+    });
+    const nextPermissions = within(codexPanel).getByRole('region', { name: 'OpenAI API tool permissions' });
+    expect(within(nextPermissions).getByText('Checking scoped tool permissions...')).toBeInTheDocument();
+    expect(within(nextPermissions).queryByText('aws-official / list_resources')).not.toBeInTheDocument();
+  });
+
+  it('shows missing policies as blocked without exposing request details', async () => {
+    getAgentToolPolicyMock.mockRejectedValueOnce({ status: 404, message: 'sensitive backend detail' });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const permissions = within(codexPanel).getByRole('region', { name: 'Codex CLI tool permissions' });
+    await waitFor(() => {
+      expect(within(permissions).getByText('No scoped policy. MCP tool access is blocked.')).toBeInTheDocument();
+    });
+    expect(within(permissions).queryByText(/sensitive backend detail/)).not.toBeInTheDocument();
+  });
+
+  it('shows server errors as policy unavailable without exposing error details', async () => {
+    getAgentToolPolicyMock.mockRejectedValueOnce({ status: 503, message: 'gateway timeout' });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const permissions = within(codexPanel).getByRole('region', { name: 'Codex CLI tool permissions' });
+    await waitFor(() => {
+      expect(within(permissions).getByText('Policy unavailable. MCP tool access remains blocked.')).toBeInTheDocument();
+    });
+    expect(within(permissions).queryByText(/gateway timeout/)).not.toBeInTheDocument();
+  });
+
+  it('blocks access when the policy response scope does not match the request', async () => {
+    getAgentToolPolicyMock.mockResolvedValueOnce({
+      scope: { project: 'other-project', provider_id: 'codex' },
+      policy: {
+        rules: [{
+          project: 'other-project',
+          provider_id: 'codex',
+          connection_id: 'c1',
+          server_id: 'srv',
+          tool_name: 'injected_tool',
+          modes: ['read_only'],
+          risk: 'read_only',
+          effect: 'allow',
+        }],
+      },
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const permissions = within(codexPanel).getByRole('region', { name: 'Codex CLI tool permissions' });
+    await waitFor(() => {
+      expect(within(permissions).getByText('Policy unavailable. MCP tool access remains blocked.')).toBeInTheDocument();
+    });
+    expect(within(permissions).queryByText('injected_tool')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['modes', { modes: null }],
+    ['risk', { risk: null }],
+  ])('blocks access when a policy rule has malformed %s', async (_field, override) => {
+    getAgentToolPolicyMock.mockResolvedValueOnce({
+      scope: { project: 'demo', provider_id: 'codex' },
+      policy: {
+        rules: [{
+          project: 'demo',
+          provider_id: 'codex',
+          connection_id: 'c1',
+          server_id: 'srv',
+          tool_name: 'malformed_tool',
+          modes: ['read_only'],
+          risk: 'read_only',
+          effect: 'allow',
+          ...override,
+        }],
+      },
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const permissions = within(codexPanel).getByRole('region', { name: 'Codex CLI tool permissions' });
+    await waitFor(() => {
+      expect(within(permissions).getByText('Policy unavailable. MCP tool access remains blocked.')).toBeInTheDocument();
+    });
+    expect(within(permissions).queryByText('malformed_tool')).not.toBeInTheDocument();
+  });
+
+  it('blocks access when the scoped policy has no allowed routes', async () => {
+    getAgentToolPolicyMock.mockResolvedValueOnce({
+      scope: { project: 'demo', provider_id: 'codex' },
+      policy: { rules: [] },
+    });
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    const codexPanel = screen.getByRole('tabpanel', { name: 'Codex' });
+    const permissions = within(codexPanel).getByRole('region', { name: 'Codex CLI tool permissions' });
+    await waitFor(() => {
+      expect(within(permissions).getByText('No routes allowed. MCP tool access is blocked.')).toBeInTheDocument();
+    });
+    expect(within(permissions).getByText('0 allowed')).toBeInTheDocument();
+    expect(within(permissions).getByText('0 denied')).toBeInTheDocument();
+  });
+
+  it('discards stale tool-policy responses when the provider tab changes', async () => {
+    let resolveStaleCodex!: (_response: AgentToolPolicyResponse) => void;
+    getAgentToolPolicyMock.mockImplementationOnce(
+      () => new Promise(resolve => { resolveStaleCodex = resolve; }),
+    );
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Codex' }));
+
+    await waitFor(() => {
+      expect(getAgentToolPolicyMock).toHaveBeenCalledWith('demo', 'codex');
+    });
+
+    // Switch tab — the in-flight Codex request is now cancelled
+    fireEvent.click(screen.getByRole('tab', { name: 'Claude Code' }));
+    await waitFor(() => {
+      expect(getAgentToolPolicyMock).toHaveBeenCalledWith('demo', 'claude');
+    });
+
+    // Deliver the stale Codex response after the switch
+    await act(async () => {
+      resolveStaleCodex({
+        scope: { project: 'demo', provider_id: 'codex' },
+        policy: {
+          rules: [{
+            project: 'demo',
+            provider_id: 'codex',
+            connection_id: 'c1',
+            server_id: 'srv',
+            tool_name: 'stale_tool',
+            modes: ['read_only'],
+            risk: 'read_only',
+            effect: 'allow',
+          }],
+        },
+      });
+      await Promise.resolve();
+    });
+
+    const claudePanel = screen.getByRole('tabpanel', { name: 'Claude Code' });
+    const permissions = within(claudePanel).getByRole('region', { name: 'Claude Code CLI tool permissions' });
+    // Stale codex data must never appear in the Claude tab
+    expect(within(permissions).queryByText('stale_tool')).not.toBeInTheDocument();
+    // Claude's own request is still loading (default never-resolving mock)
+    expect(within(permissions).getByText('Checking scoped tool permissions...')).toBeInTheDocument();
   });
 
   it('includes detected local provider details in the selected provider panel', async () => {
