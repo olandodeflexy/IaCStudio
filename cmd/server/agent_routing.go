@@ -8,8 +8,9 @@ import (
 )
 
 type agentRoutingServices struct {
-	runs   *agentruns.Store
-	router *agentrouting.Router
+	runs     *agentruns.Store
+	policies *agentrouting.PolicyStore
+	router   *agentrouting.Router
 }
 
 func newAgentRoutingServices(evaluator agentrouting.ToolEvaluator) (*agentRoutingServices, error) {
@@ -28,7 +29,8 @@ func newAgentRoutingServices(evaluator agentrouting.ToolEvaluator) (*agentRoutin
 		return nil, fmt.Errorf("create tool route router: %w", err)
 	}
 	return &agentRoutingServices{
-		runs:   runs,
-		router: router,
+		runs:     runs,
+		policies: policies,
+		router:   router,
 	}, nil
 }
