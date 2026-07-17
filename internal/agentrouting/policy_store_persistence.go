@@ -131,8 +131,12 @@ func persistPolicyStore(path string, policies map[PolicyScope]Policy) error {
 	if len(data)+1 > maxPolicyStoreBytes {
 		return fmt.Errorf("%w: snapshot exceeds size limit", ErrInvalidPolicyStore)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create tool route policy directory: %w", err)
+	}
+	if err := securePolicyStoreDir(dir); err != nil {
+		return fmt.Errorf("secure tool route policy directory: %w", err)
 	}
 	if err := writePolicyStoreAtomic(path, append(data, '\n')); err != nil {
 		return err
@@ -178,6 +182,10 @@ func writePolicyStoreAtomic(path string, data []byte) error {
 	}()
 
 	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("secure temporary policy store: %w", err)
+	}
+	if err := securePolicyStoreFile(tmpPath); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("secure temporary policy store: %w", err)
 	}
