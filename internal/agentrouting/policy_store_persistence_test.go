@@ -1,0 +1,199 @@
+package agentrouting
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+)
+
+func TestPersistentPolicyStoreSurvivesRestart(t *testing.T) {
+	root := t.TempDir()
+	scope, policy := validPolicyStoreInput()
+	store, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore(): %v", err)
+	}
+	if err := store.Save(scope, policy); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+
+	path := filepath.Join(root, ".iac-studio", policyStoreFileName)
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", path, err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
+		t.Fatalf("policy store permissions = %o, want 600", info.Mode().Perm())
+	}
+
+	restarted, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore() after restart: %v", err)
+	}
+	stored, err := restarted.Get(scope)
+	if err != nil {
+		t.Fatalf("Get(): %v", err)
+	}
+	if stored.Rules[0].Effect != policy.Rules[0].Effect || stored.Rules[0].ToolName != policy.Rules[0].ToolName {
+		t.Fatalf("reloaded policy = %+v, want %+v", stored, policy)
+	}
+}
+
+func TestPersistentPolicyStoreRejectsInvalidSnapshots(t *testing.T) {
+	scope, policy := validPolicyStoreInput()
+	crossScoped := persistedPolicyStore{
+		Version: policyStoreVersion,
+		Policies: []persistedScopedPolicy{{
+			Scope:  PolicyScope{Project: "other-project", ProviderID: scope.ProviderID},
+			Policy: policy,
+		}},
+	}
+	duplicate := persistedPolicyStore{
+		Version: policyStoreVersion,
+		Policies: []persistedScopedPolicy{
+			{Scope: scope, Policy: policy},
+			{Scope: scope, Policy: policy},
+		},
+	}
+	encode := func(snapshot persistedPolicyStore) []byte {
+		data, err := json.Marshal(snapshot)
+		if err != nil {
+			t.Fatalf("Marshal(): %v", err)
+		}
+		return data
+	}
+
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{name: "malformed JSON", data: []byte(`{"version":1,"policies":[`)},
+		{name: "unsupported version", data: []byte(`{"version":2,"policies":[]}`)},
+		{name: "unknown field", data: []byte(`{"version":1,"policies":[],"extra":true}`)},
+		{name: "cross-scoped rule", data: encode(crossScoped)},
+		{name: "duplicate scope", data: encode(duplicate)},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root := t.TempDir()
+			dir := filepath.Join(root, ".iac-studio")
+			if err := os.MkdirAll(dir, 0o700); err != nil {
+				t.Fatalf("MkdirAll(): %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, policyStoreFileName), test.data, 0o600); err != nil {
+				t.Fatalf("WriteFile(): %v", err)
+			}
+			if _, err := NewPersistentPolicyStore(root); !errors.Is(err, ErrInvalidPolicyStore) {
+				t.Fatalf("NewPersistentPolicyStore() error = %v, want ErrInvalidPolicyStore", err)
+			}
+		})
+	}
+}
+
+func TestPersistentPolicyStoreFailedWriteKeepsActiveSnapshot(t *testing.T) {
+	scope, policy := validPolicyStoreInput()
+	store := NewPolicyStore()
+	if err := store.Save(scope, policy); err != nil {
+		t.Fatalf("Save(existing): %v", err)
+	}
+
+	blocker := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(blocker, []byte("blocked"), 0o600); err != nil {
+		t.Fatalf("WriteFile(blocker): %v", err)
+	}
+	store.path = filepath.Join(blocker, policyStoreFileName)
+	replacement := clonePolicy(policy)
+	replacement.Rules[0].Effect = EffectDeny
+	replacement.Rules[0].ApprovalRequired = false
+	if err := store.Save(scope, replacement); err == nil {
+		t.Fatal("Save(replacement) succeeded with an invalid storage path")
+	}
+
+	stored, err := store.Get(scope)
+	if err != nil {
+		t.Fatalf("Get(): %v", err)
+	}
+	if stored.Rules[0].Effect != EffectAllow {
+		t.Fatalf("failed persistence replaced active policy: %+v", stored)
+	}
+}
+
+func TestPersistentPolicyStoreRejectsOversizedSnapshotBeforeMutation(t *testing.T) {
+	scope, policy := validPolicyStoreInput()
+	store, err := NewPersistentPolicyStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore(): %v", err)
+	}
+	if err := store.Save(scope, policy); err != nil {
+		t.Fatalf("Save(existing): %v", err)
+	}
+
+	replacement := clonePolicy(policy)
+	replacement.Rules[0].ToolName = strings.Repeat("x", maxPolicyStoreBytes)
+	if err := store.Save(scope, replacement); !errors.Is(err, ErrInvalidPolicyStore) {
+		t.Fatalf("Save(oversized) error = %v, want ErrInvalidPolicyStore", err)
+	}
+	stored, err := store.Get(scope)
+	if err != nil {
+		t.Fatalf("Get(): %v", err)
+	}
+	if stored.Rules[0].ToolName != policy.Rules[0].ToolName {
+		t.Fatalf("oversized persistence replaced active policy")
+	}
+}
+
+func TestPersistentPolicyStoreConcurrentSavesSurviveRestart(t *testing.T) {
+	root := t.TempDir()
+	store, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore(): %v", err)
+	}
+
+	const count = 12
+	var wg sync.WaitGroup
+	errs := make(chan error, count)
+	for index := range count {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			rule := validRule()
+			rule.Project = fmt.Sprintf("project-%02d", index)
+			rule.ProviderID = fmt.Sprintf("provider-%02d", index)
+			scope := PolicyScope{Project: rule.Project, ProviderID: rule.ProviderID}
+			errs <- store.Save(scope, Policy{Rules: []Rule{rule}})
+		}()
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent Save(): %v", err)
+		}
+	}
+
+	restarted, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore() after concurrent saves: %v", err)
+	}
+	for index := range count {
+		scope := PolicyScope{
+			Project:    fmt.Sprintf("project-%02d", index),
+			ProviderID: fmt.Sprintf("provider-%02d", index),
+		}
+		if _, err := restarted.Get(scope); err != nil {
+			t.Fatalf("Get(%+v): %v", scope, err)
+		}
+	}
+}
+
+func TestPersistentPolicyStoreRequiresProjectsDirectory(t *testing.T) {
+	if _, err := NewPersistentPolicyStore("  "); !errors.Is(err, ErrPolicyStorePathRequired) {
+		t.Fatalf("NewPersistentPolicyStore(empty) error = %v, want ErrPolicyStorePathRequired", err)
+	}
+}

@@ -30,8 +30,10 @@ func (s PolicyScope) Validate() error {
 // PolicyStore keeps validated, immutable policy snapshots by exact project
 // and provider scope. Missing policies fail closed with ErrPolicyNotFound.
 type PolicyStore struct {
-	mu       sync.RWMutex
-	policies map[PolicyScope]Policy
+	mu        sync.RWMutex
+	persistMu sync.Mutex
+	policies  map[PolicyScope]Policy
+	path      string
 }
 
 func NewPolicyStore() *PolicyStore {
@@ -56,12 +58,25 @@ func (s *PolicyStore) Save(scope PolicyScope, policy Policy) error {
 		}
 	}
 
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.policies == nil {
-		s.policies = make(map[PolicyScope]Policy)
+	// Serialize writers while allowing readers to keep using the last durable
+	// snapshot during filesystem I/O.
+	s.persistMu.Lock()
+	defer s.persistMu.Unlock()
+	s.mu.RLock()
+	next := make(map[PolicyScope]Policy, len(s.policies)+1)
+	for storedScope, storedPolicy := range s.policies {
+		next[storedScope] = storedPolicy
 	}
-	s.policies[scope] = snapshot
+	s.mu.RUnlock()
+	next[scope] = snapshot
+	if s.path != "" {
+		if err := persistPolicyStore(s.path, next); err != nil {
+			return fmt.Errorf("persist tool route policies: %w", err)
+		}
+	}
+	s.mu.Lock()
+	s.policies = next
+	s.mu.Unlock()
 	return nil
 }
 
