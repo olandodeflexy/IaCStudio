@@ -140,6 +140,29 @@ func persistPolicyStore(path string, policies map[PolicyScope]Policy) error {
 	return nil
 }
 
+func persistPolicyStoreLocked(path string, scope PolicyScope, policy Policy) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return fmt.Errorf("create tool route policy directory: %w", err)
+	}
+
+	lock, err := openPolicyStoreLock(path)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = lock.Close() }()
+	if err := lockPolicyStoreFile(lock); err != nil {
+		return err
+	}
+	defer func() { _ = unlockPolicyStoreFile(lock) }()
+
+	policies, err := loadPolicyStore(path)
+	if err != nil {
+		return err
+	}
+	policies[scope] = clonePolicy(policy)
+	return persistPolicyStore(path, policies)
+}
+
 func writePolicyStoreAtomic(path string, data []byte) error {
 	dir := filepath.Dir(path)
 	tmp, err := os.CreateTemp(dir, filepath.Base(path)+".tmp-*")
@@ -175,6 +198,15 @@ func writePolicyStoreAtomic(path string, data []byte) error {
 	keepTemp = false
 	syncPolicyStoreDirBestEffort(dir)
 	return nil
+}
+
+func openPolicyStoreLock(path string) (*os.File, error) {
+	lockPath := path + ".lock"
+	handle, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open policy store lock: %w", err)
+	}
+	return handle, nil
 }
 
 func syncPolicyStoreDirBestEffort(dir string) {

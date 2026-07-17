@@ -192,6 +192,45 @@ func TestPersistentPolicyStoreConcurrentSavesSurviveRestart(t *testing.T) {
 	}
 }
 
+func TestPersistentPolicyStoreMergesLatestDurableSnapshotAcrossStores(t *testing.T) {
+	root := t.TempDir()
+	first, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore(first): %v", err)
+	}
+	second, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore(second): %v", err)
+	}
+
+	firstRule := validRule()
+	firstRule.Project = "project-a"
+	firstRule.ProviderID = "provider-a"
+	firstScope := PolicyScope{Project: firstRule.Project, ProviderID: firstRule.ProviderID}
+	if err := first.Save(firstScope, Policy{Rules: []Rule{firstRule}}); err != nil {
+		t.Fatalf("first.Save(): %v", err)
+	}
+
+	secondRule := validRule()
+	secondRule.Project = "project-b"
+	secondRule.ProviderID = "provider-b"
+	secondScope := PolicyScope{Project: secondRule.Project, ProviderID: secondRule.ProviderID}
+	if err := second.Save(secondScope, Policy{Rules: []Rule{secondRule}}); err != nil {
+		t.Fatalf("second.Save(): %v", err)
+	}
+
+	restarted, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore(restarted): %v", err)
+	}
+	if _, err := restarted.Get(firstScope); err != nil {
+		t.Fatalf("Get(firstScope): %v", err)
+	}
+	if _, err := restarted.Get(secondScope); err != nil {
+		t.Fatalf("Get(secondScope): %v", err)
+	}
+}
+
 func TestPersistentPolicyStoreRequiresProjectsDirectory(t *testing.T) {
 	if _, err := NewPersistentPolicyStore("  "); !errors.Is(err, ErrPolicyStorePathRequired) {
 		t.Fatalf("NewPersistentPolicyStore(empty) error = %v, want ErrPolicyStorePathRequired", err)

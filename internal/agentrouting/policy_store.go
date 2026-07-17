@@ -62,22 +62,34 @@ func (s *PolicyStore) Save(scope PolicyScope, policy Policy) error {
 	// snapshot during filesystem I/O.
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
-	s.mu.RLock()
-	next := make(map[PolicyScope]Policy, len(s.policies)+1)
-	for storedScope, storedPolicy := range s.policies {
-		next[storedScope] = storedPolicy
-	}
-	s.mu.RUnlock()
-	next[scope] = snapshot
+	next := s.snapshotPolicies()
 	if s.path != "" {
-		if err := persistPolicyStore(s.path, next); err != nil {
+		if err := persistPolicyStoreLocked(s.path, scope, snapshot); err != nil {
 			return fmt.Errorf("persist tool route policies: %w", err)
 		}
+		loaded, err := loadPolicyStore(s.path)
+		if err != nil {
+			return fmt.Errorf("reload tool route policies: %w", err)
+		}
+		next = loaded
+	} else {
+		next[scope] = snapshot
 	}
 	s.mu.Lock()
 	s.policies = next
 	s.mu.Unlock()
 	return nil
+}
+
+func (s *PolicyStore) snapshotPolicies() map[PolicyScope]Policy {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	next := make(map[PolicyScope]Policy, len(s.policies)+1)
+	for storedScope, storedPolicy := range s.policies {
+		next[storedScope] = storedPolicy
+	}
+	return next
 }
 
 // Get returns a detached policy snapshot for one exact project/provider scope.
