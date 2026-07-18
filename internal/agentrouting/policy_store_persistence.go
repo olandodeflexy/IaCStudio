@@ -39,7 +39,12 @@ func NewPersistentPolicyStore(projectsDir string) (*PolicyStore, error) {
 	if strings.TrimSpace(projectsDir) == "" {
 		return nil, ErrPolicyStorePathRequired
 	}
+	// Preserve the configured path exactly; leading and trailing spaces are
+	// valid filesystem path characters.
 	path := filepath.Join(filepath.Clean(projectsDir), ".iac-studio", policyStoreFileName)
+	if err := secureExistingPolicyStoreDir(filepath.Dir(path), true); err != nil {
+		return nil, err
+	}
 	policies, err := loadPolicyStore(path)
 	if err != nil {
 		return nil, err
@@ -131,13 +136,6 @@ func persistPolicyStore(path string, policies map[PolicyScope]Policy) error {
 	if len(data)+1 > maxPolicyStoreBytes {
 		return fmt.Errorf("%w: snapshot exceeds size limit", ErrInvalidPolicyStore)
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create tool route policy directory: %w", err)
-	}
-	if err := securePolicyStoreDir(dir); err != nil {
-		return fmt.Errorf("secure tool route policy directory: %w", err)
-	}
 	if err := writePolicyStoreAtomic(path, append(data, '\n')); err != nil {
 		return err
 	}
@@ -146,11 +144,8 @@ func persistPolicyStore(path string, policies map[PolicyScope]Policy) error {
 
 func persistPolicyStoreLocked(path string, scope PolicyScope, policy Policy) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return fmt.Errorf("create tool route policy directory: %w", err)
-	}
-	if err := securePolicyStoreDir(dir); err != nil {
-		return fmt.Errorf("secure tool route policy directory: %w", err)
+	if err := ensurePolicyStoreDir(dir); err != nil {
+		return err
 	}
 
 	lock, err := openPolicyStoreLock(path)
@@ -169,6 +164,31 @@ func persistPolicyStoreLocked(path string, scope PolicyScope, policy Policy) err
 	}
 	policies[scope] = clonePolicy(policy)
 	return persistPolicyStore(path, policies)
+}
+
+func ensurePolicyStoreDir(dir string) error {
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return fmt.Errorf("create tool route policy parent directory: %w", err)
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return fmt.Errorf("create tool route policy directory: %w", err)
+	}
+	return secureExistingPolicyStoreDir(dir, false)
+}
+
+func secureExistingPolicyStoreDir(dir string, missingOK bool) error {
+	handle, err := openPolicyStoreDirFile(dir)
+	if missingOK && errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("%w: inspect policy store directory: %v", ErrInvalidPolicyStore, err)
+	}
+	defer func() { _ = handle.Close() }()
+	if err := securePolicyStoreDirHandle(handle); err != nil {
+		return fmt.Errorf("secure tool route policy directory: %w", err)
+	}
+	return nil
 }
 
 func writePolicyStoreAtomic(path string, data []byte) error {

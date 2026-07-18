@@ -111,6 +111,52 @@ func TestPersistentPolicyStoreRejectsSymlinkLockFile(t *testing.T) {
 	assertFileMode(t, target, 0o644)
 }
 
+func TestPersistentPolicyStoreRejectsSymlinkDirectory(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks on Windows may require elevated privileges")
+	}
+
+	t.Run("startup", func(t *testing.T) {
+		root := t.TempDir()
+		target := t.TempDir()
+		if err := os.Chmod(target, 0o755); err != nil {
+			t.Fatalf("Chmod(target): %v", err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, ".iac-studio")); err != nil {
+			t.Fatalf("Symlink(): %v", err)
+		}
+
+		if _, err := NewPersistentPolicyStore(root); !errors.Is(err, ErrInvalidPolicyStore) {
+			t.Fatalf("NewPersistentPolicyStore() error = %v, want ErrInvalidPolicyStore", err)
+		}
+		assertFileMode(t, target, 0o755)
+	})
+
+	t.Run("save", func(t *testing.T) {
+		root := t.TempDir()
+		store, err := NewPersistentPolicyStore(root)
+		if err != nil {
+			t.Fatalf("NewPersistentPolicyStore(): %v", err)
+		}
+		target := t.TempDir()
+		if err := os.Chmod(target, 0o755); err != nil {
+			t.Fatalf("Chmod(target): %v", err)
+		}
+		if err := os.Symlink(target, filepath.Join(root, ".iac-studio")); err != nil {
+			t.Fatalf("Symlink(): %v", err)
+		}
+
+		scope, policy := validPolicyStoreInput()
+		if err := store.Save(scope, policy); !errors.Is(err, ErrInvalidPolicyStore) {
+			t.Fatalf("Save() error = %v, want ErrInvalidPolicyStore", err)
+		}
+		if _, err := os.Stat(filepath.Join(target, policyStoreFileName)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("policy file in symlink target error = %v, want not found", err)
+		}
+		assertFileMode(t, target, 0o755)
+	})
+}
+
 func assertFileMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 	info, err := os.Stat(path)

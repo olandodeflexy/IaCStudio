@@ -9,10 +9,6 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func securePolicyStoreDir(path string) error {
-	return securePolicyStoreObject(path, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
-}
-
 func securePolicyStoreFile(path string) error {
 	return securePolicyStoreObject(path, 0)
 }
@@ -37,7 +33,15 @@ func securePolicyStoreObject(path string, inheritance uint32) error {
 }
 
 func securePolicyStoreHandle(handle *os.File) error {
-	acl, err := policyStoreACL(0)
+	return securePolicyStoreHandleWithInheritance(handle, 0)
+}
+
+func securePolicyStoreDirHandle(handle *os.File) error {
+	return securePolicyStoreHandleWithInheritance(handle, windows.SUB_CONTAINERS_AND_OBJECTS_INHERIT)
+}
+
+func securePolicyStoreHandleWithInheritance(handle *os.File, inheritance uint32) error {
+	acl, err := policyStoreACL(inheritance)
 	if err != nil {
 		return err
 	}

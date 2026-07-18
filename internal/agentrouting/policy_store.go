@@ -62,7 +62,7 @@ func (s *PolicyStore) Save(scope PolicyScope, policy Policy) error {
 	// snapshot during filesystem I/O.
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
-	next := s.snapshotPolicies()
+	var next map[PolicyScope]Policy
 	if s.path != "" {
 		if err := persistPolicyStoreLocked(s.path, scope, snapshot); err != nil {
 			return fmt.Errorf("persist tool route policies: %w", err)
@@ -73,6 +73,7 @@ func (s *PolicyStore) Save(scope PolicyScope, policy Policy) error {
 		}
 		next = loaded
 	} else {
+		next = s.snapshotPolicies()
 		next[scope] = snapshot
 	}
 	s.mu.Lock()
