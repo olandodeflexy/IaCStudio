@@ -14,6 +14,15 @@ func openPolicyStoreLockFile(path string) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("inspect policy store lock: %w", err)
+	}
+	if stat.Nlink != 1 {
+		_ = unix.Close(fd)
+		return nil, fmt.Errorf("policy store lock must have exactly one hard link")
+	}
 	handle := os.NewFile(uintptr(fd), path)
 	if handle == nil {
 		_ = unix.Close(fd)

@@ -31,9 +31,10 @@ func openPolicyStoreLockFile(path string) (*os.File, error) {
 		_ = windows.CloseHandle(handle)
 		return nil, fmt.Errorf("inspect policy store lock: %w", err)
 	}
-	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+		info.NumberOfLinks != 1 {
 		_ = windows.CloseHandle(handle)
-		return nil, fmt.Errorf("policy store lock is not a regular file")
+		return nil, fmt.Errorf("policy store lock must be a single-link regular file")
 	}
 	file := os.NewFile(uintptr(handle), path)
 	if file == nil {

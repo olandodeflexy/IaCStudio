@@ -134,6 +134,65 @@ func TestPersistentPolicyStoreRejectsSymlinkLockFile(t *testing.T) {
 	assertFileMode(t, target, 0o644)
 }
 
+func TestPersistentPolicyStoreRejectsHardLinkedLockFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hard-link behavior is covered by Windows handle metadata checks")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target): %v", err)
+	}
+	lockPath := filepath.Join(dir, policyStoreFileName+".lock")
+	if err := os.Link(target, lockPath); err != nil {
+		t.Fatalf("Link(): %v", err)
+	}
+
+	store, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore(): %v", err)
+	}
+	scope, policy := validPolicyStoreInput()
+	if err := store.Save(scope, policy); err == nil {
+		t.Fatal("Save() succeeded with a hard-linked lock file")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile(target): %v", err)
+	}
+	if string(data) != "unchanged" {
+		t.Fatalf("target contents = %q, want unchanged", data)
+	}
+	assertFileMode(t, target, 0o644)
+}
+
+func TestPersistentPolicyStoreRejectsHardLinkedDataFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hard-link behavior is covered by Windows handle metadata checks")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte(`{"version":1,"policies":[]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(target): %v", err)
+	}
+	if err := os.Link(target, filepath.Join(dir, policyStoreFileName)); err != nil {
+		t.Fatalf("Link(): %v", err)
+	}
+
+	if _, err := NewPersistentPolicyStore(root); !errors.Is(err, ErrInvalidPolicyStore) {
+		t.Fatalf("NewPersistentPolicyStore() error = %v, want ErrInvalidPolicyStore", err)
+	}
+	assertFileMode(t, target, 0o644)
+}
+
 func TestPersistentPolicyStoreRejectsSymlinkDirectory(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("creating symlinks on Windows may require elevated privileges")

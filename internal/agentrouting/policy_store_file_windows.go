@@ -30,7 +30,8 @@ func openPolicyStoreDataFile(path string) (*os.File, error) {
 		_ = windows.CloseHandle(handle)
 		return nil, err
 	}
-	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 {
+	if info.FileAttributes&(windows.FILE_ATTRIBUTE_DIRECTORY|windows.FILE_ATTRIBUTE_REPARSE_POINT) != 0 ||
+		info.NumberOfLinks != 1 {
 		_ = windows.CloseHandle(handle)
 		return nil, ErrInvalidPolicyStore
 	}

@@ -16,6 +16,15 @@ func openPolicyStoreDataFile(path string) (*os.File, error) {
 		}
 		return nil, err
 	}
+	var stat unix.Stat_t
+	if err := unix.Fstat(fd, &stat); err != nil {
+		_ = unix.Close(fd)
+		return nil, err
+	}
+	if stat.Nlink != 1 {
+		_ = unix.Close(fd)
+		return nil, ErrInvalidPolicyStore
+	}
 	handle := os.NewFile(uintptr(fd), path)
 	if handle == nil {
 		_ = unix.Close(fd)
