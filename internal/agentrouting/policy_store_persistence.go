@@ -69,7 +69,7 @@ func loadPolicyStore(path string) (map[PolicyScope]Policy, error) {
 	decoder := json.NewDecoder(io.LimitReader(file, maxPolicyStoreBytes+1))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&snapshot); err != nil {
-		return nil, fmt.Errorf("%w: decode snapshot", ErrInvalidPolicyStore)
+		return nil, fmt.Errorf("%w: decode snapshot: %v", ErrInvalidPolicyStore, err)
 	}
 	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("%w: trailing data", ErrInvalidPolicyStore)
@@ -214,11 +214,11 @@ func writePolicyStoreAtomic(path string, data []byte) error {
 
 func openPolicyStoreLock(path string) (*os.File, error) {
 	lockPath := path + ".lock"
-	handle, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
+	handle, err := openPolicyStoreLockFile(lockPath)
 	if err != nil {
 		return nil, fmt.Errorf("open policy store lock: %w", err)
 	}
-	if err := securePolicyStoreFile(lockPath); err != nil {
+	if err := securePolicyStoreHandle(handle); err != nil {
 		_ = handle.Close()
 		return nil, fmt.Errorf("secure policy store lock: %w", err)
 	}

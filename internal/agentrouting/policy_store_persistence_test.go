@@ -75,6 +75,42 @@ func TestPersistentPolicyStoreRehardensExistingLockFile(t *testing.T) {
 	assertFileMode(t, lockPath, 0o600)
 }
 
+func TestPersistentPolicyStoreRejectsSymlinkLockFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating symlinks on Windows may require elevated privileges")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("unchanged"), 0o644); err != nil {
+		t.Fatalf("WriteFile(target): %v", err)
+	}
+	lockPath := filepath.Join(dir, policyStoreFileName+".lock")
+	if err := os.Symlink(target, lockPath); err != nil {
+		t.Fatalf("Symlink(): %v", err)
+	}
+
+	store, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore(): %v", err)
+	}
+	scope, policy := validPolicyStoreInput()
+	if err := store.Save(scope, policy); err == nil {
+		t.Fatal("Save() succeeded with a symlink lock file")
+	}
+	data, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("ReadFile(target): %v", err)
+	}
+	if string(data) != "unchanged" {
+		t.Fatalf("target contents = %q, want unchanged", data)
+	}
+	assertFileMode(t, target, 0o644)
+}
+
 func assertFileMode(t *testing.T, path string, want os.FileMode) {
 	t.Helper()
 	info, err := os.Stat(path)
@@ -134,6 +170,25 @@ func TestPersistentPolicyStoreRejectsInvalidSnapshots(t *testing.T) {
 				t.Fatalf("NewPersistentPolicyStore() error = %v, want ErrInvalidPolicyStore", err)
 			}
 		})
+	}
+}
+
+func TestPersistentPolicyStoreReportsDecodeFailure(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, policyStoreFileName), []byte(`{"version":1,"policies":[`), 0o600); err != nil {
+		t.Fatalf("WriteFile(): %v", err)
+	}
+
+	_, err := NewPersistentPolicyStore(root)
+	if !errors.Is(err, ErrInvalidPolicyStore) {
+		t.Fatalf("NewPersistentPolicyStore() error = %v, want ErrInvalidPolicyStore", err)
+	}
+	if !strings.Contains(err.Error(), "unexpected EOF") {
+		t.Fatalf("NewPersistentPolicyStore() error = %q, want decoder detail", err)
 	}
 }
 

@@ -4,6 +4,7 @@ package agentrouting
 
 import (
 	"fmt"
+	"os"
 
 	"golang.org/x/sys/windows"
 )
@@ -17,26 +18,9 @@ func securePolicyStoreFile(path string) error {
 }
 
 func securePolicyStoreObject(path string, inheritance uint32) error {
-	currentUser, err := currentPolicyStoreUserSID()
+	acl, err := policyStoreACL(inheritance)
 	if err != nil {
 		return err
-	}
-	administrators, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
-	if err != nil {
-		return fmt.Errorf("resolve administrators SID: %w", err)
-	}
-	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
-	if err != nil {
-		return fmt.Errorf("resolve local system SID: %w", err)
-	}
-
-	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{
-		policyStoreAccessEntry(currentUser, windows.TRUSTEE_IS_USER, inheritance),
-		policyStoreAccessEntry(administrators, windows.TRUSTEE_IS_GROUP, inheritance),
-		policyStoreAccessEntry(system, windows.TRUSTEE_IS_USER, inheritance),
-	}, nil)
-	if err != nil {
-		return fmt.Errorf("build policy store ACL: %w", err)
 	}
 	if err := windows.SetNamedSecurityInfo(
 		path,
@@ -50,6 +34,50 @@ func securePolicyStoreObject(path string, inheritance uint32) error {
 		return fmt.Errorf("apply policy store ACL: %w", err)
 	}
 	return nil
+}
+
+func securePolicyStoreHandle(handle *os.File) error {
+	acl, err := policyStoreACL(0)
+	if err != nil {
+		return err
+	}
+	if err := windows.SetSecurityInfo(
+		windows.Handle(handle.Fd()),
+		windows.SE_FILE_OBJECT,
+		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION,
+		nil,
+		nil,
+		acl,
+		nil,
+	); err != nil {
+		return fmt.Errorf("apply policy store ACL: %w", err)
+	}
+	return nil
+}
+
+func policyStoreACL(inheritance uint32) (*windows.ACL, error) {
+	currentUser, err := currentPolicyStoreUserSID()
+	if err != nil {
+		return nil, err
+	}
+	administrators, err := windows.CreateWellKnownSid(windows.WinBuiltinAdministratorsSid)
+	if err != nil {
+		return nil, fmt.Errorf("resolve administrators SID: %w", err)
+	}
+	system, err := windows.CreateWellKnownSid(windows.WinLocalSystemSid)
+	if err != nil {
+		return nil, fmt.Errorf("resolve local system SID: %w", err)
+	}
+
+	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{
+		policyStoreAccessEntry(currentUser, windows.TRUSTEE_IS_USER, inheritance),
+		policyStoreAccessEntry(administrators, windows.TRUSTEE_IS_GROUP, inheritance),
+		policyStoreAccessEntry(system, windows.TRUSTEE_IS_USER, inheritance),
+	}, nil)
+	if err != nil {
+		return nil, fmt.Errorf("build policy store ACL: %w", err)
+	}
+	return acl, nil
 }
 
 func policyStoreAccessEntry(sid *windows.SID, trusteeType windows.TRUSTEE_TYPE, inheritance uint32) windows.EXPLICIT_ACCESS {

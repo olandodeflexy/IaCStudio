@@ -11,3 +11,7 @@ func securePolicyStoreDir(path string) error {
 func securePolicyStoreFile(path string) error {
 	return os.Chmod(path, 0o600)
 }
+
+func securePolicyStoreHandle(handle *os.File) error {
+	return handle.Chmod(0o600)
+}
