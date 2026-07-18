@@ -2,10 +2,12 @@
 
 package agentrouting
 
-func securePolicyStoreDir(string) error {
-	return nil
+import "os"
+
+func securePolicyStoreDir(path string) error {
+	return os.Chmod(path, 0o700)
 }
 
-func securePolicyStoreFile(string) error {
-	return nil
+func securePolicyStoreFile(path string) error {
+	return os.Chmod(path, 0o600)
 }

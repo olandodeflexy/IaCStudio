@@ -45,6 +45,47 @@ func TestPersistentPolicyStoreSurvivesRestart(t *testing.T) {
 	}
 }
 
+func TestPersistentPolicyStoreRehardensExistingLockFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows policy store security is ACL-based")
+	}
+	root := t.TempDir()
+	store, err := NewPersistentPolicyStore(root)
+	if err != nil {
+		t.Fatalf("NewPersistentPolicyStore(): %v", err)
+	}
+	scope, policy := validPolicyStoreInput()
+	if err := store.Save(scope, policy); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+
+	dir := filepath.Join(root, ".iac-studio")
+	lockPath := filepath.Join(dir, policyStoreFileName+".lock")
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatalf("Chmod(directory): %v", err)
+	}
+	if err := os.Chmod(lockPath, 0o666); err != nil {
+		t.Fatalf("Chmod(lock): %v", err)
+	}
+	if err := store.Save(scope, policy); err != nil {
+		t.Fatalf("Save() after permission change: %v", err)
+	}
+
+	assertFileMode(t, dir, 0o700)
+	assertFileMode(t, lockPath, 0o600)
+}
+
+func assertFileMode(t *testing.T, path string, want os.FileMode) {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%q): %v", path, err)
+	}
+	if got := info.Mode().Perm(); got != want {
+		t.Fatalf("%s permissions = %o, want %o", path, got, want)
+	}
+}
+
 func TestPersistentPolicyStoreRejectsInvalidSnapshots(t *testing.T) {
 	scope, policy := validPolicyStoreInput()
 	crossScoped := persistedPolicyStore{

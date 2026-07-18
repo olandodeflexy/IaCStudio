@@ -145,8 +145,12 @@ func persistPolicyStore(path string, policies map[PolicyScope]Policy) error {
 }
 
 func persistPolicyStoreLocked(path string, scope PolicyScope, policy Policy) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create tool route policy directory: %w", err)
+	}
+	if err := securePolicyStoreDir(dir); err != nil {
+		return fmt.Errorf("secure tool route policy directory: %w", err)
 	}
 
 	lock, err := openPolicyStoreLock(path)
@@ -213,6 +217,10 @@ func openPolicyStoreLock(path string) (*os.File, error) {
 	handle, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open policy store lock: %w", err)
+	}
+	if err := securePolicyStoreFile(lockPath); err != nil {
+		_ = handle.Close()
+		return nil, fmt.Errorf("secure policy store lock: %w", err)
 	}
 	return handle, nil
 }

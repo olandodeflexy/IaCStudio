@@ -33,7 +33,7 @@ func securePolicyStoreObject(path string, inheritance uint32) error {
 	acl, err := windows.ACLFromEntries([]windows.EXPLICIT_ACCESS{
 		policyStoreAccessEntry(currentUser, windows.TRUSTEE_IS_USER, inheritance),
 		policyStoreAccessEntry(administrators, windows.TRUSTEE_IS_GROUP, inheritance),
-		policyStoreAccessEntry(system, windows.TRUSTEE_IS_GROUP, inheritance),
+		policyStoreAccessEntry(system, windows.TRUSTEE_IS_USER, inheritance),
 	}, nil)
 	if err != nil {
 		return fmt.Errorf("build policy store ACL: %w", err)
