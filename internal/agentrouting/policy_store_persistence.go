@@ -39,8 +39,8 @@ func NewPersistentPolicyStore(projectsDir string) (*PolicyStore, error) {
 	if strings.TrimSpace(projectsDir) == "" {
 		return nil, ErrPolicyStorePathRequired
 	}
-	// Preserve the configured path exactly; leading and trailing spaces are
-	// valid filesystem path characters.
+	// Keep whitespace in the configured path; spaces are valid filesystem path
+	// characters.
 	path := filepath.Join(filepath.Clean(projectsDir), ".iac-studio", policyStoreFileName)
 	if err := secureExistingPolicyStoreDir(filepath.Dir(path), true); err != nil {
 		return nil, err
@@ -145,28 +145,31 @@ func persistPolicyStore(path string, policies map[PolicyScope]Policy) error {
 	return nil
 }
 
-func persistPolicyStoreLocked(path string, scope PolicyScope, policy Policy) error {
+func persistPolicyStoreLocked(path string, scope PolicyScope, policy Policy) (map[PolicyScope]Policy, error) {
 	dir := filepath.Dir(path)
 	if err := ensurePolicyStoreDir(dir); err != nil {
-		return err
+		return nil, err
 	}
 
 	lock, err := openPolicyStoreLock(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = lock.Close() }()
 	if err := lockPolicyStoreFile(lock); err != nil {
-		return err
+		return nil, err
 	}
 	defer func() { _ = unlockPolicyStoreFile(lock) }()
 
 	policies, err := loadPolicyStore(path)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	policies[scope] = clonePolicy(policy)
-	return persistPolicyStore(path, policies)
+	if err := persistPolicyStore(path, policies); err != nil {
+		return nil, err
+	}
+	return policies, nil
 }
 
 func ensurePolicyStoreDir(dir string) error {

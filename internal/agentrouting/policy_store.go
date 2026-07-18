@@ -64,14 +64,11 @@ func (s *PolicyStore) Save(scope PolicyScope, policy Policy) error {
 	defer s.persistMu.Unlock()
 	var next map[PolicyScope]Policy
 	if s.path != "" {
-		if err := persistPolicyStoreLocked(s.path, scope, snapshot); err != nil {
+		persisted, err := persistPolicyStoreLocked(s.path, scope, snapshot)
+		if err != nil {
 			return fmt.Errorf("persist tool route policies: %w", err)
 		}
-		loaded, err := loadPolicyStore(s.path)
-		if err != nil {
-			return fmt.Errorf("reload tool route policies: %w", err)
-		}
-		next = loaded
+		next = persisted
 	} else {
 		next = s.snapshotPolicies()
 		next[scope] = snapshot
