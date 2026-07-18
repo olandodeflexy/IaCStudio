@@ -58,36 +58,28 @@ func (s *PolicyStore) Save(scope PolicyScope, policy Policy) error {
 		}
 	}
 
-	// Serialize writers while allowing readers to keep using the last durable
-	// snapshot during filesystem I/O.
+	if s.path == "" {
+		s.mu.Lock()
+		if s.policies == nil {
+			s.policies = make(map[PolicyScope]Policy)
+		}
+		s.policies[scope] = snapshot
+		s.mu.Unlock()
+		return nil
+	}
+
+	// Serialize persistent writers while allowing readers to keep using the
+	// last durable snapshot during filesystem I/O.
 	s.persistMu.Lock()
 	defer s.persistMu.Unlock()
-	var next map[PolicyScope]Policy
-	if s.path != "" {
-		persisted, err := persistPolicyStoreLocked(s.path, scope, snapshot)
-		if err != nil {
-			return fmt.Errorf("persist tool route policies: %w", err)
-		}
-		next = persisted
-	} else {
-		next = s.snapshotPolicies()
-		next[scope] = snapshot
+	persisted, err := persistPolicyStoreLocked(s.path, scope, snapshot)
+	if err != nil {
+		return fmt.Errorf("persist tool route policies: %w", err)
 	}
 	s.mu.Lock()
-	s.policies = next
+	s.policies = persisted
 	s.mu.Unlock()
 	return nil
-}
-
-func (s *PolicyStore) snapshotPolicies() map[PolicyScope]Policy {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	next := make(map[PolicyScope]Policy, len(s.policies)+1)
-	for storedScope, storedPolicy := range s.policies {
-		next[storedScope] = storedPolicy
-	}
-	return next
 }
 
 // Get returns a detached policy snapshot for one exact project/provider scope.
