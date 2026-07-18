@@ -1052,7 +1052,7 @@ func writeAgentProviderProfileSaveError(w http.ResponseWriter, operation string,
 type RouterOptions struct {
 	MCPAirlock               *mcpairlock.Manager
 	AgentRuns                *agentruns.Store
-	AgentToolPolicies        AgentToolPolicyReader
+	AgentToolPolicies        AgentToolPolicyStore
 	AgentToolRouter          AgentToolRouter
 	AgentProviderProfiles    *agentproviderconnections.Manager
 	AppVersion               string
