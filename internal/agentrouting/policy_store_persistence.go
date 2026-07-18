@@ -53,22 +53,25 @@ func NewPersistentPolicyStore(projectsDir string) (*PolicyStore, error) {
 }
 
 func loadPolicyStore(path string) (map[PolicyScope]Policy, error) {
-	info, err := os.Lstat(path)
+	file, err := openPolicyStoreDataFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return make(map[PolicyScope]Policy), nil
 	}
+	if err != nil {
+		return nil, fmt.Errorf("open tool route policy store: %w", err)
+	}
+	defer func() { _ = file.Close() }()
+
+	info, err := file.Stat()
 	if err != nil {
 		return nil, fmt.Errorf("inspect tool route policy store: %w", err)
 	}
 	if !info.Mode().IsRegular() || info.Size() > maxPolicyStoreBytes {
 		return nil, ErrInvalidPolicyStore
 	}
-
-	file, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("open tool route policy store: %w", err)
+	if err := securePolicyStoreHandle(file); err != nil {
+		return nil, fmt.Errorf("secure tool route policy store: %w", err)
 	}
-	defer func() { _ = file.Close() }()
 
 	var snapshot persistedPolicyStore
 	decoder := json.NewDecoder(io.LimitReader(file, maxPolicyStoreBytes+1))

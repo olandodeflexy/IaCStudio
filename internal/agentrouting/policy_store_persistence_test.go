@@ -75,6 +75,29 @@ func TestPersistentPolicyStoreRehardensExistingLockFile(t *testing.T) {
 	assertFileMode(t, lockPath, 0o600)
 }
 
+func TestPersistentPolicyStoreRehardensExistingFile(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows policy store security is ACL-based")
+	}
+	root := t.TempDir()
+	dir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+	path := filepath.Join(dir, policyStoreFileName)
+	if err := os.WriteFile(path, []byte(`{"version":1,"policies":[]}`), 0o600); err != nil {
+		t.Fatalf("WriteFile(): %v", err)
+	}
+	if err := os.Chmod(path, 0o644); err != nil {
+		t.Fatalf("Chmod(): %v", err)
+	}
+
+	if _, err := NewPersistentPolicyStore(root); err != nil {
+		t.Fatalf("NewPersistentPolicyStore(): %v", err)
+	}
+	assertFileMode(t, path, 0o600)
+}
+
 func TestPersistentPolicyStoreRejectsSymlinkLockFile(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("creating symlinks on Windows may require elevated privileges")
