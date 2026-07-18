@@ -2,6 +2,8 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -20,7 +22,7 @@ func (e *countingToolEvaluator) EvaluateTool(_, _, _ string) (mcpairlock.ToolInv
 }
 
 func TestNewAgentRoutingServicesRequiresToolEvaluator(t *testing.T) {
-	_, err := newAgentRoutingServices(nil)
+	_, err := newAgentRoutingServices(t.TempDir(), nil)
 	if !errors.Is(err, agentrouting.ErrToolEvaluatorRequired) {
 		t.Fatalf("newAgentRoutingServices(nil) error = %v, want %v", err, agentrouting.ErrToolEvaluatorRequired)
 	}
@@ -28,7 +30,7 @@ func TestNewAgentRoutingServicesRequiresToolEvaluator(t *testing.T) {
 
 func TestNewAgentRoutingServicesFailsClosedAndAuditsMissingPolicy(t *testing.T) {
 	evaluator := &countingToolEvaluator{}
-	services, err := newAgentRoutingServices(evaluator)
+	services, err := newAgentRoutingServices(t.TempDir(), evaluator)
 	if err != nil {
 		t.Fatalf("newAgentRoutingServices(): %v", err)
 	}
@@ -66,5 +68,21 @@ func TestNewAgentRoutingServicesFailsClosedAndAuditsMissingPolicy(t *testing.T) 
 	}
 	if evaluator.calls != 0 {
 		t.Fatalf("Airlock evaluation calls = %d, want none without a scoped policy", evaluator.calls)
+	}
+}
+
+func TestNewAgentRoutingServicesRejectsCorruptPolicyStore(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, ".iac-studio")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatalf("MkdirAll(): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "agent-routing-policies.json"), []byte("{"), 0o600); err != nil {
+		t.Fatalf("WriteFile(): %v", err)
+	}
+
+	_, err := newAgentRoutingServices(root, &countingToolEvaluator{})
+	if !errors.Is(err, agentrouting.ErrInvalidPolicyStore) {
+		t.Fatalf("newAgentRoutingServices() error = %v, want ErrInvalidPolicyStore", err)
 	}
 }

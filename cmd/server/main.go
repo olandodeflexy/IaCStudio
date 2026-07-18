@@ -107,7 +107,7 @@ func runServer() error {
 			log.Printf("mcp airlock cleanup: %v", err)
 		}
 	}()
-	agentRouting, err := newAgentRoutingServices(mcpAirlock)
+	agentRouting, err := newAgentRoutingServices(*projectsDir, mcpAirlock)
 	if err != nil {
 		return fmt.Errorf("initialize Agent Hub tool routing: %w", err)
 	}

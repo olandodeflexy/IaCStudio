@@ -13,9 +13,12 @@ type agentRoutingServices struct {
 	router   *agentrouting.Router
 }
 
-func newAgentRoutingServices(evaluator agentrouting.ToolEvaluator) (*agentRoutingServices, error) {
+func newAgentRoutingServices(projectsDir string, evaluator agentrouting.ToolEvaluator) (*agentRoutingServices, error) {
 	runs := agentruns.NewStore()
-	policies := agentrouting.NewPolicyStore()
+	policies, err := agentrouting.NewPersistentPolicyStore(projectsDir)
+	if err != nil {
+		return nil, fmt.Errorf("load tool route policies: %w", err)
+	}
 	authorizer, err := agentrouting.NewStoreAuthorizer(policies, evaluator)
 	if err != nil {
 		return nil, fmt.Errorf("create tool route authorizer: %w", err)
