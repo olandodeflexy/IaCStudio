@@ -90,6 +90,18 @@ const AGENT_TOOL_POLICY_RISKS = new Set([
   'destructive',
   'unknown',
 ]);
+const AGENT_TOOL_POLICY_KEYS = new Set(['rules']);
+const AGENT_TOOL_POLICY_RULE_KEYS = new Set([
+  'project',
+  'provider_id',
+  'connection_id',
+  'server_id',
+  'tool_name',
+  'modes',
+  'risk',
+  'effect',
+  'approval_required',
+]);
 
 const AGENT_HUB_STORAGE_KEYS = {
   activeTab: 'iac-studio.agentHub.activeTab',
@@ -463,14 +475,17 @@ function matchesToolPolicy(
   project: string,
   providerId: string,
 ): value is AgentToolPolicy {
-  if (!value || typeof value !== 'object') return false;
-  const rules = (value as { rules?: unknown }).rules;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const policy = value as Record<string, unknown>;
+  if (!hasOnlyAllowedKeys(policy, AGENT_TOOL_POLICY_KEYS)) return false;
+  const rules = policy.rules;
   return Array.isArray(rules) && rules.every(rule => matchesToolPolicyRule(rule, project, providerId));
 }
 
 function matchesToolPolicyRule(value: unknown, project: string, providerId: string) {
-  if (!value || typeof value !== 'object') return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const rule = value as Record<string, unknown>;
+  if (!hasOnlyAllowedKeys(rule, AGENT_TOOL_POLICY_RULE_KEYS)) return false;
   const modes = rule.modes;
   const risk = rule.risk;
   const effect = rule.effect;
@@ -499,6 +514,10 @@ function matchesToolPolicyRule(value: unknown, project: string, providerId: stri
 
 function validPolicyField(value: unknown) {
   return typeof value === 'string' && value.length > 0 && value.trim() === value;
+}
+
+function hasOnlyAllowedKeys(value: Record<string, unknown>, allowed: Set<string>) {
+  return Object.keys(value).every(key => allowed.has(key));
 }
 
 function toolPolicyScopeKey(project: string, providerId: string) {
@@ -566,7 +585,7 @@ function ToolPolicySummary({
       return;
     }
     if (!matchesToolPolicy(parsed, view.project, view.providerId)) {
-      setSaveError('Policy rules must match this exact project and provider scope.');
+      setSaveError('Policy contains invalid fields or rules for this project and provider.');
       return;
     }
 

@@ -466,7 +466,7 @@ describe('ChatPanel', () => {
     expect(within(permissions).queryByRole('textbox', { name: 'Codex CLI policy JSON' })).not.toBeInTheDocument();
   });
 
-  it('rejects malformed and cross-scope policy edits before sending them', async () => {
+  it('rejects malformed, unknown-field, and cross-scope policy edits before sending them', async () => {
     getAgentToolPolicyMock.mockResolvedValueOnce({
       scope: { project: 'demo', provider_id: 'codex' },
       policy: { rules: [] },
@@ -487,27 +487,29 @@ describe('ChatPanel', () => {
     expect(within(permissions).getByRole('alert')).toHaveTextContent('Policy must be valid JSON.');
     expect(saveAgentToolPolicyMock).not.toHaveBeenCalled();
 
-    fireEvent.change(editor, {
-      target: {
-        value: JSON.stringify({
-          rules: [{
-            project: 'other',
-            provider_id: 'codex',
-            connection_id: 'aws-prod',
-            server_id: 'aws-official',
-            tool_name: 'list_resources',
-            modes: ['read_only'],
-            risk: 'read_only',
-            effect: 'allow',
-          }],
-        }),
-      },
-    });
-    fireEvent.click(within(permissions).getByRole('button', { name: 'Save policy' }));
+    const validRule = {
+      project: 'demo',
+      provider_id: 'codex',
+      connection_id: 'aws-prod',
+      server_id: 'aws-official',
+      tool_name: 'list_resources',
+      modes: ['read_only'],
+      risk: 'read_only',
+      effect: 'allow',
+    };
+    const invalidPolicies = [
+      { rules: [{ ...validRule, project: 'other' }] },
+      { rules: [], extra: true },
+      { rules: [{ ...validRule, extra: true }] },
+    ];
+    for (const policy of invalidPolicies) {
+      fireEvent.change(editor, { target: { value: JSON.stringify(policy) } });
+      fireEvent.click(within(permissions).getByRole('button', { name: 'Save policy' }));
 
-    expect(within(permissions).getByRole('alert')).toHaveTextContent(
-      'Policy rules must match this exact project and provider scope.',
-    );
+      expect(within(permissions).getByRole('alert')).toHaveTextContent(
+        'Policy contains invalid fields or rules for this project and provider.',
+      );
+    }
     expect(saveAgentToolPolicyMock).not.toHaveBeenCalled();
   });
 
