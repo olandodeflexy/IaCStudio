@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { CSSProperties, KeyboardEvent, ReactNode, RefObject } from 'react';
+import { Pencil, Save, X } from 'lucide-react';
 
-import { api, type AgentProviderConnectionDefinition, type AgentProviderConnectionProfile, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type AgentToolPolicyResponse, type LocalAgentProviderStatus } from '../../api';
+import { api, type AgentProviderConnectionDefinition, type AgentProviderConnectionProfile, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type AgentToolPolicy, type AgentToolPolicyResponse, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
 
 export interface ChatMessage {
@@ -51,6 +52,11 @@ type AgentToolPolicyView =
   | { status: 'idle' }
   | { status: 'loading' | 'missing' | 'error'; project: string; providerId: string }
   | { status: 'ready'; project: string; providerId: string; response: AgentToolPolicyResponse };
+type SaveAgentToolPolicy = (
+  _project: string,
+  _providerId: string,
+  _policy: AgentToolPolicy,
+) => Promise<AgentToolPolicyResponse>;
 
 const PROVIDER_TABS: ProviderTab[] = ['codex', 'claude', 'gemini', 'copilot', 'local', 'mcp'];
 
@@ -83,6 +89,18 @@ const AGENT_TOOL_POLICY_RISKS = new Set([
   'secret_sensitive',
   'destructive',
   'unknown',
+]);
+const AGENT_TOOL_POLICY_KEYS = new Set(['rules']);
+const AGENT_TOOL_POLICY_RULE_KEYS = new Set([
+  'project',
+  'provider_id',
+  'connection_id',
+  'server_id',
+  'tool_name',
+  'modes',
+  'risk',
+  'effect',
+  'approval_required',
 ]);
 
 const AGENT_HUB_STORAGE_KEYS = {
@@ -269,6 +287,12 @@ const hubStyles: Record<string, CSSProperties> = {
   toolPolicyRule: { borderTop: '1px solid var(--border-soft)', paddingTop: 7, marginTop: 7, minWidth: 0 },
   toolPolicyRuleName: { color: 'var(--text-main)', fontSize: 11, fontWeight: 700, overflowWrap: 'anywhere' },
   toolPolicyRuleMeta: { color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', fontSize: 10, lineHeight: 1.4, marginTop: 3, overflowWrap: 'anywhere' },
+  toolPolicyButton: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-soft)', borderRadius: 6, background: 'var(--bg-elev-3)', color: 'var(--text-main)', cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 11, fontFamily: 'DM Sans', fontWeight: 700, padding: '5px 8px' },
+  toolPolicyEditor: { borderTop: '1px solid var(--border-soft)', marginTop: 8, paddingTop: 8 },
+  toolPolicyScope: { color: 'var(--text-muted)', fontFamily: 'JetBrains Mono', fontSize: 10, marginBottom: 6, overflowWrap: 'anywhere' },
+  toolPolicyTextarea: { width: '100%', minHeight: 168, resize: 'vertical', borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-main)', borderRadius: 6, background: 'var(--bg-elev-1)', color: 'var(--text-main)', boxSizing: 'border-box', fontFamily: 'JetBrains Mono', fontSize: 10, lineHeight: 1.5, padding: 8 },
+  toolPolicyActions: { display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 6, marginTop: 7 },
+  toolPolicyError: { color: 'var(--accent-danger)', fontSize: 11, lineHeight: 1.4, marginTop: 6 },
   connectionCatalog: { gridColumn: '1 / -1', borderTop: '1px solid var(--border-soft)', paddingTop: 10, marginTop: 2, display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(210px, 1fr))', gap: 8 },
   connectionCatalogIntro: { gridColumn: '1 / -1', color: 'var(--text-muted)', fontSize: 12, lineHeight: 1.45 },
   connectionCard: { borderWidth: 1, borderStyle: 'solid', borderColor: 'var(--border-main)', borderRadius: 8, background: 'rgba(23, 29, 27, 0.68)', padding: 10, minWidth: 0 },
@@ -442,14 +466,26 @@ function matchesToolPolicyScope(
   return (
     response?.scope?.project === project
     && response.scope.provider_id === providerId
-    && Array.isArray(response.policy?.rules)
-    && response.policy.rules.every(rule => matchesToolPolicyRule(rule, project, providerId))
+    && matchesToolPolicy(response.policy, project, providerId)
   );
 }
 
+function matchesToolPolicy(
+  value: unknown,
+  project: string,
+  providerId: string,
+): value is AgentToolPolicy {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const policy = value as Record<string, unknown>;
+  if (!hasOnlyAllowedKeys(policy, AGENT_TOOL_POLICY_KEYS)) return false;
+  const rules = policy.rules;
+  return Array.isArray(rules) && rules.every(rule => matchesToolPolicyRule(rule, project, providerId));
+}
+
 function matchesToolPolicyRule(value: unknown, project: string, providerId: string) {
-  if (!value || typeof value !== 'object') return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const rule = value as Record<string, unknown>;
+  if (!hasOnlyAllowedKeys(rule, AGENT_TOOL_POLICY_RULE_KEYS)) return false;
   const modes = rule.modes;
   const risk = rule.risk;
   const effect = rule.effect;
@@ -480,6 +516,14 @@ function validPolicyField(value: unknown) {
   return typeof value === 'string' && value.length > 0 && value.trim() === value;
 }
 
+function hasOnlyAllowedKeys(value: Record<string, unknown>, allowed: Set<string>) {
+  return Object.keys(value).every(key => allowed.has(key));
+}
+
+function toolPolicyScopeKey(project: string, providerId: string) {
+  return `${project}\u0000${providerId}`;
+}
+
 function toolPolicyViewForScope(
   view: AgentToolPolicyView,
   project: string | undefined,
@@ -495,14 +539,29 @@ function toolPolicyViewForScope(
 function ToolPolicySummary({
   providerName,
   view,
+  onSave,
 }: {
   providerName: string;
   view: AgentToolPolicyView;
+  onSave: SaveAgentToolPolicy;
 }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
   const rules = view.status === 'ready' ? view.response.policy.rules : [];
   const allowed = rules.filter(rule => rule.effect === 'allow').length;
   const denied = rules.filter(rule => rule.effect === 'deny').length;
   const approvals = rules.filter(rule => rule.approval_required).length;
+  const editable = view.status === 'ready' || view.status === 'missing';
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   let message = '';
   if (view.status === 'idle') message = 'Project scope required. MCP tool access is blocked.';
@@ -510,6 +569,47 @@ function ToolPolicySummary({
   if (view.status === 'missing') message = 'No scoped policy. MCP tool access is blocked.';
   if (view.status === 'error') message = 'Policy unavailable. MCP tool access remains blocked.';
   if (view.status === 'ready' && rules.length === 0) message = 'No routes allowed. MCP tool access is blocked.';
+
+  const beginEdit = () => {
+    if (view.status !== 'ready' && view.status !== 'missing') return;
+    setDraft(JSON.stringify(view.status === 'ready' ? view.response.policy : { rules: [] }, null, 2));
+    setSaveError(null);
+    setEditing(true);
+  };
+
+  const cancelEdit = () => {
+    if (saving) return;
+    setEditing(false);
+    setSaveError(null);
+  };
+
+  const savePolicy = async () => {
+    if ((view.status !== 'ready' && view.status !== 'missing') || saving) return;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(draft);
+    } catch {
+      setSaveError('Policy must be valid JSON.');
+      return;
+    }
+    if (!matchesToolPolicy(parsed, view.project, view.providerId)) {
+      setSaveError('Policy contains invalid fields or rules for this project and provider.');
+      return;
+    }
+
+    setSaving(true);
+    setSaveError(null);
+    try {
+      await onSave(view.project, view.providerId, parsed);
+      if (!mountedRef.current) return;
+      setEditing(false);
+    } catch {
+      if (!mountedRef.current) return;
+      setSaveError('Policy save could not be confirmed. Reload before retrying.');
+    } finally {
+      if (mountedRef.current) setSaving(false);
+    }
+  };
 
   return (
     <section style={hubStyles.toolPolicy} aria-label={`${providerName} tool permissions`}>
@@ -521,6 +621,17 @@ function ToolPolicySummary({
             <span style={hubStyles.badge}>{denied} denied</span>
             <span style={hubStyles.badge}>{approvals} approvals</span>
           </>
+        )}
+        {editable && !editing && (
+          <button
+            type="button"
+            style={hubStyles.toolPolicyButton}
+            onClick={beginEdit}
+            aria-label={`Edit ${providerName} tool policy`}
+          >
+            <Pencil size={12} aria-hidden="true" />
+            Edit
+          </button>
         )}
       </div>
       {message && <div role="status" style={hubStyles.toolPolicyMessage}>{message}</div>}
@@ -541,6 +652,42 @@ function ToolPolicySummary({
           </div>
         </div>
       ))}
+      {editing && view.status !== 'idle' && (
+        <div style={hubStyles.toolPolicyEditor}>
+          <div style={hubStyles.toolPolicyScope}>
+            {view.project} / {view.providerId}
+          </div>
+          <textarea
+            aria-label={`${providerName} policy JSON`}
+            value={draft}
+            onChange={event => setDraft(event.target.value)}
+            disabled={saving}
+            spellCheck={false}
+            style={hubStyles.toolPolicyTextarea}
+          />
+          {saveError && <div role="alert" style={hubStyles.toolPolicyError}>{saveError}</div>}
+          <div style={hubStyles.toolPolicyActions}>
+            <button
+              type="button"
+              style={{ ...hubStyles.toolPolicyButton, ...(saving ? { cursor: 'not-allowed', opacity: 0.6 } : {}) }}
+              onClick={cancelEdit}
+              disabled={saving}
+            >
+              <X size={12} aria-hidden="true" />
+              Cancel
+            </button>
+            <button
+              type="button"
+              style={{ ...hubStyles.toolPolicyButton, ...(saving ? { cursor: 'not-allowed', opacity: 0.6 } : {}) }}
+              onClick={savePolicy}
+              disabled={saving}
+            >
+              <Save size={12} aria-hidden="true" />
+              {saving ? 'Saving...' : 'Save policy'}
+            </button>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -551,12 +698,14 @@ function ProviderDetails({
   displayNote,
   localStatus,
   toolPolicyView,
+  onSaveToolPolicy,
 }: {
   provider: ProviderDefinition;
   displayState: ProviderState;
   displayNote: string;
   localStatus?: LocalAgentProviderStatus;
   toolPolicyView: AgentToolPolicyView;
+  onSaveToolPolicy: SaveAgentToolPolicy;
 }) {
   const details = localStatusDetails(provider.localProviderId, localStatus);
   return (
@@ -596,7 +745,14 @@ function ProviderDetails({
           ))}
         </div>
       )}
-      <ToolPolicySummary providerName={provider.name} view={toolPolicyView} />
+      <ToolPolicySummary
+        key={toolPolicyView.status === 'idle'
+          ? 'idle'
+          : toolPolicyScopeKey(toolPolicyView.project, toolPolicyView.providerId)}
+        providerName={provider.name}
+        view={toolPolicyView}
+        onSave={onSaveToolPolicy}
+      />
       <div role="group" style={hubStyles.providerActions} aria-label={`${provider.name} actions`}>
         <button
           type="button"
@@ -743,6 +899,7 @@ function ProviderGroup({
   toolPolicyView,
   selectedProviderName,
   onSelectProvider,
+  onSaveToolPolicy,
 }: {
   tab: ProviderTab;
   active: boolean;
@@ -752,6 +909,7 @@ function ProviderGroup({
   toolPolicyView: AgentToolPolicyView;
   selectedProviderName?: string;
   onSelectProvider: (tab: ProviderTab, providerName: string) => void;
+  onSaveToolPolicy: SaveAgentToolPolicy;
 }) {
   const group = PROVIDER_GROUPS[tab];
   const visibleConnectionProviders = connectionProvidersForTab(tab, connectionProviders);
@@ -819,6 +977,7 @@ function ProviderGroup({
         displayNote={selectedDisplay.note}
         localStatus={selectedLocalStatus}
         toolPolicyView={toolPolicyView}
+        onSaveToolPolicy={onSaveToolPolicy}
       />
       <ConnectionCatalog title={group.title} providers={visibleConnectionProviders} />
       <SavedConnectionProfiles title={group.title} profiles={visibleConnectionProfiles} />
@@ -1358,6 +1517,7 @@ export function ChatPanel({
   const [detailLoadingRunId, setDetailLoadingRunId] = useState<string | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const latestProjectNameRef = useRef(projectName);
+  const latestToolPolicyScopeRef = useRef<string | null>(null);
   const agentRunsListSeqRef = useRef(0);
   const agentRunsRefreshInFlightRef = useRef(false);
   const detailRequestKeyRef = useRef<string | null>(null);
@@ -1422,6 +1582,9 @@ export function ChatPanel({
     () => selectedRunProviderId(runProviderTab, selectedProviders[runProviderTab]),
     [runProviderTab, selectedProviders],
   );
+  latestToolPolicyScopeRef.current = projectName && isProviderTab(activeTab)
+    ? toolPolicyScopeKey(projectName, runProviderId)
+    : null;
   const hasActiveAgentRuns = agentRuns.some(run => !isTerminalAgentRun(run.status));
 
   useEffect(() => {
@@ -1456,6 +1619,17 @@ export function ChatPanel({
       cancelled = true;
     };
   }, [activeTab, projectName, runProviderId]);
+
+  const saveToolPolicy: SaveAgentToolPolicy = async (project, providerId, policy) => {
+    const response = await api.saveAgentToolPolicy(project, providerId, policy);
+    if (!matchesToolPolicyScope(response, project, providerId)) {
+      throw new Error('agent tool policy response scope mismatch');
+    }
+    if (latestToolPolicyScopeRef.current === toolPolicyScopeKey(project, providerId)) {
+      setToolPolicyView({ status: 'ready', project, providerId, response });
+    }
+    return response;
+  };
 
   const panelStyle = (tab: AgentHubTab) => (
     activeTab === tab ? hubStyles.tabPanel : hubStyles.hiddenTabPanel
@@ -1892,6 +2066,7 @@ export function ChatPanel({
                 : IDLE_AGENT_TOOL_POLICY_VIEW}
               selectedProviderName={selectedProviders[tab]}
               onSelectProvider={selectProvider}
+              onSaveToolPolicy={saveToolPolicy}
             />
           ))}
 

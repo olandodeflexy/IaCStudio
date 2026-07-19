@@ -836,6 +836,22 @@ export const api = {
     return (await check(res)).json();
   },
 
+  async saveAgentToolPolicy(
+    projectName: string,
+    providerId: string,
+    policy: AgentToolPolicy,
+  ): Promise<AgentToolPolicyResponse> {
+    const res = await fetch(
+      `${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-routing/policies/${encodeURIComponent(providerId)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(policy),
+      },
+    );
+    return (await check(res)).json();
+  },
+
   async listCloudConnections(): Promise<CloudConnection[]> {
     const res = await fetch(`${BASE}/api/cloud/connections`);
     return (await check(res)).json();
