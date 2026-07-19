@@ -2,11 +2,36 @@ package agentrouting
 
 import (
 	"errors"
+	"reflect"
 	"testing"
 
 	"github.com/iac-studio/iac-studio/internal/agentruns"
 	"github.com/iac-studio/iac-studio/internal/mcpairlock"
 )
+
+func TestRouterPreviewsWithoutRecording(t *testing.T) {
+	policy, request, airlock := readOnlyEvaluation()
+	router, evaluator, store, run := routerFixture(t, policy, request, airlock)
+	before, ok := store.Get(run.ID)
+	if !ok {
+		t.Fatalf("Get(%q) returned no run", run.ID)
+	}
+
+	decision, err := router.Preview(request)
+	if err != nil {
+		t.Fatalf("Preview(): %v", err)
+	}
+	if decision.Status != DecisionAllowed || !decision.Allowed {
+		t.Fatalf("Preview() = %+v, want allowed decision", decision)
+	}
+	after, ok := store.Get(run.ID)
+	if !ok || !reflect.DeepEqual(after, before) {
+		t.Fatalf("run mutated by Preview(): before=%+v after=%+v", before, after)
+	}
+	if evaluator.calls != 1 {
+		t.Fatalf("EvaluateTool calls = %d, want one read-only evaluation", evaluator.calls)
+	}
+}
 
 func routerFixture(t *testing.T, policy Policy, request Request, airlock mcpairlock.ToolDecision) (*Router, *fakeToolEvaluator, *agentruns.Store, agentruns.Run) {
 	t.Helper()
@@ -144,6 +169,9 @@ func TestRouterRejectsMissingDependencies(t *testing.T) {
 		t.Fatalf("NewRouter(nil recorder) error = %v, want ErrRunRecorderRequired", err)
 	}
 	var nilRouter *Router
+	if _, err := nilRouter.Preview(request); !errors.Is(err, ErrAuthorizerRequired) {
+		t.Fatalf("nil Preview() error = %v, want ErrAuthorizerRequired", err)
+	}
 	if _, err := nilRouter.Route("run_000001", request); !errors.Is(err, ErrAuthorizerRequired) {
 		t.Fatalf("nil Route() error = %v, want ErrAuthorizerRequired", err)
 	}
