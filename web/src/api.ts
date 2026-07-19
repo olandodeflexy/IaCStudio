@@ -409,6 +409,43 @@ export interface AgentRunsResponse {
   runs?: AgentRunSummary[] | null;
 }
 
+export interface AgentToolRoutePreviewInput {
+  connection_id: string;
+  server_id: string;
+  tool_name: string;
+  risk: MCPAirlockToolRisk;
+}
+
+export type AgentToolRouteDecisionStatus = 'denied' | 'approval_required' | 'allowed';
+
+export type AgentToolRouteDecisionReason =
+  | 'invalid_request'
+  | 'invalid_policy'
+  | 'policy_unavailable'
+  | 'mode_risk_mismatch'
+  | 'no_matching_rule'
+  | 'policy_denied'
+  | 'airlock_unavailable'
+  | 'airlock_server_mismatch'
+  | 'airlock_tool_mismatch'
+  | 'airlock_risk_mismatch'
+  | 'invalid_airlock_decision'
+  | 'airlock_blocked'
+  | 'approval_required'
+  | 'allowed';
+
+export interface AgentToolRouteDecision {
+  status: AgentToolRouteDecisionStatus;
+  reason: AgentToolRouteDecisionReason;
+  allowed: boolean;
+  approval_required: boolean;
+  untrusted_output: boolean;
+}
+
+export interface AgentToolRoutePreviewResponse {
+  decision: AgentToolRouteDecision;
+}
+
 export type AgentToolPolicyEffect = 'allow' | 'deny';
 
 export interface AgentToolPolicyScope {
@@ -824,6 +861,22 @@ export const api = {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ decision }),
+      },
+    );
+    return (await check(res)).json();
+  },
+
+  async previewAgentToolRoute(
+    projectName: string,
+    id: string,
+    input: AgentToolRoutePreviewInput,
+  ): Promise<AgentToolRoutePreviewResponse> {
+    const res = await fetch(
+      `${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}/tool-routes/preview`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
       },
     );
     return (await check(res)).json();
