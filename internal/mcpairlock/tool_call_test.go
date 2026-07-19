@@ -42,6 +42,7 @@ func TestParseToolCallArgumentsRejectsUnsafeShapes(t *testing.T) {
 		input []byte
 	}{
 		{name: "empty", input: nil},
+		{name: "whitespace", input: []byte(" \n\t ")},
 		{name: "null", input: []byte(`null`)},
 		{name: "array", input: []byte(`[]`)},
 		{name: "scalar", input: []byte(`"value"`)},
@@ -56,6 +57,13 @@ func TestParseToolCallArgumentsRejectsUnsafeShapes(t *testing.T) {
 				t.Fatalf("error = %v, want ErrInvalidToolCallArguments", err)
 			}
 		})
+	}
+}
+
+func TestParseToolCallArgumentsExplainsWhitespaceOnlyInput(t *testing.T) {
+	_, err := ParseToolCallArguments([]byte(" \n\t "))
+	if !errors.Is(err, ErrInvalidToolCallArguments) || !strings.Contains(err.Error(), "JSON object is required") {
+		t.Fatalf("error = %v, want required JSON object error", err)
 	}
 }
 
@@ -125,6 +133,27 @@ func TestNewToolCallResultTruncatesAtUTF8Boundary(t *testing.T) {
 	}
 	if !utf8.ValidString(result.Output) || len(result.Output) != maxToolCallOutputBytes-1 {
 		t.Fatalf("output is not safely truncated: bytes=%d valid=%v", len(result.Output), utf8.ValidString(result.Output))
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("result Validate: %v", err)
+	}
+}
+
+func TestNewToolCallResultMarksOversizedWhitespaceTruncated(t *testing.T) {
+	result := NewToolCallResult([]byte(strings.Repeat(" ", maxToolCallOutputBytes+1)), false)
+	if !result.Truncated || result.Output != "" {
+		t.Fatalf("result = output:%q truncated:%v, want empty truncated output", result.Output, result.Truncated)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("result Validate: %v", err)
+	}
+}
+
+func TestNewToolCallResultRedactsCredentialAcrossOutputBoundary(t *testing.T) {
+	output := strings.Repeat("x", maxToolCallOutputBytes-8) + "AKIA123456789012 tail"
+	result := NewToolCallResult([]byte(output), false)
+	if !result.Redacted || !result.Truncated || strings.Contains(result.Output, "AKIA") {
+		t.Fatalf("result flags = redacted:%v truncated:%v; output tail = %q", result.Redacted, result.Truncated, result.Output[len(result.Output)-32:])
 	}
 	if err := result.Validate(); err != nil {
 		t.Fatalf("result Validate: %v", err)

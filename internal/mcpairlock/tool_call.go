@@ -13,9 +13,10 @@ import (
 )
 
 const (
-	maxToolCallArgumentsBytes  = 64 << 10
-	maxToolCallOutputBytes     = 256 << 10
-	maxToolCallIdentifierBytes = 256
+	maxToolCallArgumentsBytes       = 64 << 10
+	maxToolCallOutputBytes          = 256 << 10
+	toolCallRedactionLookaheadBytes = 512
+	maxToolCallIdentifierBytes      = 256
 )
 
 var (
@@ -32,11 +33,11 @@ type ToolCallArguments struct {
 
 // ParseToolCallArguments validates and snapshots one bounded JSON object.
 func ParseToolCallArguments(input []byte) (ToolCallArguments, error) {
-	if len(input) == 0 {
-		return ToolCallArguments{}, fmt.Errorf("%w: JSON object is required", ErrInvalidToolCallArguments)
-	}
 	if len(input) > maxToolCallArgumentsBytes {
 		return ToolCallArguments{}, fmt.Errorf("%w: payload exceeds %d bytes", ErrInvalidToolCallArguments, maxToolCallArgumentsBytes)
+	}
+	if len(bytes.TrimSpace(input)) == 0 {
+		return ToolCallArguments{}, fmt.Errorf("%w: JSON object is required", ErrInvalidToolCallArguments)
 	}
 
 	decoder := json.NewDecoder(bytes.NewReader(input))
@@ -163,23 +164,31 @@ type ToolCallResult struct {
 	Truncated       bool   `json:"truncated"`
 }
 
-// NewToolCallResult redacts known credential patterns before applying the
-// output bound so truncation cannot expose the beginning of a secret value.
+// NewToolCallResult scans only a bounded prefix plus a small lookahead. Known
+// credential patterns are redacted before the final output bound is applied.
 func NewToolCallResult(output []byte, isError bool) ToolCallResult {
-	sanitized := strings.TrimSpace(strings.ToValidUTF8(string(output), "\uFFFD"))
+	truncated := len(output) > maxToolCallOutputBytes
+	processingLimit := maxToolCallOutputBytes + toolCallRedactionLookaheadBytes
+	if len(output) > processingLimit {
+		output = output[:processingLimit]
+	}
+
+	sanitized := strings.ToValidUTF8(string(output), "\uFFFD")
 	redacted := false
 	for _, pattern := range secretPatterns {
 		replacement := pattern.ReplaceAllString(sanitized, "[REDACTED]")
 		redacted = redacted || replacement != sanitized
 		sanitized = replacement
 	}
-	sanitized, truncated := truncateUTF8(sanitized, maxToolCallOutputBytes)
+	var encodingTruncated bool
+	sanitized, encodingTruncated = truncateUTF8(sanitized, maxToolCallOutputBytes)
+	sanitized = strings.TrimSpace(sanitized)
 	return ToolCallResult{
 		Output:          sanitized,
 		IsError:         isError,
 		UntrustedOutput: true,
 		Redacted:        redacted,
-		Truncated:       truncated,
+		Truncated:       truncated || encodingTruncated,
 	}
 }
 
