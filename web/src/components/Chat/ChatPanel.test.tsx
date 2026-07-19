@@ -15,6 +15,7 @@ const createAgentRunMock = vi.hoisted(() => vi.fn());
 const getAgentRunMock = vi.hoisted(() => vi.fn());
 const cancelAgentRunMock = vi.hoisted(() => vi.fn());
 const decideAgentRunApprovalMock = vi.hoisted(() => vi.fn());
+const previewAgentToolRouteMock = vi.hoisted(() => vi.fn());
 
 vi.mock('../../api', () => ({
   api: {
@@ -28,6 +29,7 @@ vi.mock('../../api', () => ({
     getAgentRun: getAgentRunMock,
     cancelAgentRun: cancelAgentRunMock,
     decideAgentRunApproval: decideAgentRunApprovalMock,
+    previewAgentToolRoute: previewAgentToolRouteMock,
   },
 }));
 
@@ -105,6 +107,16 @@ describe('ChatPanel', () => {
     cancelAgentRunMock.mockResolvedValue({});
     decideAgentRunApprovalMock.mockReset();
     decideAgentRunApprovalMock.mockResolvedValue({});
+    previewAgentToolRouteMock.mockReset();
+    previewAgentToolRouteMock.mockResolvedValue({
+      decision: {
+        status: 'denied',
+        reason: 'airlock_blocked',
+        allowed: false,
+        approval_required: false,
+        untrusted_output: true,
+      },
+    });
     window.localStorage.clear();
   });
 
@@ -1472,6 +1484,103 @@ describe('ChatPanel', () => {
 
     fireEvent.click(within(details).getByRole('button', { name: 'Close details for run_000001' }));
     expect(within(runsPanel).queryByRole('region', { name: 'run_000001 details' })).not.toBeInTheDocument();
+  });
+
+  it('scopes the tool route preview to the selected active run', async () => {
+    listAgentRunsMock.mockResolvedValueOnce([
+      agentRunSummaryFixture({ id: 'run_000001', status: 'running', prompt_preview: 'Run one' }),
+      agentRunSummaryFixture({ id: 'run_000002', status: 'running', prompt_preview: 'Run two' }),
+    ]);
+    getAgentRunMock.mockImplementation((_project: string, id: string) => Promise.resolve(
+      agentRunFixture({ id, status: 'running', prompt_preview: id === 'run_000001' ? 'Run one' : 'Run two' }),
+    ));
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+
+    let preview = await within(runsPanel).findByRole('region', { name: 'Tool route preview' });
+    expect(within(preview).getByText('run_000001')).toBeInTheDocument();
+    fireEvent.change(within(preview).getByLabelText('Connection'), { target: { value: 'stale-connection' } });
+
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000002' }));
+    await waitFor(() => {
+      preview = within(runsPanel).getByRole('region', { name: 'Tool route preview' });
+      expect(within(preview).getByText('run_000002')).toBeInTheDocument();
+    });
+    expect(within(preview).getByLabelText('Connection')).toHaveValue('');
+
+    fireEvent.change(within(preview).getByLabelText('Connection'), { target: { value: 'aws-prod' } });
+    fireEvent.change(within(preview).getByLabelText('MCP server'), { target: { value: 'aws-official' } });
+    fireEvent.change(within(preview).getByLabelText('Tool'), { target: { value: 'list_resources' } });
+    fireEvent.click(within(preview).getByRole('button', { name: 'Preview access' }));
+
+    await waitFor(() => {
+      expect(previewAgentToolRouteMock).toHaveBeenCalledWith('demo', 'run_000002', {
+        connection_id: 'aws-prod',
+        server_id: 'aws-official',
+        tool_name: 'list_resources',
+        risk: 'read_only',
+      });
+    });
+
+    const details = within(runsPanel).getByRole('region', { name: 'run_000002 details' });
+    fireEvent.click(within(details).getByRole('button', { name: 'Close details for run_000002' }));
+    expect(within(runsPanel).queryByRole('region', { name: 'Tool route preview' })).not.toBeInTheDocument();
+  });
+
+  it('keeps the tool route preview hidden for terminal run details', async () => {
+    listAgentRunsMock.mockResolvedValueOnce([agentRunSummaryFixture({ id: 'run_000001', status: 'completed' })]);
+    getAgentRunMock.mockResolvedValueOnce(agentRunFixture({ id: 'run_000001', status: 'completed' }));
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
+    });
+    expect(within(runsPanel).queryByRole('region', { name: 'Tool route preview' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      reason: 'cross-project',
+      detail: agentRunFixture({ id: 'run_000001', project: 'other', status: 'running' }),
+    },
+    {
+      reason: 'wrong-id',
+      detail: agentRunFixture({ id: 'run_000009', status: 'running' }),
+    },
+  ])('fails closed for $reason run detail responses', async ({ detail }) => {
+    const summary = agentRunSummaryFixture({ id: 'run_000001', status: 'running' });
+    listAgentRunsMock.mockResolvedValueOnce([summary]);
+    getAgentRunMock.mockResolvedValueOnce(detail);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('alert')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).queryByRole('region', { name: 'run_000001 details' })).not.toBeInTheDocument();
+    expect(within(runsPanel).queryByRole('region', { name: 'Tool route preview' })).not.toBeInTheDocument();
   });
 
   it('shows empty-state messages for run details without logs, patches, or approvals', async () => {

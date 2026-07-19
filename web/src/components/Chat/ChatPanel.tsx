@@ -4,6 +4,7 @@ import { Pencil, Save, X } from 'lucide-react';
 
 import { api, type AgentProviderConnectionDefinition, type AgentProviderConnectionProfile, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type AgentToolPolicy, type AgentToolPolicyResponse, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
+import { ToolRoutePreviewPanel } from './ToolRoutePreviewPanel';
 
 export interface ChatMessage {
   role: string;
@@ -1035,6 +1036,10 @@ function agentRunDetailErrorMessage(err: unknown) {
   return 'agent run detail failed';
 }
 
+function isExactRunDetailResponse(run: AgentRun, project: string, id: string) {
+  return run.project === project && run.id === id;
+}
+
 function RunDetailSection({
   title,
   empty,
@@ -1424,6 +1429,12 @@ function RunsPanel({
       </div>
     );
   }
+  const routePreviewScope = selectedRun
+    && selectedRunId === selectedRun.id
+    && selectedRun.project === projectName
+    && !isTerminalAgentRun(selectedRun.status)
+    ? { projectName, runId: selectedRun.id }
+    : null;
   return (
     <div style={hubStyles.runsPanel} aria-label={`${projectName} agent runs`}>
       <RunQueueCard
@@ -1476,6 +1487,13 @@ function RunsPanel({
           loadingRunId={detailLoadingRunId}
           error={detailError}
           onClose={onCloseDetails}
+        />
+      )}
+      {routePreviewScope && (
+        <ToolRoutePreviewPanel
+          key={`${routePreviewScope.projectName}:${routePreviewScope.runId}`}
+          projectName={routePreviewScope.projectName}
+          runId={routePreviewScope.runId}
         />
       )}
     </div>
@@ -1787,7 +1805,11 @@ export function ChatPanel({
       api.getAgentRun(requestProjectName, requestRunId)
         .then(run => {
           if (!isCurrentDetailPoll()) return;
-          setSelectedRunId(run.id);
+          if (!isExactRunDetailResponse(run, requestProjectName, requestRunId)) {
+            setSelectedRun(null);
+            setDetailError('agent run detail failed');
+            return;
+          }
           setSelectedRun(run);
           setDetailError(null);
         })
@@ -1851,7 +1873,11 @@ export function ChatPanel({
     api.getAgentRun(requestProjectName, id)
       .then(run => {
         if (!isCurrentDetailRequest()) return;
-        setSelectedRunId(run.id);
+        if (!isExactRunDetailResponse(run, requestProjectName, id)) {
+          setSelectedRun(null);
+          setDetailError('agent run detail failed');
+          return;
+        }
         setSelectedRun(run);
       })
       .catch((err: unknown) => {
