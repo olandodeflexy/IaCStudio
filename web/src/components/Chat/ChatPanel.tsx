@@ -549,11 +549,19 @@ function ToolPolicySummary({
   const [draft, setDraft] = useState('');
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
+  const mountedRef = useRef(true);
   const rules = view.status === 'ready' ? view.response.policy.rules : [];
   const allowed = rules.filter(rule => rule.effect === 'allow').length;
   const denied = rules.filter(rule => rule.effect === 'deny').length;
   const approvals = rules.filter(rule => rule.approval_required).length;
   const editable = view.status === 'ready' || view.status === 'missing';
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   let message = '';
   if (view.status === 'idle') message = 'Project scope required. MCP tool access is blocked.';
@@ -593,11 +601,13 @@ function ToolPolicySummary({
     setSaveError(null);
     try {
       await onSave(view.project, view.providerId, parsed);
+      if (!mountedRef.current) return;
       setEditing(false);
     } catch {
+      if (!mountedRef.current) return;
       setSaveError('Policy save could not be confirmed. Reload before retrying.');
     } finally {
-      setSaving(false);
+      if (mountedRef.current) setSaving(false);
     }
   };
 
