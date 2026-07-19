@@ -36,6 +36,22 @@ func NewRouter(authorizer *Authorizer, recorder *RunRecorder) (*Router, error) {
 	return &Router{authorizer: authorizer, recorder: recorder}, nil
 }
 
+// Preview evaluates one fully scoped tool route without recording the outcome
+// or invoking an external MCP tool.
+func (r *Router) Preview(request Request) (Decision, error) {
+	if r == nil || r.authorizer == nil {
+		return Decision{}, ErrAuthorizerRequired
+	}
+	if err := request.Validate(); err != nil {
+		return Decision{}, err
+	}
+	decision := r.authorizer.Authorize(request)
+	if err := decision.Validate(); err != nil {
+		return Decision{}, fmt.Errorf("validate tool route preview: %w", err)
+	}
+	return decision, nil
+}
+
 // Route authorizes one fully scoped tool route and records the outcome before
 // returning it. Recorder failures return a zero result so callers cannot act
 // on an authorization decision that was not audited.
