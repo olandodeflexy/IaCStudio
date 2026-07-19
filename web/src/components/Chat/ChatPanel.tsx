@@ -4,6 +4,7 @@ import { Pencil, Save, X } from 'lucide-react';
 
 import { api, type AgentProviderConnectionDefinition, type AgentProviderConnectionProfile, type AgentRun, type AgentRunApprovalDecision, type AgentRunMode, type AgentRunSummary, type AgentToolPolicy, type AgentToolPolicyResponse, type LocalAgentProviderStatus } from '../../api';
 import { S } from '../../styles';
+import { ToolRoutePreviewPanel } from './ToolRoutePreviewPanel';
 
 export interface ChatMessage {
   role: string;
@@ -1424,6 +1425,12 @@ function RunsPanel({
       </div>
     );
   }
+  const routePreviewScope = selectedRun
+    && selectedRunId === selectedRun.id
+    && selectedRun.project === projectName
+    && !isTerminalAgentRun(selectedRun.status)
+    ? { projectName, runId: selectedRun.id }
+    : null;
   return (
     <div style={hubStyles.runsPanel} aria-label={`${projectName} agent runs`}>
       <RunQueueCard
@@ -1476,6 +1483,13 @@ function RunsPanel({
           loadingRunId={detailLoadingRunId}
           error={detailError}
           onClose={onCloseDetails}
+        />
+      )}
+      {routePreviewScope && (
+        <ToolRoutePreviewPanel
+          key={`${routePreviewScope.projectName}:${routePreviewScope.runId}`}
+          projectName={routePreviewScope.projectName}
+          runId={routePreviewScope.runId}
         />
       )}
     </div>
