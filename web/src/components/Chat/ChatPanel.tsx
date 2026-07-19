@@ -1036,6 +1036,10 @@ function agentRunDetailErrorMessage(err: unknown) {
   return 'agent run detail failed';
 }
 
+function isExactRunDetailResponse(run: AgentRun, project: string, id: string) {
+  return run.project === project && run.id === id;
+}
+
 function RunDetailSection({
   title,
   empty,
@@ -1801,7 +1805,11 @@ export function ChatPanel({
       api.getAgentRun(requestProjectName, requestRunId)
         .then(run => {
           if (!isCurrentDetailPoll()) return;
-          setSelectedRunId(run.id);
+          if (!isExactRunDetailResponse(run, requestProjectName, requestRunId)) {
+            setSelectedRun(null);
+            setDetailError('agent run detail failed');
+            return;
+          }
           setSelectedRun(run);
           setDetailError(null);
         })
@@ -1865,7 +1873,11 @@ export function ChatPanel({
     api.getAgentRun(requestProjectName, id)
       .then(run => {
         if (!isCurrentDetailRequest()) return;
-        setSelectedRunId(run.id);
+        if (!isExactRunDetailResponse(run, requestProjectName, id)) {
+          setSelectedRun(null);
+          setDetailError('agent run detail failed');
+          return;
+        }
         setSelectedRun(run);
       })
       .catch((err: unknown) => {

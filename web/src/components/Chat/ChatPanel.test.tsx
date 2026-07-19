@@ -1534,20 +1534,9 @@ describe('ChatPanel', () => {
     expect(within(runsPanel).queryByRole('region', { name: 'Tool route preview' })).not.toBeInTheDocument();
   });
 
-  it.each([
-    {
-      reason: 'terminal',
-      summary: agentRunSummaryFixture({ id: 'run_000001', status: 'completed' }),
-      detail: agentRunFixture({ id: 'run_000001', status: 'completed' }),
-    },
-    {
-      reason: 'cross-project',
-      summary: agentRunSummaryFixture({ id: 'run_000001', status: 'running' }),
-      detail: agentRunFixture({ id: 'run_000001', project: 'other', status: 'running' }),
-    },
-  ])('keeps the tool route preview hidden for $reason run details', async ({ summary, detail }) => {
-    listAgentRunsMock.mockResolvedValueOnce([summary]);
-    getAgentRunMock.mockResolvedValueOnce(detail);
+  it('keeps the tool route preview hidden for terminal run details', async () => {
+    listAgentRunsMock.mockResolvedValueOnce([agentRunSummaryFixture({ id: 'run_000001', status: 'completed' })]);
+    getAgentRunMock.mockResolvedValueOnce(agentRunFixture({ id: 'run_000001', status: 'completed' }));
 
     render(<ChatPanel {...baseProps} projectName="demo" />);
     fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
@@ -1561,6 +1550,36 @@ describe('ChatPanel', () => {
     await waitFor(() => {
       expect(within(runsPanel).getByRole('region', { name: 'run_000001 details' })).toBeInTheDocument();
     });
+    expect(within(runsPanel).queryByRole('region', { name: 'Tool route preview' })).not.toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      reason: 'cross-project',
+      detail: agentRunFixture({ id: 'run_000001', project: 'other', status: 'running' }),
+    },
+    {
+      reason: 'wrong-id',
+      detail: agentRunFixture({ id: 'run_000009', status: 'running' }),
+    },
+  ])('fails closed for $reason run detail responses', async ({ detail }) => {
+    const summary = agentRunSummaryFixture({ id: 'run_000001', status: 'running' });
+    listAgentRunsMock.mockResolvedValueOnce([summary]);
+    getAgentRunMock.mockResolvedValueOnce(detail);
+
+    render(<ChatPanel {...baseProps} projectName="demo" />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Runs' }));
+    const runsPanel = screen.getByRole('tabpanel', { name: 'Runs' });
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('button', { name: 'View details for run_000001' })).toBeInTheDocument();
+    });
+    fireEvent.click(within(runsPanel).getByRole('button', { name: 'View details for run_000001' }));
+
+    await waitFor(() => {
+      expect(within(runsPanel).getByRole('alert')).toBeInTheDocument();
+    });
+    expect(within(runsPanel).queryByRole('region', { name: 'run_000001 details' })).not.toBeInTheDocument();
     expect(within(runsPanel).queryByRole('region', { name: 'Tool route preview' })).not.toBeInTheDocument();
   });
 
