@@ -25,6 +25,7 @@ const riskOptions: { value: MCPAirlockToolRisk; label: string }[] = [
   { value: 'cloud_mutation', label: 'Cloud mutation' },
   { value: 'secret_sensitive', label: 'Secret sensitive' },
   { value: 'destructive', label: 'Destructive' },
+  { value: 'unknown', label: 'Unknown' },
 ];
 
 const emptyInput: AgentToolRoutePreviewInput = {

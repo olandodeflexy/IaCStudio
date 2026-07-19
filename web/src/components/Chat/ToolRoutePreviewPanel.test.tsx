@@ -101,4 +101,33 @@ describe('ToolRoutePreviewPanel', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('Route preview returned an invalid decision.');
     expect(screen.queryByText('Allowed')).not.toBeInTheDocument();
   });
+
+  it('previews unknown-risk tools through the fail-closed route', async () => {
+    const client = {
+      previewAgentToolRoute: vi.fn().mockResolvedValue({
+        decision: {
+          status: 'denied',
+          reason: 'airlock_blocked',
+          allowed: false,
+          approval_required: false,
+          untrusted_output: true,
+        },
+      }),
+    };
+    render(<ToolRoutePreviewPanel projectName="demo" runId="run_000001" client={client} />);
+
+    fillRequiredFields();
+    fireEvent.change(screen.getByLabelText('Risk'), { target: { value: 'unknown' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview access' }));
+
+    await waitFor(() => {
+      expect(client.previewAgentToolRoute).toHaveBeenCalledWith('demo', 'run_000001', {
+        connection_id: 'aws-prod',
+        server_id: 'aws-official',
+        tool_name: 'list_resources',
+        risk: 'unknown',
+      });
+    });
+    expect(await screen.findByText('Denied')).toBeInTheDocument();
+  });
 });
