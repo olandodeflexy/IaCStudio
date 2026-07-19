@@ -646,6 +646,45 @@ describe('api.agentRuns', () => {
   });
 });
 
+describe('api.agentToolRoutes', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('previews a run-scoped tool route without client-owned scope fields', async () => {
+    const response = {
+      decision: {
+        status: 'allowed',
+        reason: 'allowed',
+        allowed: true,
+        approval_required: false,
+        untrusted_output: true,
+      },
+    };
+    const input = {
+      connection_id: 'aws-prod',
+      server_id: 'aws-official',
+      tool_name: 'list_resources',
+      risk: 'read_only' as const,
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.previewAgentToolRoute('demo project', 'run/000001', input)).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo%20project/agent-runs/run%2F000001/tool-routes/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(input),
+    });
+  });
+});
+
 describe('api.agentToolPolicies', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
