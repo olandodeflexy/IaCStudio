@@ -223,7 +223,7 @@ func truncateUTF8(value string, limit int) (string, bool) {
 }
 
 // ToolInvoker is the transport boundary implemented by a later stdio MCP
-// slice. Callers must authorize and audit the route before invoking it.
+// client. Callers must authorize and audit the route before invoking it.
 type ToolInvoker interface {
 	InvokeTool(context.Context, ToolCallRequest) (ToolCallResult, error)
 }
