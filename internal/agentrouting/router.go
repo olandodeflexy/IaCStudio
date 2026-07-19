@@ -42,6 +42,9 @@ func (r *Router) Preview(request Request) (Decision, error) {
 	if r == nil || r.authorizer == nil {
 		return Decision{}, ErrAuthorizerRequired
 	}
+	if err := request.Validate(); err != nil {
+		return Decision{}, err
+	}
 	decision := r.authorizer.Authorize(request)
 	if err := decision.Validate(); err != nil {
 		return Decision{}, fmt.Errorf("validate tool route preview: %w", err)

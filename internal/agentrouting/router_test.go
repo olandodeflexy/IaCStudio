@@ -33,6 +33,31 @@ func TestRouterPreviewsWithoutRecording(t *testing.T) {
 	}
 }
 
+func TestRouterPreviewRejectsInvalidRequestBeforeAuthorization(t *testing.T) {
+	policy, request, airlock := readOnlyEvaluation()
+	router, evaluator, store, run := routerFixture(t, policy, request, airlock)
+	before, ok := store.Get(run.ID)
+	if !ok {
+		t.Fatalf("Get(%q) returned no run", run.ID)
+	}
+	request.ToolName = ""
+
+	decision, err := router.Preview(request)
+	if !errors.Is(err, ErrInvalidRequest) {
+		t.Fatalf("Preview() error = %v, want ErrInvalidRequest", err)
+	}
+	if decision != (Decision{}) {
+		t.Fatalf("Preview() decision = %+v, want zero decision", decision)
+	}
+	after, ok := store.Get(run.ID)
+	if !ok || !reflect.DeepEqual(after, before) {
+		t.Fatalf("run mutated by invalid preview: before=%+v after=%+v", before, after)
+	}
+	if evaluator.calls != 0 {
+		t.Fatalf("EvaluateTool calls = %d, want none for an invalid request", evaluator.calls)
+	}
+}
+
 func routerFixture(t *testing.T, policy Policy, request Request, airlock mcpairlock.ToolDecision) (*Router, *fakeToolEvaluator, *agentruns.Store, agentruns.Run) {
 	t.Helper()
 	evaluator := &fakeToolEvaluator{entry: evaluationEntry(request, airlock)}
