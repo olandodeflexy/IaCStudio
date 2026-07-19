@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io"
 	"strings"
-	"unicode"
 	"unicode/utf8"
 )
 
@@ -16,7 +15,7 @@ const (
 	maxToolCallArgumentsBytes       = 64 << 10
 	maxToolCallOutputBytes          = 256 << 10
 	toolCallRedactionLookaheadBytes = 512
-	maxToolCallIdentifierBytes      = 256
+	maxToolCallIdentifierBytes      = 128
 )
 
 var (
@@ -121,10 +120,10 @@ func NewToolCallRequest(serverID, toolName string, arguments ToolCallArguments) 
 }
 
 func (r ToolCallRequest) Validate() error {
-	if err := validateToolCallIdentifier("server_id", r.ServerID); err != nil {
+	if err := validateToolCallIdentifier("server_id", r.ServerID, false); err != nil {
 		return err
 	}
-	if err := validateToolCallIdentifier("tool_name", r.ToolName); err != nil {
+	if err := validateToolCallIdentifier("tool_name", r.ToolName, true); err != nil {
 		return err
 	}
 	if _, err := r.Arguments.MarshalJSON(); err != nil {
@@ -133,22 +132,24 @@ func (r ToolCallRequest) Validate() error {
 	return nil
 }
 
-func validateToolCallIdentifier(name, value string) error {
+func validateToolCallIdentifier(name, value string, allowSlash bool) error {
 	if strings.TrimSpace(value) == "" {
 		return fmt.Errorf("%w: %s is required", ErrInvalidToolCallRequest, name)
 	}
 	if strings.TrimSpace(value) != value {
 		return fmt.Errorf("%w: %s must not contain leading or trailing whitespace", ErrInvalidToolCallRequest, name)
 	}
-	if !utf8.ValidString(value) {
-		return fmt.Errorf("%w: %s must be valid UTF-8", ErrInvalidToolCallRequest, name)
-	}
 	if len(value) > maxToolCallIdentifierBytes {
 		return fmt.Errorf("%w: %s exceeds %d bytes", ErrInvalidToolCallRequest, name, maxToolCallIdentifierBytes)
 	}
-	for _, char := range value {
-		if unicode.IsControl(char) {
-			return fmt.Errorf("%w: %s must not contain control characters", ErrInvalidToolCallRequest, name)
+	for i := 0; i < len(value); i++ {
+		char := value[i]
+		allowed := isASCIIAlpha(char) || (char >= '0' && char <= '9') || strings.ContainsRune("._-", rune(char))
+		if allowSlash && char == '/' {
+			allowed = true
+		}
+		if !allowed {
+			return fmt.Errorf("%w: %s contains a character outside the ASCII identifier allowlist", ErrInvalidToolCallRequest, name)
 		}
 	}
 	return nil

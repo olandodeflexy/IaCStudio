@@ -93,11 +93,21 @@ func TestToolCallRequestValidatesExactIdentifiersAndSnapshotsArguments(t *testin
 	if err := request.Validate(); err != nil {
 		t.Fatalf("snapshotted request Validate: %v", err)
 	}
+	namespaced, err := NewToolCallRequest("terraform-official", "provider.plan/read_only-v2", request.Arguments)
+	if err != nil {
+		t.Fatalf("namespaced NewToolCallRequest: %v", err)
+	}
+	if err := namespaced.Validate(); err != nil {
+		t.Fatalf("namespaced request Validate: %v", err)
+	}
 
 	tests := []ToolCallRequest{
 		{ToolName: "plan_workspace", Arguments: request.Arguments},
 		{ServerID: " terraform", ToolName: "plan_workspace", Arguments: request.Arguments},
 		{ServerID: "terraform", ToolName: "plan\nworkspace", Arguments: request.Arguments},
+		{ServerID: "terraform", ToolName: "plan\u200bworkspace", Arguments: request.Arguments},
+		{ServerID: "terraform", ToolName: "pl\u0430n_workspace", Arguments: request.Arguments},
+		{ServerID: "terraform/official", ToolName: "plan_workspace", Arguments: request.Arguments},
 		{ServerID: "terraform", ToolName: strings.Repeat("x", maxToolCallIdentifierBytes+1), Arguments: request.Arguments},
 		{ServerID: "terraform", ToolName: "plan_workspace"},
 	}
@@ -126,7 +136,7 @@ func TestNewToolCallResultRedactsBoundsAndMarksOutputUntrusted(t *testing.T) {
 }
 
 func TestNewToolCallResultTruncatesAtUTF8Boundary(t *testing.T) {
-	output := strings.Repeat("x", maxToolCallOutputBytes-1) + "€"
+	output := strings.Repeat("x", maxToolCallOutputBytes-1) + "\u20ac"
 	result := NewToolCallResult([]byte(output), true)
 	if !result.IsError || !result.Truncated {
 		t.Fatalf("result flags = is_error:%v truncated:%v", result.IsError, result.Truncated)
