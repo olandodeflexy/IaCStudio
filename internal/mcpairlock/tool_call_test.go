@@ -118,6 +118,30 @@ func TestToolCallRequestValidatesExactIdentifiersAndSnapshotsArguments(t *testin
 	}
 }
 
+func TestToolCallRequestUnmarshalValidatesEntireRequest(t *testing.T) {
+	var request ToolCallRequest
+	if err := json.Unmarshal([]byte(`{"server_id":"terraform","tool_name":"plan_workspace","arguments":{"workspace":"demo"}}`), &request); err != nil {
+		t.Fatalf("Unmarshal valid request: %v", err)
+	}
+	if got := string(request.Arguments.Bytes()); got != `{"workspace":"demo"}` {
+		t.Fatalf("arguments = %s, want normalized object", got)
+	}
+
+	tests := []string{
+		`{"server_id":" terraform","tool_name":"plan_workspace","arguments":{}}`,
+		`{"server_id":"terraform","tool_name":"plan workspace","arguments":{}}`,
+		`{"server_id":"terraform","tool_name":"plan_workspace","arguments":[]}`,
+	}
+	for i, input := range tests {
+		if err := json.Unmarshal([]byte(input), &request); !errors.Is(err, ErrInvalidToolCallRequest) {
+			t.Fatalf("invalid request %d error = %v, want ErrInvalidToolCallRequest", i, err)
+		}
+		if request.ServerID != "terraform" || request.ToolName != "plan_workspace" || string(request.Arguments.Bytes()) != `{"workspace":"demo"}` {
+			t.Fatalf("invalid request %d changed destination: %+v", i, request)
+		}
+	}
+}
+
 func TestNewToolCallResultRedactsBoundsAndMarksOutputUntrusted(t *testing.T) {
 	secret := "aws_secret_access_key=not-for-output"
 	result := NewToolCallResult([]byte("prefix "+secret+" "+strings.Repeat("x", maxToolCallOutputBytes)), false)

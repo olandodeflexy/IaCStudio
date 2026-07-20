@@ -107,6 +107,23 @@ type ToolCallRequest struct {
 	Arguments ToolCallArguments `json:"arguments"`
 }
 
+func (r *ToolCallRequest) UnmarshalJSON(input []byte) error {
+	if r == nil {
+		return fmt.Errorf("%w: nil destination", ErrInvalidToolCallRequest)
+	}
+	type wireRequest ToolCallRequest
+	var decoded wireRequest
+	if err := json.Unmarshal(input, &decoded); err != nil {
+		return fmt.Errorf("%w: decode: %w", ErrInvalidToolCallRequest, err)
+	}
+	request := ToolCallRequest(decoded)
+	if err := request.Validate(); err != nil {
+		return err
+	}
+	*r = request
+	return nil
+}
+
 func NewToolCallRequest(serverID, toolName string, arguments ToolCallArguments) (ToolCallRequest, error) {
 	request := ToolCallRequest{
 		ServerID:  serverID,
