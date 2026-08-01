@@ -1,10 +1,13 @@
 package mcpairlock
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"strings"
 	"testing"
 )
@@ -52,6 +55,21 @@ func TestRunToolCallSessionWritesHandshakeAndSanitizesText(t *testing.T) {
 	}
 }
 
+func TestRunToolCallSessionFlushesBufferedRequests(t *testing.T) {
+	requests := newStagedToolCallWriter()
+	responses := &stagedToolCallResponses{writer: requests}
+
+	if _, err := runToolCallSession(context.Background(), responses, requests, testToolCallRequest(t)); err != nil {
+		t.Fatalf("runToolCallSession: %v", err)
+	}
+	if requests.flushes != 2 {
+		t.Fatalf("flush count = %d, want 2", requests.flushes)
+	}
+	if lines := strings.Split(strings.TrimSpace(requests.buffer.String()), "\n"); len(lines) != 3 {
+		t.Fatalf("flushed request count = %d, want 3: %s", len(lines), requests.buffer.String())
+	}
+}
+
 func TestRunToolCallSessionSanitizesRPCError(t *testing.T) {
 	responses := toolCallInitializeResponse + "\n" + `{"jsonrpc":"2.0","id":2,"error":{"code":-32603,"message":"client_secret=do-not-leak"}}`
 	result, err := runToolCallSession(context.Background(), strings.NewReader(responses), &bytes.Buffer{}, testToolCallRequest(t))
@@ -78,11 +96,13 @@ func TestRunToolCallSessionRejectsInvalidResponses(t *testing.T) {
 	oversized := toolCallInitializeResponse + "\n" + strings.Repeat("x", maxToolCallWireMessageBytes+1)
 	notifications := strings.Repeat(`{"jsonrpc":"2.0","method":"notifications/progress"}`+"\n", maxToolCallWireMessages)
 	tests := []struct {
-		name      string
-		responses string
+		name          string
+		responses     string
+		errorContains string
 	}{
 		{name: "malformed JSON", responses: "not-json"},
-		{name: "wrong response id", responses: `{"jsonrpc":"2.0","id":9,"result":{}}`},
+		{name: "invalid response id", responses: `{"jsonrpc":"2.0","id":"one","result":{}}`, errorContains: "decode response id"},
+		{name: "wrong response id", responses: `{"jsonrpc":"2.0","id":9,"result":{}}`, errorContains: "unexpected response id 9, want 1"},
 		{name: "unsupported version", responses: `{"jsonrpc":"1.0","id":1,"result":{}}`},
 		{name: "oversized response", responses: oversized},
 		{name: "message limit", responses: notifications},
@@ -92,6 +112,9 @@ func TestRunToolCallSessionRejectsInvalidResponses(t *testing.T) {
 			_, err := runToolCallSession(context.Background(), strings.NewReader(test.responses), &bytes.Buffer{}, testToolCallRequest(t))
 			if !errors.Is(err, ErrInvalidToolCallResponse) {
 				t.Fatalf("error = %v, want ErrInvalidToolCallResponse", err)
+			}
+			if test.errorContains != "" && !strings.Contains(err.Error(), test.errorContains) {
+				t.Fatalf("error = %q, want substring %q", err, test.errorContains)
 			}
 		})
 	}
@@ -108,4 +131,47 @@ func testToolCallRequest(t *testing.T) ToolCallRequest {
 		t.Fatalf("NewToolCallRequest: %v", err)
 	}
 	return request
+}
+
+type stagedToolCallWriter struct {
+	buffer   bytes.Buffer
+	buffered *bufio.Writer
+	flushes  int
+}
+
+func newStagedToolCallWriter() *stagedToolCallWriter {
+	writer := &stagedToolCallWriter{}
+	writer.buffered = bufio.NewWriter(&writer.buffer)
+	return writer
+}
+
+func (w *stagedToolCallWriter) Write(input []byte) (int, error) {
+	return w.buffered.Write(input)
+}
+
+func (w *stagedToolCallWriter) Flush() error {
+	w.flushes++
+	return w.buffered.Flush()
+}
+
+type stagedToolCallResponses struct {
+	writer *stagedToolCallWriter
+	stage  int
+}
+
+func (r *stagedToolCallResponses) Read(output []byte) (int, error) {
+	if r.stage >= 2 {
+		return 0, io.EOF
+	}
+	wantFlushes := r.stage + 1
+	if r.writer.flushes != wantFlushes {
+		return 0, fmt.Errorf("flush count before response %d = %d, want %d", r.stage+1, r.writer.flushes, wantFlushes)
+	}
+	responses := []string{
+		toolCallInitializeResponse,
+		`{"jsonrpc":"2.0","id":2,"result":{"content":[{"type":"text","text":"safe"}]}}`,
+	}
+	response := responses[r.stage] + "\n"
+	r.stage++
+	return copy(output, response), nil
 }

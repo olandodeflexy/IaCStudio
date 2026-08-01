@@ -60,6 +60,9 @@ func runToolCallSession(ctx context.Context, serverOutput io.Reader, serverInput
 	if err := writeToolCallInitialize(encoder); err != nil {
 		return ToolCallResult{}, err
 	}
+	if err := flushToolCallWriter(serverInput, "initialize request"); err != nil {
+		return ToolCallResult{}, err
+	}
 
 	scanner := bufio.NewScanner(serverOutput)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxToolCallWireMessageBytes)
@@ -74,6 +77,9 @@ func runToolCallSession(ctx context.Context, serverOutput io.Reader, serverInput
 	}
 
 	if err := writeToolCallInvocation(encoder, request); err != nil {
+		return ToolCallResult{}, err
+	}
+	if err := flushToolCallWriter(serverInput, "tools/call request"); err != nil {
 		return ToolCallResult{}, err
 	}
 	resultJSON, rpcErr, err := readToolCallRPCResponse(ctx, scanner, toolCallInvocationID, &remainingMessages)
@@ -120,6 +126,17 @@ func writeToolCallInvocation(encoder *json.Encoder, request ToolCallRequest) err
 	return nil
 }
 
+func flushToolCallWriter(writer io.Writer, operation string) error {
+	flusher, ok := writer.(interface{ Flush() error })
+	if !ok {
+		return nil
+	}
+	if err := flusher.Flush(); err != nil {
+		return fmt.Errorf("flush %s: %w", operation, err)
+	}
+	return nil
+}
+
 func readToolCallRPCResponse(ctx context.Context, scanner *bufio.Scanner, expectedID int, remainingMessages *int) (json.RawMessage, *toolCallRPCError, error) {
 	for *remainingMessages > 0 {
 		if err := ctx.Err(); err != nil {
@@ -149,8 +166,11 @@ func readToolCallRPCResponse(ctx context.Context, scanner *bufio.Scanner, expect
 		}
 
 		var responseID int
-		if err := json.Unmarshal(message.ID, &responseID); err != nil || responseID != expectedID {
-			return nil, nil, fmt.Errorf("%w: unexpected response id", ErrInvalidToolCallResponse)
+		if err := json.Unmarshal(message.ID, &responseID); err != nil {
+			return nil, nil, fmt.Errorf("%w: decode response id: %w", ErrInvalidToolCallResponse, err)
+		}
+		if responseID != expectedID {
+			return nil, nil, fmt.Errorf("%w: unexpected response id %d, want %d", ErrInvalidToolCallResponse, responseID, expectedID)
 		}
 		hasResult := len(bytes.TrimSpace(message.Result)) > 0 && !bytes.Equal(bytes.TrimSpace(message.Result), []byte("null"))
 		if hasResult == (message.Error != nil) {
