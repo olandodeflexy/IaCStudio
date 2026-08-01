@@ -23,6 +23,7 @@ var (
 	ErrUnknownServer = errors.New("mcp airlock server not found")
 
 	secretPatterns = []*regexp.Regexp{
+		regexp.MustCompile(`(?is)-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.*?(?:-----END [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----|\z)`),
 		regexp.MustCompile(`(?i)(aws_secret_access_key|secret_access_key|session_token|client_secret|access_token|refresh_token|private_key|token)\s*[:=]\s*["']?[^"'\s]+`),
 		regexp.MustCompile(`AKIA[0-9A-Z]{12,}`),
 		regexp.MustCompile(`ASIA[0-9A-Z]{12,}`),
