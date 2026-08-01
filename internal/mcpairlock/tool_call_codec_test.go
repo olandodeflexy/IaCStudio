@@ -105,6 +105,8 @@ func TestRunToolCallSessionRejectsInvalidResponses(t *testing.T) {
 		{name: "invalid response id", responses: `{"jsonrpc":"2.0","id":"one","result":{}}`, errorContains: "decode response id"},
 		{name: "wrong response id", responses: `{"jsonrpc":"2.0","id":9,"result":{}}`, errorContains: "unexpected response id 9, want 1"},
 		{name: "unsupported version", responses: `{"jsonrpc":"1.0","id":1,"result":{}}`},
+		{name: "null initialize result", responses: `{"jsonrpc":"2.0","id":1,"result":null}`, errorContains: "initialize result must be an object"},
+		{name: "unsupported initialize protocol", responses: `{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2024-11-05"}}`, errorContains: "initialize protocol version is unsupported"},
 		{name: "result and error", responses: `{"jsonrpc":"2.0","id":1,"result":null,"error":{"code":-32603,"message":"bad"}}`, errorContains: "exactly one of result or error"},
 		{name: "null error", responses: `{"jsonrpc":"2.0","id":1,"error":null}`, errorContains: "error must be an object"},
 		{name: "oversized response", responses: oversized},

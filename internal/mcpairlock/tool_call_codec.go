@@ -37,6 +37,10 @@ type toolCallRPCError struct {
 	Message string `json:"message"`
 }
 
+type toolCallInitializeResult struct {
+	ProtocolVersion string `json:"protocolVersion"`
+}
+
 type toolCallWireResult struct {
 	Content []struct {
 		Type string `json:"type"`
@@ -69,13 +73,16 @@ func runToolCallSession(ctx context.Context, serverOutput io.Reader, serverInput
 	scanner.Buffer(make([]byte, 0, 64*1024), maxToolCallWireMessageBytes)
 	remainingMessages := maxToolCallWireMessages
 	remainingBytes := maxToolCallWireSessionBytes
-	_, rpcErr, err := readToolCallRPCResponse(ctx, scanner, toolCallInitializeID, &remainingMessages, &remainingBytes)
+	initializeJSON, rpcErr, err := readToolCallRPCResponse(ctx, scanner, toolCallInitializeID, &remainingMessages, &remainingBytes)
 	if err != nil {
 		return ToolCallResult{}, err
 	}
 	if rpcErr != nil {
 		result := newToolCallRPCErrorResult(rpcErr)
 		return ToolCallResult{}, fmt.Errorf("%w: initialize failed: %s", ErrInvalidToolCallResponse, result.Output)
+	}
+	if err := validateToolCallInitializeResult(initializeJSON); err != nil {
+		return ToolCallResult{}, err
 	}
 
 	if err := writeToolCallInvocation(encoder, request); err != nil {
@@ -135,6 +142,20 @@ func flushToolCallWriter(writer io.Writer, operation string) error {
 	}
 	if err := flusher.Flush(); err != nil {
 		return fmt.Errorf("flush %s: %w", operation, err)
+	}
+	return nil
+}
+
+func validateToolCallInitializeResult(input json.RawMessage) error {
+	if bytes.Equal(bytes.TrimSpace(input), []byte("null")) {
+		return fmt.Errorf("%w: initialize result must be an object", ErrInvalidToolCallResponse)
+	}
+	var result toolCallInitializeResult
+	if err := json.Unmarshal(input, &result); err != nil {
+		return fmt.Errorf("%w: decode initialize result: %w", ErrInvalidToolCallResponse, err)
+	}
+	if result.ProtocolVersion != toolCallProtocolVersion {
+		return fmt.Errorf("%w: initialize protocol version is unsupported", ErrInvalidToolCallResponse)
 	}
 	return nil
 }
