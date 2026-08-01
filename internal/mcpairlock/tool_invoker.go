@@ -102,11 +102,11 @@ func (m *Manager) invokeTool(ctx context.Context, request ToolCallRequest) (resu
 }
 
 type stdioToolSession struct {
-	cmd    *exec.Cmd
-	cancel context.CancelFunc
-	stdin  io.WriteCloser
-	stdout io.ReadCloser
-	dir    string
+	cmd      *exec.Cmd
+	cancel   context.CancelFunc
+	stdin    io.WriteCloser
+	stdout   io.ReadCloser
+	dir      string
 	waitDone chan struct{}
 	stopOnce sync.Once
 	stopDone chan struct{}
@@ -160,11 +160,11 @@ func defaultToolSessionLauncher(ctx context.Context, definition ServerDefinition
 		return nil, errors.Join(err, stdin.Close(), stdout.Close(), os.RemoveAll(workingDir))
 	}
 	session := &stdioToolSession{
-		cmd:    cmd,
-		cancel: cancel,
-		stdin:  stdin,
-		stdout: stdout,
-		dir:    workingDir,
+		cmd:      cmd,
+		cancel:   cancel,
+		stdin:    stdin,
+		stdout:   stdout,
+		dir:      workingDir,
 		waitDone: make(chan struct{}),
 		stopDone: make(chan struct{}),
 	}
