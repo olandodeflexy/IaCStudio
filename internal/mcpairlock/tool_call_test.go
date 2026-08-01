@@ -67,6 +67,14 @@ func TestParseToolCallArgumentsExplainsWhitespaceOnlyInput(t *testing.T) {
 	}
 }
 
+func TestParseToolCallArgumentsPreservesJSONDecodeError(t *testing.T) {
+	_, err := ParseToolCallArguments([]byte(`{"value": invalid}`))
+	var syntaxError *json.SyntaxError
+	if !errors.Is(err, ErrInvalidToolCallArguments) || !errors.As(err, &syntaxError) {
+		t.Fatalf("error = %v, want argument classification wrapping json.SyntaxError", err)
+	}
+}
+
 func TestToolCallArgumentsUnmarshalKeepsPriorValueOnFailure(t *testing.T) {
 	arguments, err := ParseToolCallArguments([]byte(`{"safe":true}`))
 	if err != nil {
@@ -194,10 +202,36 @@ func TestNewToolCallResultRedactsCredentialAcrossOutputBoundary(t *testing.T) {
 	}
 }
 
+func TestNewToolCallResultRedactsMultilinePrivateKey(t *testing.T) {
+	output := "prefix private_key: -----BEGIN RSA PRIVATE KEY-----\nsecret-material\n-----END RSA PRIVATE KEY----- safe suffix"
+	result := NewToolCallResult([]byte(output), false)
+	if !result.Redacted || strings.Contains(result.Output, "secret-material") || strings.Contains(result.Output, "PRIVATE KEY") {
+		t.Fatalf("result did not redact private key: %q", result.Output)
+	}
+	if !strings.Contains(result.Output, "safe suffix") {
+		t.Fatalf("result removed content after private key: %q", result.Output)
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("result Validate: %v", err)
+	}
+}
+
+func TestNewToolCallResultRedactsTruncatedPrivateKeyAcrossOutputBoundary(t *testing.T) {
+	output := strings.Repeat("x", maxToolCallOutputBytes-12) + "-----BEGIN OPENSSH PRIVATE KEY-----\nsecret-material-without-end-marker"
+	result := NewToolCallResult([]byte(output), false)
+	if !result.Redacted || !result.Truncated || strings.Contains(result.Output, "secret-material") || strings.Contains(result.Output, "PRIVATE KEY") {
+		t.Fatalf("result flags = redacted:%v truncated:%v; output tail = %q", result.Redacted, result.Truncated, result.Output[len(result.Output)-32:])
+	}
+	if err := result.Validate(); err != nil {
+		t.Fatalf("result Validate: %v", err)
+	}
+}
+
 func TestToolCallResultValidateRejectsUnsafeOutput(t *testing.T) {
 	tests := []ToolCallResult{
 		{Output: "safe"},
 		{Output: "token=exposed", UntrustedOutput: true},
+		{Output: "-----BEGIN PRIVATE KEY-----\nsecret-material\n-----END PRIVATE KEY-----", UntrustedOutput: true},
 		{Output: strings.Repeat("x", maxToolCallOutputBytes+1), UntrustedOutput: true},
 		{Output: string([]byte{0xff}), UntrustedOutput: true},
 	}

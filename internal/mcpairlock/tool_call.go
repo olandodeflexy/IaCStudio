@@ -43,7 +43,7 @@ func ParseToolCallArguments(input []byte) (ToolCallArguments, error) {
 	decoder.UseNumber()
 	var decoded any
 	if err := decoder.Decode(&decoded); err != nil {
-		return ToolCallArguments{}, fmt.Errorf("%w: %v", ErrInvalidToolCallArguments, err)
+		return ToolCallArguments{}, fmt.Errorf("%w: %w", ErrInvalidToolCallArguments, err)
 	}
 	object, ok := decoded.(map[string]any)
 	if !ok {
@@ -69,7 +69,7 @@ func requireJSONEOF(decoder *json.Decoder) error {
 		if err == nil {
 			return fmt.Errorf("%w: multiple JSON values are not allowed", ErrInvalidToolCallArguments)
 		}
-		return fmt.Errorf("%w: trailing data: %v", ErrInvalidToolCallArguments, err)
+		return fmt.Errorf("%w: trailing data: %w", ErrInvalidToolCallArguments, err)
 	}
 	return nil
 }
