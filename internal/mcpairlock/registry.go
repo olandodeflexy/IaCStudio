@@ -104,6 +104,7 @@ type Manager struct {
 	probe         ProbeFunc
 	discoverer    ToolDiscoveryFunc
 	launcher      LauncherFunc
+	toolLauncher  ToolSessionLauncherFunc
 	lifecycle     *lifecycleStore
 }
 
@@ -120,6 +121,7 @@ func NewManager(projectsDir string, opts ...Option) *Manager {
 		probe:         defaultProbe,
 		discoverer:    defaultToolDiscoverer,
 		launcher:      defaultLauncher,
+		toolLauncher:  defaultToolSessionLauncher,
 		lifecycle:     newLifecycleStore(),
 	}
 	for _, opt := range opts {
