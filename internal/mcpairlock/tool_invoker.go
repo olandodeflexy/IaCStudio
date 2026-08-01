@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"time"
 )
 
 var (
@@ -39,9 +38,10 @@ func WithToolSessionLauncher(launcher ToolSessionLauncherFunc) Option {
 	}
 }
 
-// InvokeTool runs one previously authorized MCP tool request in a fresh stdio
-// process. It does not authorize the route or inject cloud credentials.
-func (m *Manager) InvokeTool(ctx context.Context, request ToolCallRequest) (result ToolCallResult, returnErr error) {
+// invokeTool runs one previously authorized MCP tool request in a fresh stdio
+// process. It remains package-scoped until routing and authorization are
+// composed behind one fail-closed executor.
+func (m *Manager) invokeTool(ctx context.Context, request ToolCallRequest) (result ToolCallResult, returnErr error) {
 	if m == nil || m.toolLauncher == nil {
 		return ToolCallResult{}, ErrToolSessionLaunch
 	}
@@ -77,6 +77,17 @@ func (m *Manager) InvokeTool(ctx context.Context, request ToolCallRequest) (resu
 			returnErr = errors.Join(returnErr, ErrToolSessionCleanup)
 		}
 	}()
+	stopOnCancel := make(chan struct{})
+	defer close(stopOnCancel)
+	go func() {
+		select {
+		case <-callCtx.Done():
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), m.timeout)
+			defer cleanupCancel()
+			_ = session.Stop(cleanupCtx)
+		case <-stopOnCancel:
+		}
+	}()
 
 	serverInput := session.ServerInput()
 	serverOutput := session.ServerOutput()
@@ -96,8 +107,10 @@ type stdioToolSession struct {
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
 	dir    string
-	wait   sync.Once
-	done   chan error
+	waitDone chan struct{}
+	stopOnce sync.Once
+	stopDone chan struct{}
+	stopErr  error
 }
 
 func (s *stdioToolSession) ServerInput() io.Writer {
@@ -108,34 +121,15 @@ func (s *stdioToolSession) ServerOutput() io.Reader {
 	return s.stdout
 }
 
-func (s *stdioToolSession) Stop(ctx context.Context) (returnErr error) {
-	_ = s.stdin.Close()
-	s.cancel()
-	s.wait.Do(func() {
-		go func() {
-			s.done <- s.cmd.Wait()
-			close(s.done)
-		}()
+func (s *stdioToolSession) Stop(ctx context.Context) error {
+	s.stopOnce.Do(func() {
+		go s.stop()
 	})
-	defer func() {
-		_ = s.stdout.Close()
-		if err := os.RemoveAll(s.dir); err != nil {
-			returnErr = errors.Join(returnErr, err)
-		}
-	}()
 	select {
-	case <-s.done:
-		return nil
+	case <-s.stopDone:
+		return s.stopErr
 	case <-ctx.Done():
-		if s.cmd.Process != nil {
-			_ = s.cmd.Process.Kill()
-		}
-		select {
-		case <-s.done:
-			return nil
-		case <-time.After(100 * time.Millisecond):
-			return ctx.Err()
-		}
+		return ctx.Err()
 	}
 }
 
@@ -147,6 +141,7 @@ func defaultToolSessionLauncher(ctx context.Context, definition ServerDefinition
 		return nil, err
 	}
 	cmd := exec.CommandContext(runCtx, definition.Command, definition.Args...)
+	configureToolCommand(cmd)
 	cmd.Dir = workingDir
 	cmd.Env = isolatedToolEnv(workingDir)
 	cmd.Stderr = io.Discard
@@ -170,8 +165,13 @@ func defaultToolSessionLauncher(ctx context.Context, definition ServerDefinition
 		stdin:  stdin,
 		stdout: stdout,
 		dir:    workingDir,
-		done:   make(chan error, 1),
+		waitDone: make(chan struct{}),
+		stopDone: make(chan struct{}),
 	}
+	go func() {
+		_ = cmd.Wait()
+		close(session.waitDone)
+	}()
 	return session, nil
 }
 
@@ -184,7 +184,28 @@ func isolatedToolEnv(workingDir string) []string {
 		"AWS_SHARED_CREDENTIALS_FILE="+filepath.Join(workingDir, ".aws", "credentials"),
 		"AWS_EC2_METADATA_DISABLED=true",
 		"AZURE_CONFIG_DIR="+filepath.Join(workingDir, ".azure"),
+		"IDENTITY_ENDPOINT=http://127.0.0.1:9",
+		"IMDS_ENDPOINT=http://127.0.0.1:9",
+		"MSI_ENDPOINT=http://127.0.0.1:9",
+		"AZURE_POD_IDENTITY_AUTHORITY_HOST=http://127.0.0.1:9",
 		"CLOUDSDK_CONFIG="+filepath.Join(workingDir, ".config", "gcloud"),
+		"GCE_METADATA_HOST=127.0.0.1:9",
+		"GCE_METADATA_IP=127.0.0.1",
+		"NO_GCE_CHECK=true",
 		"TF_CLI_CONFIG_FILE="+filepath.Join(workingDir, ".terraformrc"),
 	)
+}
+
+func (s *stdioToolSession) stop() {
+	var returnErr error
+	_ = s.stdin.Close()
+	s.cancel()
+	terminateToolProcessTree(s.cmd)
+	<-s.waitDone
+	_ = s.stdout.Close()
+	if err := os.RemoveAll(s.dir); err != nil {
+		returnErr = errors.Join(returnErr, err)
+	}
+	s.stopErr = returnErr
+	close(s.stopDone)
 }

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -19,7 +20,7 @@ func TestManagerInvokeToolUsesIsolatedSanitizedProcess(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", inheritedSecret)
 	manager := newToolInvokerManager(t, "mcp-tool-helper")
 
-	result, err := manager.InvokeTool(context.Background(), testToolCallRequest(t))
+	result, err := manager.invokeTool(context.Background(), testToolCallRequest(t))
 	if err != nil {
 		t.Fatalf("InvokeTool: %v", err)
 	}
@@ -39,10 +40,10 @@ func TestManagerInvokeToolUsesIsolatedSanitizedProcess(t *testing.T) {
 }
 
 func TestManagerInvokeToolTimesOutAndReapsProcess(t *testing.T) {
-	manager := newToolInvokerManager(t, "mcp-tool-helper-hang", WithTimeout(50*time.Millisecond))
+	manager := newToolInvokerManager(t, "mcp-tool-helper-child-stdout-hang", WithTimeout(50*time.Millisecond))
 	startedAt := time.Now()
 
-	_, err := manager.InvokeTool(context.Background(), testToolCallRequest(t))
+	_, err := manager.invokeTool(context.Background(), testToolCallRequest(t))
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("InvokeTool error = %v, want context deadline exceeded", err)
 	}
@@ -57,7 +58,7 @@ func TestManagerInvokeToolFailsClosedOnLaunchAndCleanupErrors(t *testing.T) {
 		manager := newToolInvokerManager(t, "unused", WithToolSessionLauncher(func(context.Context, ServerDefinition) (ToolSession, error) {
 			return nil, errors.New("token=do-not-leak")
 		}))
-		_, err := manager.InvokeTool(context.Background(), request)
+		_, err := manager.invokeTool(context.Background(), request)
 		if !errors.Is(err, ErrToolSessionLaunch) || strings.Contains(err.Error(), "do-not-leak") {
 			t.Fatalf("InvokeTool error = %v, want sanitized launch failure", err)
 		}
@@ -71,7 +72,7 @@ func TestManagerInvokeToolFailsClosedOnLaunchAndCleanupErrors(t *testing.T) {
 		manager := newToolInvokerManager(t, "unused", WithToolSessionLauncher(func(context.Context, ServerDefinition) (ToolSession, error) {
 			return session, nil
 		}))
-		result, err := manager.InvokeTool(context.Background(), request)
+		result, err := manager.invokeTool(context.Background(), request)
 		if !errors.Is(err, ErrToolSessionCleanup) || strings.Contains(err.Error(), "do-not-leak") {
 			t.Fatalf("InvokeTool error = %v, want sanitized cleanup failure", err)
 		}
@@ -97,7 +98,7 @@ func TestManagerInvokeToolRejectsUnavailableServerBeforeLaunch(t *testing.T) {
 		}),
 	)
 
-	_, err := manager.InvokeTool(context.Background(), testToolCallRequest(t))
+	_, err := manager.invokeTool(context.Background(), testToolCallRequest(t))
 	if !errors.Is(err, ErrToolServerUnavailable) || calls != 0 {
 		t.Fatalf("InvokeTool error = %v, launch calls = %d", err, calls)
 	}
@@ -108,6 +109,10 @@ func TestToolInvokerHelperProcess(t *testing.T) {
 		return
 	}
 	mode := os.Args[len(os.Args)-1]
+	if mode == "mcp-tool-helper-stdout-holder" {
+		time.Sleep(10 * time.Second)
+		os.Exit(0)
+	}
 	scanner := bufio.NewScanner(os.Stdin)
 	encoder := json.NewEncoder(os.Stdout)
 	for scanner.Scan() {
@@ -132,7 +137,13 @@ func TestToolInvokerHelperProcess(t *testing.T) {
 				os.Exit(3)
 			}
 		case "tools/call":
-			if mode == "mcp-tool-helper-hang" {
+			if mode == "mcp-tool-helper-child-stdout-hang" {
+				child := exec.Command(os.Args[0], "-test.run=TestToolInvokerHelperProcess", "--", "mcp-tool-helper-stdout-holder")
+				child.Stdout = os.Stdout
+				child.Stderr = io.Discard
+				if err := child.Start(); err != nil {
+					os.Exit(7)
+				}
 				time.Sleep(10 * time.Second)
 			}
 			workingDir, err := os.Getwd()
@@ -145,7 +156,13 @@ func TestToolInvokerHelperProcess(t *testing.T) {
 			}
 			if !strings.HasPrefix(filepath.Base(os.Getenv("HOME")), "iac-studio-mcp-") ||
 				os.Getenv("AWS_EC2_METADATA_DISABLED") != "true" ||
-				!strings.HasPrefix(os.Getenv("AWS_SHARED_CREDENTIALS_FILE"), os.Getenv("HOME")) {
+				!strings.HasPrefix(os.Getenv("AWS_SHARED_CREDENTIALS_FILE"), os.Getenv("HOME")) ||
+				os.Getenv("GCE_METADATA_HOST") != "127.0.0.1:9" ||
+				os.Getenv("GCE_METADATA_IP") != "127.0.0.1" ||
+				os.Getenv("IDENTITY_ENDPOINT") != "http://127.0.0.1:9" ||
+				os.Getenv("IMDS_ENDPOINT") != "http://127.0.0.1:9" ||
+				os.Getenv("MSI_ENDPOINT") != "http://127.0.0.1:9" ||
+				os.Getenv("AZURE_POD_IDENTITY_AUTHORITY_HOST") != "http://127.0.0.1:9" {
 				output = "unsafe credential discovery environment\nworking_dir=" + workingDir
 			}
 			if err := encoder.Encode(map[string]any{
