@@ -16,6 +16,7 @@ const (
 	toolCallInitializeID        = 1
 	toolCallInvocationID        = 2
 	maxToolCallWireMessageBytes = 2 << 20
+	maxToolCallWireSessionBytes = 4 << 20
 	maxToolCallWireMessages     = 32
 )
 
@@ -24,11 +25,11 @@ const (
 var ErrInvalidToolCallResponse = errors.New("invalid MCP tool call response")
 
 type toolCallRPCMessage struct {
-	JSONRPC string            `json:"jsonrpc"`
-	ID      json.RawMessage   `json:"id,omitempty"`
-	Method  string            `json:"method,omitempty"`
-	Result  json.RawMessage   `json:"result,omitempty"`
-	Error   *toolCallRPCError `json:"error,omitempty"`
+	JSONRPC string          `json:"jsonrpc"`
+	ID      json.RawMessage `json:"id,omitempty"`
+	Method  string          `json:"method,omitempty"`
+	Result  json.RawMessage `json:"result,omitempty"`
+	Error   json.RawMessage `json:"error,omitempty"`
 }
 
 type toolCallRPCError struct {
@@ -67,7 +68,8 @@ func runToolCallSession(ctx context.Context, serverOutput io.Reader, serverInput
 	scanner := bufio.NewScanner(serverOutput)
 	scanner.Buffer(make([]byte, 0, 64*1024), maxToolCallWireMessageBytes)
 	remainingMessages := maxToolCallWireMessages
-	_, rpcErr, err := readToolCallRPCResponse(ctx, scanner, toolCallInitializeID, &remainingMessages)
+	remainingBytes := maxToolCallWireSessionBytes
+	_, rpcErr, err := readToolCallRPCResponse(ctx, scanner, toolCallInitializeID, &remainingMessages, &remainingBytes)
 	if err != nil {
 		return ToolCallResult{}, err
 	}
@@ -82,7 +84,7 @@ func runToolCallSession(ctx context.Context, serverOutput io.Reader, serverInput
 	if err := flushToolCallWriter(serverInput, "tools/call request"); err != nil {
 		return ToolCallResult{}, err
 	}
-	resultJSON, rpcErr, err := readToolCallRPCResponse(ctx, scanner, toolCallInvocationID, &remainingMessages)
+	resultJSON, rpcErr, err := readToolCallRPCResponse(ctx, scanner, toolCallInvocationID, &remainingMessages, &remainingBytes)
 	if err != nil {
 		return ToolCallResult{}, err
 	}
@@ -137,7 +139,7 @@ func flushToolCallWriter(writer io.Writer, operation string) error {
 	return nil
 }
 
-func readToolCallRPCResponse(ctx context.Context, scanner *bufio.Scanner, expectedID int, remainingMessages *int) (json.RawMessage, *toolCallRPCError, error) {
+func readToolCallRPCResponse(ctx context.Context, scanner *bufio.Scanner, expectedID int, remainingMessages, remainingBytes *int) (json.RawMessage, *toolCallRPCError, error) {
 	for *remainingMessages > 0 {
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
@@ -149,6 +151,10 @@ func readToolCallRPCResponse(ctx context.Context, scanner *bufio.Scanner, expect
 			}
 			return nil, nil, fmt.Errorf("%w: response %d not received: %w", ErrInvalidToolCallResponse, expectedID, io.ErrUnexpectedEOF)
 		}
+		if len(scanner.Bytes()) > *remainingBytes {
+			return nil, nil, fmt.Errorf("%w: response byte limit exceeded", ErrInvalidToolCallResponse)
+		}
+		*remainingBytes -= len(scanner.Bytes())
 		line := bytes.TrimSpace(scanner.Bytes())
 		if len(line) == 0 {
 			continue
@@ -172,11 +178,22 @@ func readToolCallRPCResponse(ctx context.Context, scanner *bufio.Scanner, expect
 		if responseID != expectedID {
 			return nil, nil, fmt.Errorf("%w: unexpected response id %d, want %d", ErrInvalidToolCallResponse, responseID, expectedID)
 		}
-		hasResult := len(bytes.TrimSpace(message.Result)) > 0 && !bytes.Equal(bytes.TrimSpace(message.Result), []byte("null"))
-		if hasResult == (message.Error != nil) {
+		hasResult := len(bytes.TrimSpace(message.Result)) > 0
+		hasError := len(bytes.TrimSpace(message.Error)) > 0
+		if hasResult == hasError {
 			return nil, nil, fmt.Errorf("%w: response must contain exactly one of result or error", ErrInvalidToolCallResponse)
 		}
-		return message.Result, message.Error, nil
+		if hasError {
+			var rpcErr toolCallRPCError
+			if bytes.Equal(bytes.TrimSpace(message.Error), []byte("null")) {
+				return nil, nil, fmt.Errorf("%w: error must be an object", ErrInvalidToolCallResponse)
+			}
+			if err := json.Unmarshal(message.Error, &rpcErr); err != nil {
+				return nil, nil, fmt.Errorf("%w: decode response error: %w", ErrInvalidToolCallResponse, err)
+			}
+			return nil, &rpcErr, nil
+		}
+		return message.Result, nil, nil
 	}
 	return nil, nil, fmt.Errorf("%w: response message limit exceeded", ErrInvalidToolCallResponse)
 }

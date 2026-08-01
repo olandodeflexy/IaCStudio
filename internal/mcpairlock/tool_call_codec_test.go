@@ -95,6 +95,7 @@ func TestRunToolCallSessionRejectsInvalidRequestBeforeWriting(t *testing.T) {
 func TestRunToolCallSessionRejectsInvalidResponses(t *testing.T) {
 	oversized := toolCallInitializeResponse + "\n" + strings.Repeat("x", maxToolCallWireMessageBytes+1)
 	notifications := strings.Repeat(`{"jsonrpc":"2.0","method":"notifications/progress"}`+"\n", maxToolCallWireMessages)
+	largeNotification := `{"jsonrpc":"2.0","method":"notifications/progress","params":{"data":"` + strings.Repeat("x", 1<<20) + `"}}` + "\n"
 	tests := []struct {
 		name          string
 		responses     string
@@ -104,7 +105,10 @@ func TestRunToolCallSessionRejectsInvalidResponses(t *testing.T) {
 		{name: "invalid response id", responses: `{"jsonrpc":"2.0","id":"one","result":{}}`, errorContains: "decode response id"},
 		{name: "wrong response id", responses: `{"jsonrpc":"2.0","id":9,"result":{}}`, errorContains: "unexpected response id 9, want 1"},
 		{name: "unsupported version", responses: `{"jsonrpc":"1.0","id":1,"result":{}}`},
+		{name: "result and error", responses: `{"jsonrpc":"2.0","id":1,"result":null,"error":{"code":-32603,"message":"bad"}}`, errorContains: "exactly one of result or error"},
+		{name: "null error", responses: `{"jsonrpc":"2.0","id":1,"error":null}`, errorContains: "error must be an object"},
 		{name: "oversized response", responses: oversized},
+		{name: "session byte limit", responses: strings.Repeat(largeNotification, 5), errorContains: "response byte limit exceeded"},
 		{name: "message limit", responses: notifications},
 	}
 	for _, test := range tests {
