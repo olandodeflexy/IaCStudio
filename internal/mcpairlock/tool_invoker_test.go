@@ -20,8 +20,9 @@ func TestManagerInvokeToolUsesIsolatedSanitizedProcess(t *testing.T) {
 	const inheritedSecret = "do-not-forward"
 	t.Setenv("AWS_SECRET_ACCESS_KEY", inheritedSecret)
 	manager := newToolInvokerManager(t, "mcp-tool-helper")
+	invoke := manager.ToolInvocationCapability()
 
-	result, err := manager.invokeTool(context.Background(), testToolCallRequest(t))
+	result, err := invoke(context.Background(), testToolCallRequest(t))
 	if err != nil {
 		t.Fatalf("InvokeTool: %v", err)
 	}
@@ -37,6 +38,13 @@ func TestManagerInvokeToolUsesIsolatedSanitizedProcess(t *testing.T) {
 	}
 	if strings.Contains(result.Output, inheritedSecret) {
 		t.Fatalf("tool process inherited cloud credential: %+v", result)
+	}
+}
+
+func TestNilManagerHasNoToolInvocationCapability(t *testing.T) {
+	var manager *Manager
+	if capability := manager.ToolInvocationCapability(); capability != nil {
+		t.Fatal("nil manager returned a tool invocation capability")
 	}
 }
 

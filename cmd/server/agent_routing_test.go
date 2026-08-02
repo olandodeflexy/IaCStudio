@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -14,23 +15,32 @@ import (
 
 type countingToolEvaluator struct {
 	calls int
+	entry mcpairlock.ToolInventoryEntry
+	err   error
 }
 
 func (e *countingToolEvaluator) EvaluateTool(_, _, _ string) (mcpairlock.ToolInventoryEntry, error) {
 	e.calls++
-	return mcpairlock.ToolInventoryEntry{}, errors.New("unexpected Airlock evaluation")
+	return e.entry, e.err
 }
 
 func TestNewAgentRoutingServicesRequiresToolEvaluator(t *testing.T) {
-	_, err := newAgentRoutingServices(t.TempDir(), nil)
+	_, err := newAgentRoutingServices(t.TempDir(), nil, successfulToolInvoker)
 	if !errors.Is(err, agentrouting.ErrToolEvaluatorRequired) {
 		t.Fatalf("newAgentRoutingServices(nil) error = %v, want %v", err, agentrouting.ErrToolEvaluatorRequired)
 	}
 }
 
+func TestNewAgentRoutingServicesRequiresToolInvoker(t *testing.T) {
+	_, err := newAgentRoutingServices(t.TempDir(), &countingToolEvaluator{}, nil)
+	if !errors.Is(err, agentrouting.ErrToolInvokerRequired) {
+		t.Fatalf("newAgentRoutingServices(nil invoker) error = %v, want %v", err, agentrouting.ErrToolInvokerRequired)
+	}
+}
+
 func TestNewAgentRoutingServicesFailsClosedAndAuditsMissingPolicy(t *testing.T) {
 	evaluator := &countingToolEvaluator{}
-	services, err := newAgentRoutingServices(t.TempDir(), evaluator)
+	services, err := newAgentRoutingServices(t.TempDir(), evaluator, successfulToolInvoker)
 	if err != nil {
 		t.Fatalf("newAgentRoutingServices(): %v", err)
 	}
@@ -81,8 +91,83 @@ func TestNewAgentRoutingServicesRejectsCorruptPolicyStore(t *testing.T) {
 		t.Fatalf("WriteFile(): %v", err)
 	}
 
-	_, err := newAgentRoutingServices(root, &countingToolEvaluator{})
+	_, err := newAgentRoutingServices(root, &countingToolEvaluator{}, successfulToolInvoker)
 	if !errors.Is(err, agentrouting.ErrInvalidPolicyStore) {
 		t.Fatalf("newAgentRoutingServices() error = %v, want ErrInvalidPolicyStore", err)
 	}
+}
+
+func TestNewAgentRoutingServicesComposesGuardedExecutor(t *testing.T) {
+	request := agentrouting.Request{
+		Project:      "demo",
+		ProviderID:   "codex",
+		ConnectionID: "aws-prod",
+		ServerID:     "aws",
+		ToolName:     "list_buckets",
+		Mode:         agentruns.ModeReadOnly,
+		Risk:         mcpairlock.RiskReadOnly,
+	}
+	evaluator := &countingToolEvaluator{entry: mcpairlock.ToolInventoryEntry{
+		ServerID: request.ServerID,
+		Name:     request.ToolName,
+		Risk:     request.Risk,
+		Decision: mcpairlock.ToolDecision{
+			Status:          "allowed",
+			Allowed:         true,
+			Risk:            request.Risk,
+			UntrustedOutput: true,
+		},
+	}}
+	invocations := 0
+	services, err := newAgentRoutingServices(t.TempDir(), evaluator, func(_ context.Context, call mcpairlock.ToolCallRequest) (mcpairlock.ToolCallResult, error) {
+		invocations++
+		if call.ServerID != request.ServerID || call.ToolName != request.ToolName {
+			t.Fatalf("tool call = %+v, want exact authorized route", call)
+		}
+		return mcpairlock.NewToolCallResult([]byte("inventory ready"), false), nil
+	})
+	if err != nil {
+		t.Fatalf("newAgentRoutingServices(): %v", err)
+	}
+	if err := services.policies.Save(agentrouting.PolicyScope{
+		Project:    request.Project,
+		ProviderID: request.ProviderID,
+	}, agentrouting.Policy{Rules: []agentrouting.Rule{{
+		Project:          request.Project,
+		ProviderID:       request.ProviderID,
+		ConnectionID:     request.ConnectionID,
+		ServerID:         request.ServerID,
+		ToolName:         request.ToolName,
+		Modes:            []agentruns.Mode{request.Mode},
+		Risk:             request.Risk,
+		Effect:           agentrouting.EffectAllow,
+		ApprovalRequired: false,
+	}}}); err != nil {
+		t.Fatalf("Save(): %v", err)
+	}
+	run, err := services.runs.Create(agentruns.CreateRequest{
+		Project:    request.Project,
+		Prompt:     "inventory the project",
+		ProviderID: request.ProviderID,
+		Mode:       request.Mode,
+	})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	arguments, err := mcpairlock.ParseToolCallArguments([]byte(`{"region":"us-east-1"}`))
+	if err != nil {
+		t.Fatalf("ParseToolCallArguments(): %v", err)
+	}
+
+	result, err := services.executor.Execute(context.Background(), run.ID, request, arguments)
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if !result.Invoked || result.Result == nil || result.Result.Output != "inventory ready" || invocations != 1 || evaluator.calls != 1 {
+		t.Fatalf("Execute() = %+v, invocations = %d, evaluations = %d", result, invocations, evaluator.calls)
+	}
+}
+
+func successfulToolInvoker(context.Context, mcpairlock.ToolCallRequest) (mcpairlock.ToolCallResult, error) {
+	return mcpairlock.NewToolCallResult(nil, false), nil
 }
