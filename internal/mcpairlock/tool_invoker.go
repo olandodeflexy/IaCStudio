@@ -58,9 +58,19 @@ func WithToolCallTimeout(timeout time.Duration) Option {
 	}
 }
 
+// ToolInvocationCapability returns the isolated transport function for
+// composition behind a policy-enforcing executor. It performs no
+// authorization and must never be exposed directly through an API handler.
+func (m *Manager) ToolInvocationCapability() func(context.Context, ToolCallRequest) (ToolCallResult, error) {
+	if m == nil {
+		return nil
+	}
+	return m.invokeTool
+}
+
 // invokeTool runs one previously authorized MCP tool request in a fresh stdio
-// process. It remains package-scoped until routing and authorization are
-// composed behind one fail-closed executor.
+// process. The direct method stays package-scoped; startup deliberately hands
+// its function capability to the fail-closed routing executor.
 func (m *Manager) invokeTool(ctx context.Context, request ToolCallRequest) (result ToolCallResult, returnErr error) {
 	if m == nil || m.toolLauncher == nil {
 		return ToolCallResult{}, ErrToolSessionLaunch

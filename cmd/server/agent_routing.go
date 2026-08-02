@@ -11,9 +11,14 @@ type agentRoutingServices struct {
 	runs     *agentruns.Store
 	policies *agentrouting.PolicyStore
 	router   *agentrouting.Router
+	executor *agentrouting.Executor
 }
 
-func newAgentRoutingServices(projectsDir string, evaluator agentrouting.ToolEvaluator) (*agentRoutingServices, error) {
+func newAgentRoutingServices(
+	projectsDir string,
+	evaluator agentrouting.ToolEvaluator,
+	invoke agentrouting.ToolInvokeFunc,
+) (*agentRoutingServices, error) {
 	runs := agentruns.NewStore()
 	policies, err := agentrouting.NewPersistentPolicyStore(projectsDir)
 	if err != nil {
@@ -31,9 +36,14 @@ func newAgentRoutingServices(projectsDir string, evaluator agentrouting.ToolEval
 	if err != nil {
 		return nil, fmt.Errorf("create tool route router: %w", err)
 	}
+	executor, err := agentrouting.NewExecutor(router, invoke)
+	if err != nil {
+		return nil, fmt.Errorf("create guarded tool route executor: %w", err)
+	}
 	return &agentRoutingServices{
 		runs:     runs,
 		policies: policies,
 		router:   router,
+		executor: executor,
 	}, nil
 }
