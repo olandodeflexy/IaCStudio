@@ -132,11 +132,11 @@ func (s *agentToolExecutionAttemptStore) execute(
 		}()
 		result, err = execute()
 	}()
-	if err == nil {
-		if validationErr := validateAgentToolExecutionResult(result); validationErr != nil {
-			result = agentrouting.ExecutionResult{}
-			err = validationErr
-		}
+	if err != nil {
+		result = agentrouting.ExecutionResult{}
+	} else if validationErr := validateAgentToolExecutionResult(result); validationErr != nil {
+		result = agentrouting.ExecutionResult{}
+		err = validationErr
 	}
 
 	s.mu.Lock()

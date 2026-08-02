@@ -116,10 +116,16 @@ func TestAgentToolExecutionAttemptStoreReleasesFailedAttempts(t *testing.T) {
 	arguments := testAgentToolExecutionArguments(t, `{}`)
 	wantErr := errors.New("temporary execution failure")
 
-	if _, replayed, err := store.execute(context.Background(), "run_000001", "retryable", request, arguments, func() (agentrouting.ExecutionResult, error) {
-		return agentrouting.ExecutionResult{}, wantErr
-	}); !errors.Is(err, wantErr) || replayed {
-		t.Fatalf("first execute error = %v, replayed = %t; want retryable failure", err, replayed)
+	failed, replayed, err := store.execute(context.Background(), "run_000001", "retryable", request, arguments, func() (agentrouting.ExecutionResult, error) {
+		return testAgentToolExecutionResult("partial"), wantErr
+	})
+	if !errors.Is(err, wantErr) ||
+		replayed ||
+		failed.Invoked ||
+		failed.Result != nil ||
+		failed.Route.Decision != (agentrouting.Decision{}) ||
+		failed.Route.Run.ID != "" {
+		t.Fatalf("first execute = %+v, error = %v, replayed = %t; want zero retryable failure", failed, err, replayed)
 	}
 
 	want := testAgentToolExecutionResult("ok")
