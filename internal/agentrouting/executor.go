@@ -14,7 +14,7 @@ var (
 	ErrToolInvokerRequired     = errors.New("tool invoker is required")
 	ErrToolExecutionContext    = errors.New("tool execution context is required")
 	ErrInvalidToolExecution    = errors.New("invalid authorized tool execution")
-	ErrToolInvocationFailed    = errors.New("MCP tool invocation failed")
+	ErrToolInvocationFailed    = errors.New("mcp tool invocation failed")
 )
 
 // ToolInvokeFunc runs one transport request that the Executor has already
@@ -33,8 +33,9 @@ type ExecutionResult struct {
 // Executor records authorization through Router before invoking one external
 // MCP tool. It does not select credentials or expose an HTTP endpoint.
 type Executor struct {
-	router *Router
-	invoke ToolInvokeFunc
+	router    *Router
+	invoke    ToolInvokeFunc
+	lookupRun func(string) (agentruns.Run, bool)
 }
 
 func NewExecutor(router *Router, invoke ToolInvokeFunc) (*Executor, error) {
@@ -44,7 +45,7 @@ func NewExecutor(router *Router, invoke ToolInvokeFunc) (*Executor, error) {
 	if invoke == nil {
 		return nil, ErrToolInvokerRequired
 	}
-	return &Executor{router: router, invoke: invoke}, nil
+	return &Executor{router: router, invoke: invoke, lookupRun: router.currentRun}, nil
 }
 
 // Execute validates and binds the transport request, records the scoped route
@@ -87,6 +88,21 @@ func (e *Executor) Execute(
 	if route.Decision.Status != DecisionAllowed {
 		return execution, nil
 	}
+	if err := ctx.Err(); err != nil {
+		return ExecutionResult{}, err
+	}
+	if e.lookupRun == nil {
+		return ExecutionResult{}, ErrInvalidToolExecution
+	}
+	current, ok := e.lookupRun(runID)
+	if !ok {
+		return ExecutionResult{}, ErrInvalidToolExecution
+	}
+	route.Run = current
+	if err := validateExecutionRoute(route, runID, request); err != nil {
+		return ExecutionResult{}, err
+	}
+	execution.Route = route
 	if err := ctx.Err(); err != nil {
 		return ExecutionResult{}, err
 	}

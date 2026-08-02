@@ -89,6 +89,64 @@ func TestExecutorDoesNotInvokeNonAllowedRoutes(t *testing.T) {
 	}
 }
 
+func TestExecutorRechecksRunImmediatelyBeforeInvocation(t *testing.T) {
+	tests := []struct {
+		name   string
+		mutate func(*testing.T, *agentruns.Store, string)
+	}{
+		{
+			name: "canceled",
+			mutate: func(t *testing.T, store *agentruns.Store, runID string) {
+				t.Helper()
+				if _, err := store.Cancel(runID); err != nil {
+					t.Fatalf("Cancel(): %v", err)
+				}
+			},
+		},
+		{
+			name: "pending approval",
+			mutate: func(t *testing.T, store *agentruns.Store, runID string) {
+				t.Helper()
+				if _, err := store.AddApproval(runID, agentruns.ApprovalGate{
+					Kind:    agentruns.ApprovalMCPNetwork,
+					Summary: "authorize invocation",
+				}); err != nil {
+					t.Fatalf("AddApproval(): %v", err)
+				}
+			},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			policy, request, airlock := readOnlyEvaluation()
+			router, _, store, run := routerFixture(t, policy, request, airlock)
+			invocations := 0
+			executor, err := NewExecutor(router, func(context.Context, mcpairlock.ToolCallRequest) (mcpairlock.ToolCallResult, error) {
+				invocations++
+				return mcpairlock.NewToolCallResult(nil, false), nil
+			})
+			if err != nil {
+				t.Fatalf("NewExecutor(): %v", err)
+			}
+			lookups := 0
+			executor.lookupRun = func(runID string) (agentruns.Run, bool) {
+				lookups++
+				test.mutate(t, store, runID)
+				return store.Get(runID)
+			}
+
+			result, err := executor.Execute(context.Background(), run.ID, request, executionArguments(t))
+			if !errors.Is(err, ErrInvalidToolExecution) {
+				t.Fatalf("Execute() error = %v, want ErrInvalidToolExecution", err)
+			}
+			if !reflect.DeepEqual(result, ExecutionResult{}) || invocations != 0 || lookups != 1 {
+				t.Fatalf("Execute() = %+v, invocations = %d, lookups = %d; want fail closed", result, invocations, lookups)
+			}
+		})
+	}
+}
+
 func TestExecutorRejectsInvalidInputBeforeRouting(t *testing.T) {
 	tests := []struct {
 		name      string
