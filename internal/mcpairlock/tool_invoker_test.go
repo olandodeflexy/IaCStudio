@@ -169,6 +169,9 @@ func TestToolInvokerHelperProcess(t *testing.T) {
 				output = "leaked " + secret + "\nworking_dir=" + workingDir
 			}
 			if !strings.HasPrefix(filepath.Base(os.Getenv("HOME")), "iac-studio-mcp-") ||
+				os.Getenv("TMPDIR") != os.Getenv("HOME") ||
+				os.Getenv("TMP") != os.Getenv("HOME") ||
+				os.Getenv("TEMP") != os.Getenv("HOME") ||
 				os.Getenv("AWS_EC2_METADATA_DISABLED") != "true" ||
 				!strings.HasPrefix(os.Getenv("AWS_SHARED_CREDENTIALS_FILE"), os.Getenv("HOME")) ||
 				os.Getenv("GCE_METADATA_HOST") != "127.0.0.1:9" ||
