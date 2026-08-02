@@ -21,19 +21,21 @@ func terminateToolProcessTree(ctx context.Context, cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = exec.CommandContext(ctx, taskkillExecutable(), "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+	if executable, ok := taskkillExecutable(); ok {
+		_ = exec.CommandContext(ctx, executable, "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+	}
 	_ = cmd.Process.Kill()
 }
 
-func taskkillExecutable() string {
-	if systemDirectory, err := windows.GetSystemDirectory(); err == nil {
-		candidate := filepath.Join(systemDirectory, "taskkill.exe")
-		if info, statErr := os.Stat(candidate); statErr == nil && !info.IsDir() {
-			return candidate
-		}
+func taskkillExecutable() (string, bool) {
+	systemDirectory, err := windows.GetSystemDirectory()
+	if err != nil {
+		return "", false
 	}
-	if path, err := exec.LookPath("taskkill.exe"); err == nil {
-		return path
+	candidate := filepath.Join(systemDirectory, "taskkill.exe")
+	info, err := os.Stat(candidate)
+	if err != nil || info.IsDir() {
+		return "", false
 	}
-	return "taskkill.exe"
+	return candidate, true
 }
