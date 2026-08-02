@@ -95,17 +95,18 @@ type Option func(*Manager)
 
 // Manager owns trusted MCP Airlock server definitions and read-only checks.
 type Manager struct {
-	definitions   []ServerDefinition
-	projectsDir   string
-	inventoryPath string
-	allowlist     ToolAllowlist
-	inventoryMu   sync.Mutex
-	timeout       time.Duration
-	probe         ProbeFunc
-	discoverer    ToolDiscoveryFunc
-	launcher      LauncherFunc
-	toolLauncher  ToolSessionLauncherFunc
-	lifecycle     *lifecycleStore
+	definitions     []ServerDefinition
+	projectsDir     string
+	inventoryPath   string
+	allowlist       ToolAllowlist
+	inventoryMu     sync.Mutex
+	timeout         time.Duration
+	toolCallTimeout time.Duration
+	probe           ProbeFunc
+	discoverer      ToolDiscoveryFunc
+	launcher        LauncherFunc
+	toolLauncher    ToolSessionLauncherFunc
+	lifecycle       *lifecycleStore
 }
 
 // NewManager creates an Airlock registry. When projectsDir is set, Airlock
@@ -114,15 +115,16 @@ type Manager struct {
 // process environment command overrides.
 func NewManager(projectsDir string, opts ...Option) *Manager {
 	m := &Manager{
-		definitions:   builtInDefinitions(),
-		projectsDir:   projectsDir,
-		inventoryPath: inventoryPath(projectsDir),
-		timeout:       defaultHealthTimeout,
-		probe:         defaultProbe,
-		discoverer:    defaultToolDiscoverer,
-		launcher:      defaultLauncher,
-		toolLauncher:  defaultToolSessionLauncher,
-		lifecycle:     newLifecycleStore(),
+		definitions:     builtInDefinitions(),
+		projectsDir:     projectsDir,
+		inventoryPath:   inventoryPath(projectsDir),
+		timeout:         defaultHealthTimeout,
+		toolCallTimeout: defaultToolCallTimeout,
+		probe:           defaultProbe,
+		discoverer:      defaultToolDiscoverer,
+		launcher:        defaultLauncher,
+		toolLauncher:    defaultToolSessionLauncher,
+		lifecycle:       newLifecycleStore(),
 	}
 	for _, opt := range opts {
 		opt(m)

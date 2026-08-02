@@ -40,7 +40,7 @@ func TestManagerInvokeToolUsesIsolatedSanitizedProcess(t *testing.T) {
 }
 
 func TestManagerInvokeToolTimesOutAndReapsProcess(t *testing.T) {
-	manager := newToolInvokerManager(t, "mcp-tool-helper-child-stdout-hang", WithTimeout(50*time.Millisecond))
+	manager := newToolInvokerManager(t, "mcp-tool-helper-child-stdout-hang", WithToolCallTimeout(50*time.Millisecond))
 	startedAt := time.Now()
 
 	_, err := manager.invokeTool(context.Background(), testToolCallRequest(t))
@@ -49,6 +49,20 @@ func TestManagerInvokeToolTimesOutAndReapsProcess(t *testing.T) {
 	}
 	if elapsed := time.Since(startedAt); elapsed > time.Second {
 		t.Fatalf("timed-out tool process was not reaped promptly: %s", elapsed)
+	}
+}
+
+func TestToolCallTimeoutIsIndependentFromHealthTimeout(t *testing.T) {
+	manager := NewManager(t.TempDir(),
+		WithTimeout(25*time.Millisecond),
+		WithToolCallTimeout(3*time.Second),
+	)
+
+	if manager.timeout != 25*time.Millisecond {
+		t.Fatalf("health timeout = %s, want 25ms", manager.timeout)
+	}
+	if manager.toolCallTimeout != 3*time.Second {
+		t.Fatalf("tool timeout = %s, want 3s", manager.toolCallTimeout)
 	}
 }
 

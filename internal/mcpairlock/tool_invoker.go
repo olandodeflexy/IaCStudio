@@ -9,6 +9,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
+)
+
+const (
+	defaultToolCallTimeout    = 2 * time.Minute
+	toolSessionCleanupTimeout = 2 * time.Second
 )
 
 var (
@@ -16,6 +22,8 @@ var (
 	ErrToolSessionLaunch     = errors.New("mcp tool session launch failed")
 	ErrToolSessionCleanup    = errors.New("mcp tool session cleanup failed")
 )
+
+var _ toolInvoker = (*Manager)(nil)
 
 // ToolSession is one isolated stdio MCP process. The session owns its streams
 // and must stop and reap the process when the invocation ends.
@@ -34,6 +42,15 @@ func WithToolSessionLauncher(launcher ToolSessionLauncherFunc) Option {
 	return func(m *Manager) {
 		if launcher != nil {
 			m.toolLauncher = launcher
+		}
+	}
+}
+
+// WithToolCallTimeout changes the hard deadline for one MCP tool invocation.
+func WithToolCallTimeout(timeout time.Duration) Option {
+	return func(m *Manager) {
+		if timeout > 0 {
+			m.toolCallTimeout = timeout
 		}
 	}
 }
@@ -57,7 +74,7 @@ func (m *Manager) invokeTool(ctx context.Context, request ToolCallRequest) (resu
 		return ToolCallResult{}, fmt.Errorf("%w: %s", ErrToolServerUnavailable, status.State)
 	}
 
-	callCtx, cancel := context.WithTimeout(ctx, m.timeout)
+	callCtx, cancel := context.WithTimeout(ctx, m.toolCallTimeout)
 	defer cancel()
 	session, err := m.toolLauncher(callCtx, definition)
 	if err != nil {
@@ -70,7 +87,7 @@ func (m *Manager) invokeTool(ctx context.Context, request ToolCallRequest) (resu
 		return ToolCallResult{}, ErrToolSessionLaunch
 	}
 	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), m.timeout)
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), toolSessionCleanupTimeout)
 		defer cleanupCancel()
 		if err := session.Stop(cleanupCtx); err != nil {
 			result = ToolCallResult{}
@@ -82,7 +99,7 @@ func (m *Manager) invokeTool(ctx context.Context, request ToolCallRequest) (resu
 	go func() {
 		select {
 		case <-callCtx.Done():
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), m.timeout)
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), toolSessionCleanupTimeout)
 			defer cleanupCancel()
 			_ = session.Stop(cleanupCtx)
 		case <-stopOnCancel:
