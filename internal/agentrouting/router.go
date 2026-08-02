@@ -70,3 +70,10 @@ func (r *Router) Route(runID string, request Request) (RouteResult, error) {
 	}
 	return RouteResult{Decision: decision, Run: run}, nil
 }
+
+func (r *Router) currentRun(runID string) (agentruns.Run, bool) {
+	if r == nil || r.recorder == nil || r.recorder.store == nil {
+		return agentruns.Run{}, false
+	}
+	return r.recorder.store.Get(runID)
+}
