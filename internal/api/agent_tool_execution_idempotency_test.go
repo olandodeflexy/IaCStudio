@@ -131,6 +131,62 @@ func TestAgentToolExecutionAttemptStoreReleasesFailedAttempts(t *testing.T) {
 	}
 }
 
+func TestAgentToolExecutionAttemptStoreReleasesPanickedAttempts(t *testing.T) {
+	store := newAgentToolExecutionAttemptStore(1)
+	request := testAgentToolExecutionRequest()
+	arguments := testAgentToolExecutionArguments(t, `{}`)
+	started := make(chan struct{})
+	release := make(chan struct{})
+	recovered := make(chan any, 1)
+
+	go func() {
+		defer func() {
+			recovered <- recover()
+		}()
+		_, _, _ = store.execute(context.Background(), "run_000001", "panicked", request, arguments, func() (agentrouting.ExecutionResult, error) {
+			close(started)
+			<-release
+			panic("callback failure")
+		})
+	}()
+	<-started
+
+	key := agentToolExecutionAttemptKey{runID: "run_000001", key: "panicked"}
+	store.mu.Lock()
+	attempt := store.entries[key]
+	store.mu.Unlock()
+	if attempt == nil {
+		t.Fatal("in-flight attempt was not registered")
+	}
+
+	close(release)
+	if got := <-recovered; got != "callback failure" {
+		t.Fatalf("recovered panic = %v, want original value", got)
+	}
+	select {
+	case <-attempt.done:
+		if !errors.Is(attempt.err, errAgentToolExecutionCallbackPanicked) {
+			t.Fatalf("waiter error = %v, want stable panic error", attempt.err)
+		}
+	default:
+		t.Fatal("panicked attempt did not release waiters")
+	}
+
+	store.mu.Lock()
+	_, retained := store.entries[key]
+	store.mu.Unlock()
+	if retained {
+		t.Fatal("panicked attempt remained in replay store")
+	}
+
+	got, replayed, err := store.execute(context.Background(), "run_000001", "panicked", request, arguments, func() (agentrouting.ExecutionResult, error) {
+		return testAgentToolExecutionResult("retried"), nil
+	})
+	if err != nil || replayed || got.Result == nil || got.Result.Output != "retried" {
+		t.Fatalf("retry result = %+v, replayed = %t, error = %v; want fresh valid execution", got, replayed, err)
+	}
+}
+
 func TestAgentToolExecutionAttemptStoreRejectsWriteRisk(t *testing.T) {
 	store := newAgentToolExecutionAttemptStore(1)
 	request := testAgentToolExecutionRequest()

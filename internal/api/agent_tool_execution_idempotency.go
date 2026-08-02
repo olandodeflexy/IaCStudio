@@ -18,6 +18,7 @@ var (
 	errAgentToolExecutionInvalidIdempotencyKey = errors.New("invalid tool execution idempotency key")
 	errAgentToolExecutionAttemptCapacity       = errors.New("tool execution idempotency capacity reached")
 	errAgentToolExecutionRequiresReadOnly      = errors.New("tool execution idempotency supports read-only routes only")
+	errAgentToolExecutionCallbackPanicked      = errors.New("tool execution callback panicked")
 )
 
 type agentToolExecutionAttemptKey struct {
@@ -117,7 +118,20 @@ func (s *agentToolExecutionAttemptStore) execute(
 	s.entries[key] = attempt
 	s.mu.Unlock()
 
-	result, err := execute()
+	var result agentrouting.ExecutionResult
+	func() {
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				s.mu.Lock()
+				attempt.err = errAgentToolExecutionCallbackPanicked
+				delete(s.entries, key)
+				close(attempt.done)
+				s.mu.Unlock()
+				panic(recovered)
+			}
+		}()
+		result, err = execute()
+	}()
 	if err == nil {
 		if validationErr := validateAgentToolExecutionResult(result); validationErr != nil {
 			result = agentrouting.ExecutionResult{}
