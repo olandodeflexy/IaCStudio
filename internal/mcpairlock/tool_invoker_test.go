@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -49,6 +50,29 @@ func TestManagerInvokeToolTimesOutAndReapsProcess(t *testing.T) {
 	}
 	if elapsed := time.Since(startedAt); elapsed > time.Second {
 		t.Fatalf("timed-out tool process was not reaped promptly: %s", elapsed)
+	}
+}
+
+func TestManagerInvokeToolStopsSessionOnceOnTimeout(t *testing.T) {
+	output, outputWriter := io.Pipe()
+	t.Cleanup(func() {
+		_ = output.Close()
+		_ = outputWriter.Close()
+	})
+	session := &blockingToolSession{output: output, outputWriter: outputWriter}
+	manager := newToolInvokerManager(t, "unused",
+		WithToolCallTimeout(25*time.Millisecond),
+		WithToolSessionLauncher(func(context.Context, ServerDefinition) (ToolSession, error) {
+			return session, nil
+		}),
+	)
+
+	_, err := manager.invokeTool(context.Background(), testToolCallRequest(t))
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("InvokeTool error = %v, want context deadline exceeded", err)
+	}
+	if calls := session.stopCalls.Load(); calls != 1 {
+		t.Fatalf("Stop calls = %d, want 1", calls)
 	}
 }
 
@@ -232,6 +256,26 @@ type fakeToolSession struct {
 	output  io.Reader
 	stopErr error
 	stopped bool
+}
+
+type blockingToolSession struct {
+	input        bytes.Buffer
+	output       *io.PipeReader
+	outputWriter *io.PipeWriter
+	stopCalls    atomic.Int32
+}
+
+func (s *blockingToolSession) ServerInput() io.Writer {
+	return &s.input
+}
+
+func (s *blockingToolSession) ServerOutput() io.Reader {
+	return s.output
+}
+
+func (s *blockingToolSession) Stop(context.Context) error {
+	s.stopCalls.Add(1)
+	return s.outputWriter.Close()
 }
 
 func (s *fakeToolSession) ServerInput() io.Writer {

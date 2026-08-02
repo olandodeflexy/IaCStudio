@@ -86,10 +86,18 @@ func (m *Manager) invokeTool(ctx context.Context, request ToolCallRequest) (resu
 	if session == nil {
 		return ToolCallResult{}, ErrToolSessionLaunch
 	}
+	var stopOnce sync.Once
+	var stopErr error
+	stopSession := func() error {
+		stopOnce.Do(func() {
+			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), toolSessionCleanupTimeout)
+			defer cleanupCancel()
+			stopErr = session.Stop(cleanupCtx)
+		})
+		return stopErr
+	}
 	defer func() {
-		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), toolSessionCleanupTimeout)
-		defer cleanupCancel()
-		if err := session.Stop(cleanupCtx); err != nil {
+		if err := stopSession(); err != nil {
 			result = ToolCallResult{}
 			returnErr = errors.Join(returnErr, ErrToolSessionCleanup)
 		}
@@ -99,9 +107,7 @@ func (m *Manager) invokeTool(ctx context.Context, request ToolCallRequest) (resu
 	go func() {
 		select {
 		case <-callCtx.Done():
-			cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), toolSessionCleanupTimeout)
-			defer cleanupCancel()
-			_ = session.Stop(cleanupCtx)
+			_ = stopSession()
 		case <-stopOnCancel:
 		}
 	}()
