@@ -1,0 +1,181 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"log"
+	"net/http"
+
+	"github.com/iac-studio/iac-studio/internal/agentrouting"
+	"github.com/iac-studio/iac-studio/internal/agentruns"
+	"github.com/iac-studio/iac-studio/internal/mcpairlock"
+)
+
+// AgentToolExecutor is the guarded execution boundary exposed to the API.
+// Implementations remain responsible for authorization, audit recording, and
+// output validation before returning a result.
+type AgentToolExecutor interface {
+	Execute(
+		context.Context,
+		string,
+		agentrouting.Request,
+		mcpairlock.ToolCallArguments,
+	) (agentrouting.ExecutionResult, error)
+}
+
+type agentToolExecutionRequest struct {
+	ConnectionID string                       `json:"connection_id"`
+	ServerID     string                       `json:"server_id"`
+	ToolName     string                       `json:"tool_name"`
+	Arguments    mcpairlock.ToolCallArguments `json:"arguments"`
+}
+
+func registerAgentToolExecutionRoutes(
+	mux *http.ServeMux,
+	projectsDir string,
+	store *agentruns.Store,
+	executor AgentToolExecutor,
+) {
+	if executor == nil {
+		return
+	}
+	attempts := newAgentToolExecutionAttemptStore(maxAgentToolExecutionReplayEntries)
+
+	mux.HandleFunc("POST /api/projects/{name}/agent-runs/{id}/tool-routes/execute", func(w http.ResponseWriter, r *http.Request) {
+		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		idempotencyKey, ok := requireAgentToolRouteIdempotencyKey(w, r)
+		if !ok {
+			return
+		}
+		run, routeRequest, arguments, ok := readAgentToolExecutionRequest(w, r, projectsDir, store)
+		if !ok {
+			return
+		}
+
+		result, replayed, err := attempts.execute(
+			r.Context(),
+			run.ID,
+			idempotencyKey,
+			routeRequest,
+			arguments,
+			func() (agentrouting.ExecutionResult, error) {
+				current, ok := store.Get(run.ID)
+				if !ok || !agentToolExecutionRunIsActive(current) {
+					return agentrouting.ExecutionResult{}, agentrouting.ErrInvalidToolExecution
+				}
+				return executor.Execute(r.Context(), run.ID, routeRequest, arguments)
+			},
+		)
+		if err != nil {
+			writeAgentToolExecutionError(w, err)
+			return
+		}
+		if replayed {
+			current, ok := store.Get(run.ID)
+			if !ok {
+				http.Error(w, "agent run not found", http.StatusNotFound)
+				return
+			}
+			result.Route.Run = current
+			w.Header().Set("Idempotency-Replayed", "true")
+		}
+		setAgentRunJSONHeader(w)
+		_ = json.NewEncoder(w).Encode(result)
+	})
+}
+
+func readAgentToolExecutionRequest(
+	w http.ResponseWriter,
+	r *http.Request,
+	projectsDir string,
+	store *agentruns.Store,
+) (agentruns.Run, agentrouting.Request, mcpairlock.ToolCallArguments, bool) {
+	name := r.PathValue("name")
+	if !requireExistingAgentRunProject(w, projectsDir, name) {
+		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
+	}
+	run, ok := store.Get(r.PathValue("id"))
+	if !ok || run.Project != name {
+		http.Error(w, "agent run not found", http.StatusNotFound)
+		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
+	}
+	if run.ProviderID == "" {
+		http.Error(w, "agent run provider is not configured", http.StatusConflict)
+		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
+	}
+	var req agentToolExecutionRequest
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&req); err != nil {
+		writeAgentToolRouteBodyError(w, err)
+		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
+	}
+	if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		writeAgentToolRouteBodyError(w, err)
+		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
+	}
+
+	request := agentrouting.Request{
+		Project:      run.Project,
+		ProviderID:   run.ProviderID,
+		ConnectionID: req.ConnectionID,
+		ServerID:     req.ServerID,
+		ToolName:     req.ToolName,
+		Mode:         run.Mode,
+		Risk:         mcpairlock.RiskReadOnly,
+	}
+	if err := request.Validate(); err != nil {
+		http.Error(w, "invalid tool execution request", http.StatusBadRequest)
+		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
+	}
+	if _, err := req.Arguments.MarshalJSON(); err != nil {
+		http.Error(w, "invalid tool execution arguments", http.StatusBadRequest)
+		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
+	}
+	return run, request, req.Arguments, true
+}
+
+func agentToolExecutionRunIsActive(run agentruns.Run) bool {
+	if run.Canceled || (run.Status != agentruns.StatusQueued && run.Status != agentruns.StatusRunning) {
+		return false
+	}
+	for _, approval := range run.Approvals {
+		if approval.Status == agentruns.ApprovalPending {
+			return false
+		}
+	}
+	return true
+}
+
+func writeAgentToolExecutionError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, errAgentToolExecutionIdempotencyConflict):
+		http.Error(w, "idempotency key was already used for a different tool execution", http.StatusConflict)
+	case errors.Is(err, errAgentToolExecutionInvalidIdempotencyKey),
+		errors.Is(err, agentrouting.ErrInvalidRequest),
+		errors.Is(err, mcpairlock.ErrInvalidToolCallArguments),
+		errors.Is(err, mcpairlock.ErrInvalidToolCallRequest):
+		http.Error(w, "invalid tool execution request", http.StatusBadRequest)
+	case errors.Is(err, errAgentToolExecutionAttemptCapacity):
+		http.Error(w, "tool execution is temporarily unavailable", http.StatusServiceUnavailable)
+	case errors.Is(err, agentruns.ErrNotFound):
+		http.Error(w, "agent run not found", http.StatusNotFound)
+	case errors.Is(err, agentruns.ErrTerminated),
+		errors.Is(err, agentrouting.ErrRunScopeMismatch),
+		errors.Is(err, agentrouting.ErrInvalidDecision),
+		errors.Is(err, agentrouting.ErrInvalidToolExecution):
+		http.Error(w, "agent run cannot execute this tool route", http.StatusConflict)
+	case errors.Is(err, agentrouting.ErrToolInvocationFailed):
+		http.Error(w, "MCP tool invocation failed", http.StatusBadGateway)
+	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+		http.Error(w, "tool execution request canceled", http.StatusRequestTimeout)
+	default:
+		log.Printf("agent tool execution failed (%T)", agentToolRouteRootError(err))
+		http.Error(w, "agent tool execution failed", http.StatusInternalServerError)
+	}
+}
