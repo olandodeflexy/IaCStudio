@@ -239,8 +239,8 @@ func truncateUTF8(value string, limit int) (string, bool) {
 	return value[:end], true
 }
 
-// ToolInvoker is the transport boundary implemented by a later stdio MCP
-// client. Callers must authorize and audit the route before invoking it.
-type ToolInvoker interface {
-	InvokeTool(context.Context, ToolCallRequest) (ToolCallResult, error)
+// toolInvoker is the package-internal transport boundary. The routing layer
+// must authorize and audit the route before invoking it.
+type toolInvoker interface {
+	invokeTool(context.Context, ToolCallRequest) (ToolCallResult, error)
 }
