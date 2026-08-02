@@ -229,7 +229,7 @@ func TestExecutorRejectsMissingDependenciesAndContext(t *testing.T) {
 		return mcpairlock.NewToolCallResult(nil, false), nil
 	}
 
-	if _, err := NewExecutor(nil, invoke); !errors.Is(err, ErrToolRouteExecutorRequired) {
+	if _, err := NewExecutor(nil, invoke); !errors.Is(err, ErrToolRouteRouterRequired) {
 		t.Fatalf("NewExecutor(nil router) error = %v", err)
 	}
 	if _, err := NewExecutor(router, nil); !errors.Is(err, ErrToolInvokerRequired) {
@@ -243,7 +243,7 @@ func TestExecutorRejectsMissingDependenciesAndContext(t *testing.T) {
 		t.Fatalf("Execute(nil context) error = %v", err)
 	}
 	var nilExecutor *Executor
-	if _, err := nilExecutor.Execute(context.Background(), run.ID, request, executionArguments(t)); !errors.Is(err, ErrToolRouteExecutorRequired) {
+	if _, err := nilExecutor.Execute(context.Background(), run.ID, request, executionArguments(t)); !errors.Is(err, ErrToolRouteRouterRequired) {
 		t.Fatalf("nil Execute() error = %v", err)
 	}
 }

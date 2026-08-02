@@ -10,19 +10,20 @@ import (
 )
 
 var (
-	ErrToolRouteExecutorRequired = errors.New("tool route executor is required")
-	ErrToolInvokerRequired       = errors.New("tool invoker is required")
-	ErrToolExecutionContext      = errors.New("tool execution context is required")
-	ErrInvalidToolExecution      = errors.New("invalid authorized tool execution")
-	ErrToolInvocationFailed      = errors.New("MCP tool invocation failed")
+	ErrToolRouteRouterRequired = errors.New("tool route router is required")
+	ErrToolInvokerRequired     = errors.New("tool invoker is required")
+	ErrToolExecutionContext    = errors.New("tool execution context is required")
+	ErrInvalidToolExecution    = errors.New("invalid authorized tool execution")
+	ErrToolInvocationFailed    = errors.New("MCP tool invocation failed")
 )
 
 // ToolInvokeFunc runs one transport request that the Executor has already
 // authorized and recorded on an Agent Run.
 type ToolInvokeFunc func(context.Context, mcpairlock.ToolCallRequest) (mcpairlock.ToolCallResult, error)
 
-// ExecutionResult includes a route decision for every recorded authorization
-// outcome. Result is populated only when the external tool was invoked.
+// ExecutionResult contains the recorded route and optional tool result for a
+// successful Execute call. Execute returns a zero result on every error, even
+// when routing was recorded before a later invocation failure.
 type ExecutionResult struct {
 	Route   RouteResult                `json:"route"`
 	Invoked bool                       `json:"invoked"`
@@ -38,7 +39,7 @@ type Executor struct {
 
 func NewExecutor(router *Router, invoke ToolInvokeFunc) (*Executor, error) {
 	if router == nil {
-		return nil, ErrToolRouteExecutorRequired
+		return nil, ErrToolRouteRouterRequired
 	}
 	if invoke == nil {
 		return nil, ErrToolInvokerRequired
@@ -55,7 +56,7 @@ func (e *Executor) Execute(
 	arguments mcpairlock.ToolCallArguments,
 ) (ExecutionResult, error) {
 	if e == nil || e.router == nil {
-		return ExecutionResult{}, ErrToolRouteExecutorRequired
+		return ExecutionResult{}, ErrToolRouteRouterRequired
 	}
 	if e.invoke == nil {
 		return ExecutionResult{}, ErrToolInvokerRequired
