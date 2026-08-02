@@ -13,14 +13,17 @@ import (
 )
 
 const (
-	defaultToolCallTimeout    = 2 * time.Minute
-	toolSessionCleanupTimeout = 2 * time.Second
+	defaultToolCallTimeout      = 2 * time.Minute
+	toolSessionCleanupTimeout   = 2 * time.Second
+	toolProcessTerminateTimeout = 500 * time.Millisecond
+	toolProcessReapTimeout      = time.Second
 )
 
 var (
-	ErrToolServerUnavailable = errors.New("mcp tool server is unavailable")
-	ErrToolSessionLaunch     = errors.New("mcp tool session launch failed")
-	ErrToolSessionCleanup    = errors.New("mcp tool session cleanup failed")
+	ErrToolServerUnavailable  = errors.New("mcp tool server is unavailable")
+	ErrToolSessionLaunch      = errors.New("mcp tool session launch failed")
+	ErrToolSessionCleanup     = errors.New("mcp tool session cleanup failed")
+	errToolProcessReapTimeout = errors.New("mcp tool process reap timed out")
 )
 
 var _ toolInvoker = (*Manager)(nil)
@@ -99,7 +102,7 @@ func (m *Manager) invokeTool(ctx context.Context, request ToolCallRequest) (resu
 	defer func() {
 		if err := stopSession(); err != nil {
 			result = ToolCallResult{}
-			returnErr = errors.Join(returnErr, ErrToolSessionCleanup)
+			returnErr = ErrToolSessionCleanup
 		}
 	}()
 	stopOnCancel := make(chan struct{})
@@ -226,12 +229,27 @@ func (s *stdioToolSession) stop() {
 	var returnErr error
 	_ = s.stdin.Close()
 	s.cancel()
-	terminateToolProcessTree(s.cmd)
-	<-s.waitDone
+	terminateCtx, terminateCancel := context.WithTimeout(context.Background(), toolProcessTerminateTimeout)
+	terminateToolProcessTree(terminateCtx, s.cmd)
+	terminateCancel()
+	if err := waitForToolProcess(s.waitDone, toolProcessReapTimeout); err != nil {
+		returnErr = errors.Join(returnErr, err)
+	}
 	_ = s.stdout.Close()
 	if err := os.RemoveAll(s.dir); err != nil {
 		returnErr = errors.Join(returnErr, err)
 	}
 	s.stopErr = returnErr
 	close(s.stopDone)
+}
+
+func waitForToolProcess(done <-chan struct{}, timeout time.Duration) error {
+	timer := time.NewTimer(timeout)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return errToolProcessReapTimeout
+	}
 }

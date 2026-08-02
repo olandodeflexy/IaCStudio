@@ -118,6 +118,34 @@ func TestManagerInvokeToolFailsClosedOnLaunchAndCleanupErrors(t *testing.T) {
 			t.Fatalf("cleanup failure returned result or skipped stop: result=%+v stopped=%v", result, session.stopped)
 		}
 	})
+
+	t.Run("cleanup replaces protocol error", func(t *testing.T) {
+		session := &fakeToolSession{
+			output:  strings.NewReader(`{"jsonrpc":"2.0","id":1,"error":{"code":-1,"message":"untrusted detail"}}`),
+			stopErr: errors.New("cleanup failed"),
+		}
+		manager := newToolInvokerManager(t, "unused", WithToolSessionLauncher(func(context.Context, ServerDefinition) (ToolSession, error) {
+			return session, nil
+		}))
+		result, err := manager.invokeTool(context.Background(), request)
+		if err != ErrToolSessionCleanup {
+			t.Fatalf("InvokeTool error = %v, want cleanup sentinel only", err)
+		}
+		if result != (ToolCallResult{}) {
+			t.Fatalf("cleanup failure returned result: %+v", result)
+		}
+	})
+}
+
+func TestWaitForToolProcessIsBounded(t *testing.T) {
+	startedAt := time.Now()
+	err := waitForToolProcess(make(chan struct{}), 25*time.Millisecond)
+	if !errors.Is(err, errToolProcessReapTimeout) {
+		t.Fatalf("waitForToolProcess error = %v, want reap timeout", err)
+	}
+	if elapsed := time.Since(startedAt); elapsed > time.Second {
+		t.Fatalf("waitForToolProcess exceeded bound: %s", elapsed)
+	}
 }
 
 func TestManagerInvokeToolRejectsUnavailableServerBeforeLaunch(t *testing.T) {

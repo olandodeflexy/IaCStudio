@@ -3,6 +3,7 @@
 package mcpairlock
 
 import (
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,11 +17,11 @@ func configureToolCommand(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: syscall.CREATE_NEW_PROCESS_GROUP}
 }
 
-func terminateToolProcessTree(cmd *exec.Cmd) {
+func terminateToolProcessTree(ctx context.Context, cmd *exec.Cmd) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}
-	_ = exec.Command(taskkillExecutable(), "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
+	_ = exec.CommandContext(ctx, taskkillExecutable(), "/T", "/F", "/PID", strconv.Itoa(cmd.Process.Pid)).Run()
 	_ = cmd.Process.Kill()
 }
 
