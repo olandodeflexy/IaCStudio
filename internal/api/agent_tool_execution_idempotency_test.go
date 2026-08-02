@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -147,6 +148,34 @@ func TestAgentToolExecutionAttemptStoreRejectsWriteRisk(t *testing.T) {
 	}
 	if called.Load() {
 		t.Fatal("write execution callback was called")
+	}
+}
+
+func TestAgentToolExecutionAttemptStoreRejectsInvalidIdempotencyKeys(t *testing.T) {
+	store := newAgentToolExecutionAttemptStore(1)
+	request := testAgentToolExecutionRequest()
+	arguments := testAgentToolExecutionArguments(t, `{}`)
+	invalidKeys := []string{
+		"",
+		" retry",
+		strings.Repeat("a", maxAgentToolRouteIdempotencyKeyLength+1),
+		"r\u00e9try",
+	}
+
+	for _, key := range invalidKeys {
+		t.Run(key, func(t *testing.T) {
+			var called atomic.Bool
+			_, replayed, err := store.execute(context.Background(), "run_000001", key, request, arguments, func() (agentrouting.ExecutionResult, error) {
+				called.Store(true)
+				return agentrouting.ExecutionResult{}, nil
+			})
+			if !errors.Is(err, errAgentToolExecutionInvalidIdempotencyKey) || replayed {
+				t.Fatalf("invalid key error = %v, replayed = %t; want validation failure", err, replayed)
+			}
+			if called.Load() {
+				t.Fatal("invalid idempotency key reached execution callback")
+			}
+		})
 	}
 }
 

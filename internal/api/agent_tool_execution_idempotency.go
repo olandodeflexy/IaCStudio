@@ -14,9 +14,10 @@ import (
 const maxAgentToolExecutionReplayEntries = 64
 
 var (
-	errAgentToolExecutionIdempotencyConflict = errors.New("idempotency key reused for a different tool execution")
-	errAgentToolExecutionAttemptCapacity     = errors.New("tool execution idempotency capacity reached")
-	errAgentToolExecutionRequiresReadOnly    = errors.New("tool execution idempotency supports read-only routes only")
+	errAgentToolExecutionIdempotencyConflict   = errors.New("idempotency key reused for a different tool execution")
+	errAgentToolExecutionInvalidIdempotencyKey = errors.New("invalid tool execution idempotency key")
+	errAgentToolExecutionAttemptCapacity       = errors.New("tool execution idempotency capacity reached")
+	errAgentToolExecutionRequiresReadOnly      = errors.New("tool execution idempotency supports read-only routes only")
 )
 
 type agentToolExecutionAttemptKey struct {
@@ -73,6 +74,9 @@ func (s *agentToolExecutionAttemptStore) execute(
 	}
 	if execute == nil {
 		return agentrouting.ExecutionResult{}, false, agentrouting.ErrToolInvokerRequired
+	}
+	if !validAgentToolRouteIdempotencyKey(idempotencyKey) {
+		return agentrouting.ExecutionResult{}, false, errAgentToolExecutionInvalidIdempotencyKey
 	}
 	if request.Risk != mcpairlock.RiskReadOnly {
 		return agentrouting.ExecutionResult{}, false, errAgentToolExecutionRequiresReadOnly
