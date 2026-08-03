@@ -446,6 +446,30 @@ export interface AgentToolRoutePreviewResponse {
   decision: AgentToolRouteDecision;
 }
 
+export interface AgentToolExecutionInput {
+  connection_id: string;
+  server_id: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface AgentToolCallResult {
+  output: string;
+  is_error: boolean;
+  untrusted_output: boolean;
+  redacted: boolean;
+  truncated: boolean;
+}
+
+export interface AgentToolExecutionResponse {
+  route: {
+    decision: AgentToolRouteDecision;
+    run: AgentRun;
+  };
+  invoked: boolean;
+  result?: AgentToolCallResult;
+}
+
 export type AgentToolPolicyEffect = 'allow' | 'deny';
 
 export interface AgentToolPolicyScope {
@@ -712,6 +736,23 @@ async function check(res: Response): Promise<Response> {
   return res;
 }
 
+const maxAgentToolRouteIdempotencyKeyLength = 128;
+
+function hasValidAgentToolRouteIdempotencyKey(key: string): boolean {
+  if (
+    key.length === 0 ||
+    key.length > maxAgentToolRouteIdempotencyKeyLength ||
+    key.trim() !== key
+  ) {
+    return false;
+  }
+  for (let i = 0; i < key.length; i += 1) {
+    const code = key.charCodeAt(i);
+    if (code < 0x21 || code > 0x7e) return false;
+  }
+  return true;
+}
+
 export const api = {
   async listMCPAirlockServers(): Promise<MCPAirlockServerStatus[]> {
     const res = await fetch(`${BASE}/api/mcp-airlock/servers`);
@@ -871,12 +912,47 @@ export const api = {
     id: string,
     input: AgentToolRoutePreviewInput,
   ): Promise<AgentToolRoutePreviewResponse> {
+    const body: AgentToolRoutePreviewInput = {
+      connection_id: input.connection_id,
+      server_id: input.server_id,
+      tool_name: input.tool_name,
+      risk: input.risk,
+    };
     const res = await fetch(
       `${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}/tool-routes/preview`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(input),
+        body: JSON.stringify(body),
+      },
+    );
+    return (await check(res)).json();
+  },
+
+  async executeAgentToolRoute(
+    projectName: string,
+    id: string,
+    input: AgentToolExecutionInput,
+    idempotencyKey: string,
+  ): Promise<AgentToolExecutionResponse> {
+    if (!hasValidAgentToolRouteIdempotencyKey(idempotencyKey)) {
+      throw new Error('a valid Idempotency-Key header is required');
+    }
+    const body: AgentToolExecutionInput = {
+      connection_id: input.connection_id,
+      server_id: input.server_id,
+      tool_name: input.tool_name,
+      arguments: input.arguments,
+    };
+    const res = await fetch(
+      `${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}/tool-routes/execute`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
+        body: JSON.stringify(body),
       },
     );
     return (await check(res)).json();
