@@ -121,6 +121,43 @@ func TestAgentToolExecutionUsesServerOwnedReadOnlyScope(t *testing.T) {
 	}
 }
 
+func TestRouterOptionsMountAgentToolExecutionRoute(t *testing.T) {
+	root, store, run := agentToolRouteFixture(t, "codex")
+	result := mcpairlock.NewToolCallResult([]byte("reports\n"), false)
+	fake := &fakeAgentToolExecutor{result: agentrouting.ExecutionResult{
+		Route: agentrouting.RouteResult{
+			Decision: agentrouting.Decision{
+				Status:          agentrouting.DecisionAllowed,
+				Reason:          agentrouting.ReasonAllowed,
+				Allowed:         true,
+				UntrustedOutput: true,
+			},
+			Run: run,
+		},
+		Invoked: true,
+		Result:  &result,
+	}}
+	router := NewRouterWithOptions(nil, nil, nil, nil, root, RouterOptions{
+		AgentRuns:         store,
+		AgentToolExecutor: fake,
+	})
+
+	rec := postAgentToolExecution(
+		router,
+		"demo",
+		run.ID,
+		`{"connection_id":"aws-prod","server_id":"aws","tool_name":"list_buckets","arguments":{}}`,
+		"application/json",
+		"router-option-execution",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if fake.calls != 1 {
+		t.Fatalf("Execute calls = %d, want one", fake.calls)
+	}
+}
+
 func TestAgentToolExecutionRejectsClientScopeAndInactiveRuns(t *testing.T) {
 	root, store, run := agentToolRouteFixture(t, "codex")
 	fake := &fakeAgentToolExecutor{}

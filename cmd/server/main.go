@@ -122,6 +122,7 @@ func runServer() error {
 		AgentRuns:         agentRouting.runs,
 		AgentToolPolicies: agentRouting.policies,
 		AgentToolRouter:   agentRouting.router,
+		AgentToolExecutor: agentRouting.executor,
 		AppVersion:        AppVersion,
 	})
 
