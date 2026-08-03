@@ -300,3 +300,34 @@ func TestAgentToolExecutionDistinguishesCancellationAndTimeout(t *testing.T) {
 		})
 	}
 }
+
+func TestAgentToolExecutionRunRecheckReturnsNotFoundAfterEviction(t *testing.T) {
+	store := agentruns.NewStore(agentruns.WithMaxRuns(1))
+	first, err := store.Create(agentruns.CreateRequest{
+		Project:    "demo",
+		Prompt:     "inventory the project",
+		ProviderID: "codex",
+		Mode:       agentruns.ModeReadOnly,
+	})
+	if err != nil {
+		t.Fatalf("Create(first): %v", err)
+	}
+	if _, err := store.Create(agentruns.CreateRequest{
+		Project:    "demo",
+		Prompt:     "inventory another project",
+		ProviderID: "codex",
+		Mode:       agentruns.ModeReadOnly,
+	}); err != nil {
+		t.Fatalf("Create(second): %v", err)
+	}
+
+	err = requireActiveAgentToolExecutionRun(store, first.ID)
+	if !errors.Is(err, agentruns.ErrNotFound) {
+		t.Fatalf("run recheck error = %v, want %v", err, agentruns.ErrNotFound)
+	}
+	rec := httptest.NewRecorder()
+	writeAgentToolExecutionError(rec, err)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusNotFound, rec.Body.String())
+	}
+}

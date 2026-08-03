@@ -64,9 +64,8 @@ func registerAgentToolExecutionRoutes(
 			routeRequest,
 			arguments,
 			func() (agentrouting.ExecutionResult, error) {
-				current, ok := store.Get(run.ID)
-				if !ok || !agentToolExecutionRunIsActive(current) {
-					return agentrouting.ExecutionResult{}, agentrouting.ErrInvalidToolExecution
+				if err := requireActiveAgentToolExecutionRun(store, run.ID); err != nil {
+					return agentrouting.ExecutionResult{}, err
 				}
 				return executor.Execute(r.Context(), run.ID, routeRequest, arguments)
 			},
@@ -150,6 +149,17 @@ func agentToolExecutionRunIsActive(run agentruns.Run) bool {
 		}
 	}
 	return true
+}
+
+func requireActiveAgentToolExecutionRun(store *agentruns.Store, runID string) error {
+	run, ok := store.Get(runID)
+	if !ok {
+		return agentruns.ErrNotFound
+	}
+	if !agentToolExecutionRunIsActive(run) {
+		return agentrouting.ErrInvalidToolExecution
+	}
+	return nil
 }
 
 func writeAgentToolExecutionError(w http.ResponseWriter, err error) {
