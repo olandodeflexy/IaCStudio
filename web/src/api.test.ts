@@ -862,19 +862,26 @@ describe('api.agentToolRoutes', () => {
     const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(
-      api.executeAgentToolRoute(
-        'demo project',
-        'run/000001',
-        {
-          connection_id: 'aws-prod',
-          server_id: 'aws-official',
-          tool_name: 'list_resources',
-          arguments: { service: 's3' },
-        },
-        ' bad-key ',
-      ),
-    ).rejects.toThrow('a valid Idempotency-Key header is required');
+    const input = {
+      connection_id: 'aws-prod',
+      server_id: 'aws-official',
+      tool_name: 'list_resources',
+      arguments: { service: 's3' },
+    };
+    const invalidKeys = [
+      '',
+      ' bad-key ',
+      'bad key',
+      'caf\u00e9',
+      `bad${String.fromCharCode(0x7f)}key`,
+      'x'.repeat(129),
+    ];
+
+    for (const key of invalidKeys) {
+      await expect(
+        api.executeAgentToolRoute('demo project', 'run/000001', input, key),
+      ).rejects.toThrow('a valid Idempotency-Key header is required');
+    }
 
     expect(fetchMock).not.toHaveBeenCalled();
   });

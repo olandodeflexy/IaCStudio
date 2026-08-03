@@ -739,9 +739,18 @@ async function check(res: Response): Promise<Response> {
 const maxAgentToolRouteIdempotencyKeyLength = 128;
 
 function hasValidAgentToolRouteIdempotencyKey(key: string): boolean {
-  return key.length > 0 &&
-    key.length <= maxAgentToolRouteIdempotencyKeyLength &&
-    key.trim() === key;
+  if (
+    key.length === 0 ||
+    key.length > maxAgentToolRouteIdempotencyKeyLength ||
+    key.trim() !== key
+  ) {
+    return false;
+  }
+  for (let i = 0; i < key.length; i += 1) {
+    const code = key.charCodeAt(i);
+    if (code < 0x21 || code > 0x7e) return false;
+  }
+  return true;
 }
 
 export const api = {
