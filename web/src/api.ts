@@ -446,6 +446,30 @@ export interface AgentToolRoutePreviewResponse {
   decision: AgentToolRouteDecision;
 }
 
+export interface AgentToolExecutionInput {
+  connection_id: string;
+  server_id: string;
+  tool_name: string;
+  arguments: Record<string, unknown>;
+}
+
+export interface AgentToolCallResult {
+  output: string;
+  is_error: boolean;
+  untrusted_output: boolean;
+  redacted: boolean;
+  truncated: boolean;
+}
+
+export interface AgentToolExecutionResponse {
+  route: {
+    decision: AgentToolRouteDecision;
+    run: AgentRun;
+  };
+  invoked: boolean;
+  result?: AgentToolCallResult;
+}
+
 export type AgentToolPolicyEffect = 'allow' | 'deny';
 
 export interface AgentToolPolicyScope {
@@ -876,6 +900,26 @@ export const api = {
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(input),
+      },
+    );
+    return (await check(res)).json();
+  },
+
+  async executeAgentToolRoute(
+    projectName: string,
+    id: string,
+    input: AgentToolExecutionInput,
+    idempotencyKey: string,
+  ): Promise<AgentToolExecutionResponse> {
+    const res = await fetch(
+      `${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}/tool-routes/execute`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': idempotencyKey,
+        },
         body: JSON.stringify(input),
       },
     );

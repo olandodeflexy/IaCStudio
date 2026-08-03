@@ -683,6 +683,68 @@ describe('api.agentToolRoutes', () => {
       body: JSON.stringify(input),
     });
   });
+
+  it('executes a run-scoped tool route with a caller-owned idempotency key', async () => {
+    const response = {
+      route: {
+        decision: {
+          status: 'allowed',
+          reason: 'allowed',
+          allowed: true,
+          approval_required: false,
+          untrusted_output: true,
+        },
+        run: {
+          id: 'run_000001',
+          project: 'demo project',
+          mode: 'read_only',
+          status: 'running',
+          prompt_preview: 'Inventory AWS resources',
+          prompt_hash: 'sha256:abc',
+          created_at: '2026-08-03T09:00:00Z',
+          updated_at: '2026-08-03T09:00:01Z',
+          canceled: false,
+          logs: [],
+          patches: [],
+          approvals: [],
+        },
+      },
+      invoked: true,
+      result: {
+        output: 'reports',
+        is_error: false,
+        untrusted_output: true,
+        redacted: false,
+        truncated: false,
+      },
+    };
+    const input = {
+      connection_id: 'aws-prod',
+      server_id: 'aws-official',
+      tool_name: 'list_resources',
+      arguments: { service: 's3' },
+    };
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      api.executeAgentToolRoute('demo project', 'run/000001', input, 'execution-0001'),
+    ).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo%20project/agent-runs/run%2F000001/tool-routes/execute', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': 'execution-0001',
+      },
+      body: JSON.stringify(input),
+    });
+  });
 });
 
 describe('api.agentToolPolicies', () => {
