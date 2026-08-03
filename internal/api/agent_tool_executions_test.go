@@ -264,3 +264,39 @@ func TestAgentToolExecutionSanitizesExecutorErrors(t *testing.T) {
 		t.Fatalf("response leaked executor error: %s", rec.Body.String())
 	}
 }
+
+func TestAgentToolExecutionDistinguishesCancellationAndTimeout(t *testing.T) {
+	tests := []struct {
+		name       string
+		err        error
+		wantStatus int
+		wantBody   string
+	}{
+		{
+			name:       "request canceled",
+			err:        context.Canceled,
+			wantStatus: http.StatusRequestTimeout,
+			wantBody:   "tool execution request canceled\n",
+		},
+		{
+			name:       "deadline exceeded",
+			err:        context.DeadlineExceeded,
+			wantStatus: http.StatusGatewayTimeout,
+			wantBody:   "tool execution request timed out\n",
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			writeAgentToolExecutionError(rec, test.err)
+
+			if rec.Code != test.wantStatus {
+				t.Fatalf("status = %d, want %d", rec.Code, test.wantStatus)
+			}
+			if rec.Body.String() != test.wantBody {
+				t.Fatalf("body = %q, want %q", rec.Body.String(), test.wantBody)
+			}
+		})
+	}
+}

@@ -172,8 +172,10 @@ func writeAgentToolExecutionError(w http.ResponseWriter, err error) {
 		http.Error(w, "agent run cannot execute this tool route", http.StatusConflict)
 	case errors.Is(err, agentrouting.ErrToolInvocationFailed):
 		http.Error(w, "MCP tool invocation failed", http.StatusBadGateway)
-	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
+	case errors.Is(err, context.Canceled):
 		http.Error(w, "tool execution request canceled", http.StatusRequestTimeout)
+	case errors.Is(err, context.DeadlineExceeded):
+		http.Error(w, "tool execution request timed out", http.StatusGatewayTimeout)
 	default:
 		log.Printf("agent tool execution failed (%T)", agentToolRouteRootError(err))
 		http.Error(w, "agent tool execution failed", http.StatusInternalServerError)
