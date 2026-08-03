@@ -1054,6 +1054,7 @@ type RouterOptions struct {
 	AgentRuns                *agentruns.Store
 	AgentToolPolicies        AgentToolPolicyStore
 	AgentToolRouter          AgentToolRouter
+	AgentToolExecutor        AgentToolExecutor
 	AgentProviderProfiles    *agentproviderconnections.Manager
 	AppVersion               string
 	LocalAgentProviders      func() []agentproviders.LocalProviderStatus
@@ -1225,6 +1226,7 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	registerAgentRunRoutes(mux, projectsDir, agentRuns)
 	registerAgentToolPolicyRoutes(mux, projectsDir, opts.AgentToolPolicies)
 	registerAgentToolRouteRoutes(mux, projectsDir, agentRuns, opts.AgentToolRouter)
+	registerAgentToolExecutionRoutes(mux, projectsDir, agentRuns, opts.AgentToolExecutor)
 
 	// Resource catalog — returns all resources for a tool, optionally filtered by provider
 	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) {
