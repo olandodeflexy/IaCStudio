@@ -736,6 +736,14 @@ async function check(res: Response): Promise<Response> {
   return res;
 }
 
+const maxAgentToolRouteIdempotencyKeyLength = 128;
+
+function hasValidAgentToolRouteIdempotencyKey(key: string): boolean {
+  return key.length > 0 &&
+    key.length <= maxAgentToolRouteIdempotencyKeyLength &&
+    key.trim() === key;
+}
+
 export const api = {
   async listMCPAirlockServers(): Promise<MCPAirlockServerStatus[]> {
     const res = await fetch(`${BASE}/api/mcp-airlock/servers`);
@@ -895,12 +903,18 @@ export const api = {
     id: string,
     input: AgentToolRoutePreviewInput,
   ): Promise<AgentToolRoutePreviewResponse> {
+    const body: AgentToolRoutePreviewInput = {
+      connection_id: input.connection_id,
+      server_id: input.server_id,
+      tool_name: input.tool_name,
+      risk: input.risk,
+    };
     const res = await fetch(
       `${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}/tool-routes/preview`,
       {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(input),
+        body: JSON.stringify(body),
       },
     );
     return (await check(res)).json();
@@ -912,6 +926,15 @@ export const api = {
     input: AgentToolExecutionInput,
     idempotencyKey: string,
   ): Promise<AgentToolExecutionResponse> {
+    if (!hasValidAgentToolRouteIdempotencyKey(idempotencyKey)) {
+      throw new Error('a valid Idempotency-Key header is required');
+    }
+    const body: AgentToolExecutionInput = {
+      connection_id: input.connection_id,
+      server_id: input.server_id,
+      tool_name: input.tool_name,
+      arguments: input.arguments,
+    };
     const res = await fetch(
       `${BASE}/api/projects/${encodeURIComponent(projectName)}/agent-runs/${encodeURIComponent(id)}/tool-routes/execute`,
       {
@@ -920,7 +943,7 @@ export const api = {
           'Content-Type': 'application/json',
           'Idempotency-Key': idempotencyKey,
         },
-        body: JSON.stringify(input),
+        body: JSON.stringify(body),
       },
     );
     return (await check(res)).json();

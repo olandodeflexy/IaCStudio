@@ -684,6 +684,47 @@ describe('api.agentToolRoutes', () => {
     });
   });
 
+  it('strips injected scope fields from run-scoped preview requests', async () => {
+    const response = {
+      decision: {
+        status: 'allowed',
+        reason: 'allowed',
+        allowed: true,
+        approval_required: false,
+        untrusted_output: true,
+      },
+    };
+    const input = {
+      connection_id: 'aws-prod',
+      server_id: 'aws-official',
+      tool_name: 'list_resources',
+      risk: 'read_only' as const,
+      project: 'forged',
+      provider_id: 'forged-provider',
+      mode: 'approved_execute',
+    } as unknown as Parameters<typeof api.previewAgentToolRoute>[2];
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.previewAgentToolRoute('demo project', 'run/000001', input)).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo%20project/agent-runs/run%2F000001/tool-routes/preview', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        connection_id: 'aws-prod',
+        server_id: 'aws-official',
+        tool_name: 'list_resources',
+        risk: 'read_only',
+      }),
+    });
+  });
+
   it('executes a run-scoped tool route with a caller-owned idempotency key', async () => {
     const response = {
       route: {
@@ -744,6 +785,98 @@ describe('api.agentToolRoutes', () => {
       },
       body: JSON.stringify(input),
     });
+  });
+
+  it('strips injected scope fields from run-scoped execution requests', async () => {
+    const response = {
+      route: {
+        decision: {
+          status: 'allowed',
+          reason: 'allowed',
+          allowed: true,
+          approval_required: false,
+          untrusted_output: true,
+        },
+        run: {
+          id: 'run_000001',
+          project: 'demo project',
+          mode: 'read_only',
+          status: 'running',
+          prompt_preview: 'Inventory AWS resources',
+          prompt_hash: 'sha256:abc',
+          created_at: '2026-08-03T09:00:00Z',
+          updated_at: '2026-08-03T09:00:01Z',
+          canceled: false,
+          logs: [],
+          patches: [],
+          approvals: [],
+        },
+      },
+      invoked: true,
+      result: {
+        output: 'reports',
+        is_error: false,
+        untrusted_output: true,
+        redacted: false,
+        truncated: false,
+      },
+    };
+    const input = {
+      connection_id: 'aws-prod',
+      server_id: 'aws-official',
+      tool_name: 'list_resources',
+      arguments: { service: 's3' },
+      project: 'forged',
+      provider_id: 'forged-provider',
+      mode: 'approved_execute',
+      risk: 'destructive',
+    } as unknown as Parameters<typeof api.executeAgentToolRoute>[2];
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify(response), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      api.executeAgentToolRoute('demo project', 'run/000001', input, 'execution-0002'),
+    ).resolves.toEqual(response);
+
+    expect(fetchMock).toHaveBeenCalledWith('/api/projects/demo%20project/agent-runs/run%2F000001/tool-routes/execute', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Idempotency-Key': 'execution-0002',
+      },
+      body: JSON.stringify({
+        connection_id: 'aws-prod',
+        server_id: 'aws-official',
+        tool_name: 'list_resources',
+        arguments: { service: 's3' },
+      }),
+    });
+  });
+
+  it('rejects invalid run-scoped execution idempotency keys before sending a request', async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      api.executeAgentToolRoute(
+        'demo project',
+        'run/000001',
+        {
+          connection_id: 'aws-prod',
+          server_id: 'aws-official',
+          tool_name: 'list_resources',
+          arguments: { service: 's3' },
+        },
+        ' bad-key ',
+      ),
+    ).rejects.toThrow('a valid Idempotency-Key header is required');
+
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
