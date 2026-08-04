@@ -1,8 +1,10 @@
 import { type FormEvent, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Clock3, Route, ShieldCheck, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock3, Play, RotateCcw, Route, ShieldCheck, XCircle } from 'lucide-react';
 
 import {
   api,
+  type AgentToolCallResult,
+  type AgentToolExecutionResponse,
   type AgentToolRouteDecision,
   type AgentToolRoutePreviewInput,
   type MCPAirlockToolRisk,
@@ -11,11 +13,14 @@ import { Button } from '../ui/button';
 import { Input } from '../ui/input';
 
 type ToolRoutePreviewClient = Pick<typeof api, 'previewAgentToolRoute'>;
+type ToolRouteExecutionClient = Pick<typeof api, 'executeAgentToolRoute'>;
 
 export interface ToolRoutePreviewPanelProps {
   projectName: string;
   runId: string;
   client?: ToolRoutePreviewClient;
+  executionClient?: ToolRouteExecutionClient;
+  idempotencyKeyFactory?: () => string;
 }
 
 const riskOptions: { value: MCPAirlockToolRisk; label: string }[] = [
@@ -44,8 +49,35 @@ function normalizeInput(input: AgentToolRoutePreviewInput): AgentToolRoutePrevie
   };
 }
 
-function validDecision(decision: AgentToolRouteDecision, risk: MCPAirlockToolRisk): boolean {
-  if (!decision.untrusted_output) return false;
+const deniedReasons = new Set<AgentToolRouteDecision['reason']>([
+  'invalid_request',
+  'invalid_policy',
+  'policy_unavailable',
+  'mode_risk_mismatch',
+  'no_matching_rule',
+  'policy_denied',
+  'airlock_unavailable',
+  'airlock_server_mismatch',
+  'airlock_tool_mismatch',
+  'airlock_risk_mismatch',
+  'invalid_airlock_decision',
+  'airlock_blocked',
+]);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validDecision(
+  decision: unknown,
+  risk: MCPAirlockToolRisk,
+): decision is AgentToolRouteDecision {
+  if (!isRecord(decision)
+    || decision.untrusted_output !== true
+    || typeof decision.allowed !== 'boolean'
+    || typeof decision.approval_required !== 'boolean') {
+    return false;
+  }
   switch (decision.status) {
     case 'allowed':
       return risk === 'read_only'
@@ -54,7 +86,7 @@ function validDecision(decision: AgentToolRouteDecision, risk: MCPAirlockToolRis
       return !decision.allowed && decision.approval_required && decision.reason === 'approval_required';
     case 'denied':
       return !decision.allowed && !decision.approval_required
-        && decision.reason !== 'allowed' && decision.reason !== 'approval_required';
+        && deniedReasons.has(decision.reason as AgentToolRouteDecision['reason']);
     default:
       return false;
   }
@@ -77,16 +109,70 @@ function DecisionIcon({ status }: { status: AgentToolRouteDecision['status'] }) 
   return <XCircle className="h-4 w-4" />;
 }
 
+function parseArguments(value: string): Record<string, unknown> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error('Arguments must be valid JSON.');
+  }
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('Arguments must be a JSON object.');
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function validExecutionResponse(
+  response: unknown,
+  projectName: string,
+  runId: string,
+): response is AgentToolExecutionResponse & { result: AgentToolCallResult } {
+  if (!isRecord(response)
+    || response.invoked !== true
+    || !isRecord(response.route)
+    || !isRecord(response.route.run)
+    || !isRecord(response.result)) {
+    return false;
+  }
+  const { result, route } = response;
+  const run = route.run;
+  return result.untrusted_output === true
+    && typeof result.output === 'string'
+    && typeof result.is_error === 'boolean'
+    && typeof result.redacted === 'boolean'
+    && typeof result.truncated === 'boolean'
+    && validDecision(route.decision, 'read_only')
+    && run.id === runId
+    && run.project === projectName
+    && run.mode === 'read_only'
+    && run.canceled === false;
+}
+
+function createIdempotencyKey(): string {
+  if (!globalThis.crypto?.randomUUID) {
+    throw new Error('Secure execution identity is unavailable in this browser.');
+  }
+  return globalThis.crypto.randomUUID();
+}
+
 export function ToolRoutePreviewPanel({
   projectName,
   runId,
   client = api,
+  executionClient = api,
+  idempotencyKeyFactory = createIdempotencyKey,
 }: ToolRoutePreviewPanelProps) {
   const [input, setInput] = useState<AgentToolRoutePreviewInput>(emptyInput);
   const [result, setResult] = useState<{ scope: string; decision: AgentToolRouteDecision } | null>(null);
   const [error, setError] = useState<{ scope: string; message: string } | null>(null);
   const [pending, setPending] = useState<{ id: number; scope: string } | null>(null);
+  const [argumentsText, setArgumentsText] = useState('{}');
+  const [execution, setExecution] = useState<{ scope: string; result: AgentToolCallResult } | null>(null);
+  const [executionError, setExecutionError] = useState<{ scope: string; message: string } | null>(null);
+  const [executionPending, setExecutionPending] = useState<{ id: number; scope: string } | null>(null);
   const requestSequence = useRef(0);
+  const executionSequence = useRef(0);
+  const executionKey = useRef<string | null>(null);
   const scope = JSON.stringify([projectName, runId]);
   const currentScope = useRef(scope);
   currentScope.current = scope;
@@ -102,6 +188,17 @@ export function ToolRoutePreviewPanel({
   const loading = pending?.scope === scope;
   const decision = result?.scope === scope ? result.decision : null;
   const errorMessage = error?.scope === scope ? error.message : null;
+  const executionResult = execution?.scope === scope ? execution.result : null;
+  const executionErrorMessage = executionError?.scope === scope ? executionError.message : null;
+  const executing = executionPending?.scope === scope;
+
+  function clearExecution() {
+    executionSequence.current += 1;
+    executionKey.current = null;
+    setExecutionPending(null);
+    setExecution(null);
+    setExecutionError(null);
+  }
 
   function updateInput<K extends keyof AgentToolRoutePreviewInput>(
     field: K,
@@ -111,7 +208,13 @@ export function ToolRoutePreviewPanel({
     setPending(null);
     setResult(null);
     setError(null);
+    clearExecution();
     setInput(current => ({ ...current, [field]: value }));
+  }
+
+  function updateArguments(value: string) {
+    setArgumentsText(value);
+    clearExecution();
   }
 
   async function preview(event: FormEvent<HTMLFormElement>) {
@@ -123,10 +226,11 @@ export function ToolRoutePreviewPanel({
     setPending({ id: requestId, scope: requestScope });
     setResult(null);
     setError(null);
+    clearExecution();
     try {
       const response = await client.previewAgentToolRoute(projectName, runId, normalized);
       if (requestSequence.current !== requestId || currentScope.current !== requestScope) return;
-      if (!validDecision(response.decision, normalized.risk)) {
+      if (!validDecision(response?.decision, normalized.risk)) {
         setError({ scope: requestScope, message: 'Route preview returned an invalid decision.' });
         return;
       }
@@ -139,6 +243,65 @@ export function ToolRoutePreviewPanel({
       });
     } finally {
       setPending(current => current?.id === requestId ? null : current);
+    }
+  }
+
+  async function execute(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (decision?.status !== 'allowed' || executing) return;
+
+    let argumentsObject: Record<string, unknown>;
+    try {
+      argumentsObject = parseArguments(argumentsText);
+    } catch (argumentError) {
+      setExecutionError({
+        scope,
+        message: argumentError instanceof Error ? argumentError.message : 'Arguments are invalid.',
+      });
+      return;
+    }
+
+    try {
+      executionKey.current ||= idempotencyKeyFactory();
+    } catch (keyError) {
+      setExecutionError({
+        scope,
+        message: keyError instanceof Error ? keyError.message : 'Could not create execution identity.',
+      });
+      return;
+    }
+
+    const requestId = ++executionSequence.current;
+    const requestScope = scope;
+    setExecutionPending({ id: requestId, scope: requestScope });
+    setExecution(null);
+    setExecutionError(null);
+    try {
+      const response = await executionClient.executeAgentToolRoute(
+        projectName,
+        runId,
+        {
+          connection_id: normalized.connection_id,
+          server_id: normalized.server_id,
+          tool_name: normalized.tool_name,
+          arguments: argumentsObject,
+        },
+        executionKey.current,
+      );
+      if (executionSequence.current !== requestId || currentScope.current !== requestScope) return;
+      if (!validExecutionResponse(response, projectName, runId)) {
+        setExecutionError({ scope: requestScope, message: 'Tool execution returned an invalid response.' });
+        return;
+      }
+      setExecution({ scope: requestScope, result: response.result });
+    } catch (executionFailure) {
+      if (executionSequence.current !== requestId || currentScope.current !== requestScope) return;
+      setExecutionError({
+        scope: requestScope,
+        message: executionFailure instanceof Error ? executionFailure.message : 'Tool execution failed.',
+      });
+    } finally {
+      setExecutionPending(current => current?.id === requestId ? null : current);
     }
   }
 
@@ -228,6 +391,55 @@ export function ToolRoutePreviewPanel({
           <span className="shrink-0 font-mono text-[10px] uppercase tracking-widest opacity-80">
             Untrusted output
           </span>
+        </div>
+      )}
+
+      {decision?.status === 'allowed' && (
+        <form className="flex flex-col gap-3 border-t border-border pt-3" onSubmit={execute} aria-busy={executing}>
+          <label className="flex min-w-0 flex-col gap-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            Arguments (JSON)
+            <textarea
+              value={argumentsText}
+              onChange={event => updateArguments(event.target.value)}
+              rows={4}
+              spellCheck={false}
+              className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs font-normal normal-case text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+          </label>
+
+          {executionErrorMessage && (
+            <div role="alert" className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{executionErrorMessage}</span>
+            </div>
+          )}
+
+          <div className="flex justify-end gap-2">
+            {executionResult && (
+              <Button type="button" size="sm" variant="outline" onClick={clearExecution} disabled={executing}>
+                <RotateCcw className="h-3.5 w-3.5" />
+                New execution
+              </Button>
+            )}
+            <Button type="submit" size="sm" disabled={executing}>
+              <Play className="h-3.5 w-3.5" />
+              {executing ? 'Executing...' : executionResult ? 'Replay result' : executionErrorMessage ? 'Retry execution' : 'Execute read-only'}
+            </Button>
+          </div>
+        </form>
+      )}
+
+      {executionResult && (
+        <div aria-label="Untrusted MCP output" aria-live="polite" className="border-t border-border pt-3">
+          <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
+            <span>Untrusted MCP output</span>
+            {executionResult.is_error && <span className="text-destructive">Tool error</span>}
+            {executionResult.redacted && <span className="text-yellow-300">Redacted</span>}
+            {executionResult.truncated && <span className="text-yellow-300">Truncated</span>}
+          </div>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap break-words rounded-md border border-border bg-muted/20 p-3 font-mono text-xs text-foreground">
+            {executionResult.output || 'No output returned.'}
+          </pre>
         </div>
       )}
     </section>
