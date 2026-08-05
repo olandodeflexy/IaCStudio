@@ -136,12 +136,14 @@ function validExecutionResponse(
   }
   const { result, route } = response;
   const run = route.run;
+  const decision = route.decision;
   return result.untrusted_output === true
     && typeof result.output === 'string'
     && typeof result.is_error === 'boolean'
     && typeof result.redacted === 'boolean'
     && typeof result.truncated === 'boolean'
-    && validDecision(route.decision, 'read_only')
+    && validDecision(decision, 'read_only')
+    && decision.status === 'allowed'
     && run.id === runId
     && run.project === projectName
     && run.mode === 'read_only'
@@ -172,7 +174,7 @@ export function ToolRoutePreviewPanel({
   const [executionPending, setExecutionPending] = useState<{ id: number; scope: string } | null>(null);
   const requestSequence = useRef(0);
   const executionSequence = useRef(0);
-  const executionKey = useRef<string | null>(null);
+  const executionIdentity = useRef<{ scope: string; key: string } | null>(null);
   const scope = JSON.stringify([projectName, runId]);
   const currentScope = useRef(scope);
   currentScope.current = scope;
@@ -194,7 +196,7 @@ export function ToolRoutePreviewPanel({
 
   function clearExecution() {
     executionSequence.current += 1;
-    executionKey.current = null;
+    executionIdentity.current = null;
     setExecutionPending(null);
     setExecution(null);
     setExecutionError(null);
@@ -261,8 +263,14 @@ export function ToolRoutePreviewPanel({
       return;
     }
 
+    let idempotencyKey = executionIdentity.current?.scope === scope
+      ? executionIdentity.current.key
+      : null;
     try {
-      executionKey.current ||= idempotencyKeyFactory();
+      if (!idempotencyKey) {
+        idempotencyKey = idempotencyKeyFactory();
+        executionIdentity.current = { scope, key: idempotencyKey };
+      }
     } catch (keyError) {
       setExecutionError({
         scope,
@@ -286,7 +294,7 @@ export function ToolRoutePreviewPanel({
           tool_name: normalized.tool_name,
           arguments: argumentsObject,
         },
-        executionKey.current,
+        idempotencyKey,
       );
       if (executionSequence.current !== requestId || currentScope.current !== requestScope) return;
       if (!validExecutionResponse(response, projectName, runId)) {

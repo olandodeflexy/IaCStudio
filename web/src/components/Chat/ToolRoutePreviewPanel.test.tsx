@@ -235,6 +235,53 @@ describe('ToolRoutePreviewPanel', () => {
     expect(screen.queryByLabelText('Untrusted MCP output')).not.toBeInTheDocument();
   });
 
+  it.each([
+    ['denied', {
+      status: 'denied',
+      reason: 'policy_denied',
+      allowed: false,
+      approval_required: false,
+      untrusted_output: true,
+    }],
+    ['approval-required', {
+      status: 'approval_required',
+      reason: 'approval_required',
+      allowed: false,
+      approval_required: true,
+      untrusted_output: true,
+    }],
+  ] as const)('fails closed on an invoked response with a %s decision', async (_label, decision) => {
+    const client = {
+      previewAgentToolRoute: vi.fn().mockResolvedValue(allowedResponse),
+    };
+    const executionClient = {
+      executeAgentToolRoute: vi.fn().mockResolvedValue({
+        ...executionResponse,
+        route: {
+          ...executionResponse.route,
+          decision,
+        },
+      }),
+    };
+    render(
+      <ToolRoutePreviewPanel
+        projectName="demo"
+        runId="run_000001"
+        client={client}
+        executionClient={executionClient}
+        idempotencyKeyFactory={() => 'execution-key'}
+      />,
+    );
+
+    fillRequiredFields();
+    fireEvent.click(screen.getByRole('button', { name: 'Preview access' }));
+    expect(await screen.findByText('Allowed')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Execute read-only' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Tool execution returned an invalid response.');
+    expect(screen.queryByLabelText('Untrusted MCP output')).not.toBeInTheDocument();
+  });
+
   it('reuses the execution identity on retry and rejects non-object arguments locally', async () => {
     const client = {
       previewAgentToolRoute: vi.fn().mockResolvedValue(allowedResponse),
