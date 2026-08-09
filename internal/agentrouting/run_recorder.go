@@ -32,15 +32,55 @@ func NewRunRecorder(store *agentruns.Store) (*RunRecorder, error) {
 // Record verifies the run and route scopes before applying exactly one state
 // mutation for the authorization outcome.
 func (r *RunRecorder) Record(runID string, request Request, decision Decision) (agentruns.Run, error) {
+	return r.record(runID, request, decision, agentruns.ApprovalBinding{})
+}
+
+// RecordBoundApproval creates and stores an exact-operation binding for an
+// approval-required route. The key and raw arguments are never retained.
+func (r *RunRecorder) RecordBoundApproval(
+	key []byte,
+	runID string,
+	request Request,
+	arguments mcpairlock.ToolCallArguments,
+	decision Decision,
+) (agentruns.Run, error) {
 	if r == nil || r.store == nil {
 		return agentruns.Run{}, ErrRunStoreRequired
 	}
-	trimmedRunID := strings.TrimSpace(runID)
-	if trimmedRunID == "" {
-		return agentruns.Run{}, ErrRunIDRequired
+	if err := validateRunID(runID); err != nil {
+		return agentruns.Run{}, err
 	}
-	if trimmedRunID != runID {
-		return agentruns.Run{}, ErrInvalidRunID
+	if err := request.Validate(); err != nil {
+		return agentruns.Run{}, err
+	}
+	if err := decision.Validate(); err != nil {
+		return agentruns.Run{}, err
+	}
+	if decision.Status != DecisionApprovalRequired {
+		return agentruns.Run{}, fmt.Errorf("%w: bound operation requires an approval decision", ErrInvalidDecision)
+	}
+	binding, err := NewToolApprovalBinding(key, runID, request, arguments)
+	if err != nil {
+		return agentruns.Run{}, err
+	}
+	storedBinding, err := agentruns.NewApprovalBinding(string(binding))
+	if err != nil {
+		return agentruns.Run{}, fmt.Errorf("store tool approval binding: %w", err)
+	}
+	return r.record(runID, request, decision, storedBinding)
+}
+
+func (r *RunRecorder) record(
+	runID string,
+	request Request,
+	decision Decision,
+	operationBinding agentruns.ApprovalBinding,
+) (agentruns.Run, error) {
+	if r == nil || r.store == nil {
+		return agentruns.Run{}, ErrRunStoreRequired
+	}
+	if err := validateRunID(runID); err != nil {
+		return agentruns.Run{}, err
 	}
 	if err := request.Validate(); err != nil {
 		return agentruns.Run{}, err
@@ -87,8 +127,9 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 			return agentruns.Run{}, fmt.Errorf("%w: no approval mapping for risk %q", ErrInvalidDecision, request.Risk)
 		}
 		return r.store.AddApproval(runID, agentruns.ApprovalGate{
-			Kind:    kind,
-			Summary: routeAuditMessage("Authorize", request),
+			Kind:             kind,
+			Summary:          routeAuditMessage("Authorize", request),
+			OperationBinding: operationBinding,
 		})
 	case DecisionAllowed:
 		recorded, err := r.store.AddLogIfNoPendingApprovals(runID, agentruns.LogAudit, routeAuditMessage("Allowed", request))
@@ -99,6 +140,17 @@ func (r *RunRecorder) Record(runID string, request Request, decision Decision) (
 	default:
 		return agentruns.Run{}, ErrInvalidDecision
 	}
+}
+
+func validateRunID(runID string) error {
+	trimmedRunID := strings.TrimSpace(runID)
+	if trimmedRunID == "" {
+		return ErrRunIDRequired
+	}
+	if trimmedRunID != runID {
+		return ErrInvalidRunID
+	}
+	return nil
 }
 
 func approvalKind(risk mcpairlock.ToolRisk) (agentruns.ApprovalKind, bool) {
