@@ -2,6 +2,7 @@ package agentrouting
 
 import (
 	"context"
+	"crypto/rand"
 	"errors"
 	"fmt"
 
@@ -15,6 +16,7 @@ var (
 	ErrToolExecutionContext    = errors.New("tool execution context is required")
 	ErrInvalidToolExecution    = errors.New("invalid authorized tool execution")
 	ErrToolInvocationFailed    = errors.New("mcp tool invocation failed")
+	ErrToolApprovalKey         = errors.New("generate tool approval binding key")
 )
 
 // ToolInvokeFunc runs one transport request that the Executor has already
@@ -33,9 +35,10 @@ type ExecutionResult struct {
 // Executor records authorization through Router before invoking one external
 // MCP tool. It does not select credentials or expose an HTTP endpoint.
 type Executor struct {
-	router    *Router
-	invoke    ToolInvokeFunc
-	lookupRun func(string) (agentruns.Run, bool)
+	router      *Router
+	invoke      ToolInvokeFunc
+	lookupRun   func(string) (agentruns.Run, bool)
+	approvalKey []byte
 }
 
 func NewExecutor(router *Router, invoke ToolInvokeFunc) (*Executor, error) {
@@ -45,7 +48,17 @@ func NewExecutor(router *Router, invoke ToolInvokeFunc) (*Executor, error) {
 	if invoke == nil {
 		return nil, ErrToolInvokerRequired
 	}
-	return &Executor{router: router, invoke: invoke, lookupRun: router.currentRun}, nil
+	approvalKey := make([]byte, minToolApprovalBindingKeyBytes)
+	if _, err := rand.Read(approvalKey); err != nil {
+		clear(approvalKey)
+		return nil, fmt.Errorf("%w: %v", ErrToolApprovalKey, err)
+	}
+	return &Executor{
+		router:      router,
+		invoke:      invoke,
+		lookupRun:   router.currentRun,
+		approvalKey: approvalKey,
+	}, nil
 }
 
 // Execute validates and binds the transport request, records the scoped route
@@ -76,7 +89,7 @@ func (e *Executor) Execute(
 	if err != nil {
 		return ExecutionResult{}, err
 	}
-	route, err := e.router.Route(runID, request)
+	route, err := e.router.RouteToolCall(e.approvalKey, runID, request, arguments)
 	if err != nil {
 		return ExecutionResult{}, fmt.Errorf("record tool execution route: %w", err)
 	}

@@ -89,6 +89,36 @@ func TestExecutorDoesNotInvokeNonAllowedRoutes(t *testing.T) {
 	}
 }
 
+func TestExecutorBindsApprovalToExactToolCall(t *testing.T) {
+	policy, request, airlock := readOnlyEvaluation()
+	policy.Rules[0].ApprovalRequired = true
+	router, _, _, run := routerFixture(t, policy, request, airlock)
+	arguments := executionArguments(t)
+	invocations := 0
+	executor, err := NewExecutor(router, func(context.Context, mcpairlock.ToolCallRequest) (mcpairlock.ToolCallResult, error) {
+		invocations++
+		return mcpairlock.NewToolCallResult(nil, false), nil
+	})
+	if err != nil {
+		t.Fatalf("NewExecutor(): %v", err)
+	}
+
+	result, err := executor.Execute(context.Background(), run.ID, request, arguments)
+	if err != nil {
+		t.Fatalf("Execute(): %v", err)
+	}
+	if invocations != 0 || result.Invoked || result.Route.Decision.Status != DecisionApprovalRequired {
+		t.Fatalf("Execute() = %+v, invocations = %d; want a non-invoking approval route", result, invocations)
+	}
+	if len(result.Route.Run.Approvals) != 1 {
+		t.Fatalf("Execute() approvals = %d, want one", len(result.Route.Run.Approvals))
+	}
+	binding := ToolApprovalBinding(result.Route.Run.Approvals[0].OperationBinding.Value())
+	if !binding.Matches(executor.approvalKey, run.ID, request, arguments) {
+		t.Fatal("approval gate is not bound to the exact executed tool call")
+	}
+}
+
 func TestExecutorRechecksRunImmediatelyBeforeInvocation(t *testing.T) {
 	tests := []struct {
 		name   string
