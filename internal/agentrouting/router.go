@@ -86,6 +86,9 @@ func (r *Router) RouteToolCall(
 	if r.recorder == nil {
 		return RouteResult{}, ErrRunRecorderRequired
 	}
+	if err := validateRunID(runID); err != nil {
+		return RouteResult{}, err
+	}
 	if err := request.Validate(); err != nil {
 		return RouteResult{}, err
 	}
