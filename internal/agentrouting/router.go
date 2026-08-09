@@ -101,9 +101,17 @@ func (r *Router) RouteToolCall(
 	decision := r.authorizer.Authorize(request)
 	var (
 		run agentruns.Run
+		ok  bool
 		err error
 	)
 	if decision.Status == DecisionApprovalRequired {
+		run, ok, err = r.recorder.RecordApprovedToolCall(key, runID, request, arguments)
+		if err != nil {
+			return RouteResult{}, fmt.Errorf("record exact tool route authorization: %w", err)
+		}
+		if ok {
+			return RouteResult{Decision: allowed(), Run: run}, nil
+		}
 		run, err = r.recorder.RecordBoundApproval(key, runID, request, arguments, decision)
 	} else {
 		run, err = r.recorder.Record(runID, request, decision)

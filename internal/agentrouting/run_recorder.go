@@ -70,6 +70,50 @@ func (r *RunRecorder) RecordBoundApproval(
 	return r.record(runID, request, decision, storedBinding)
 }
 
+// RecordApprovedToolCall consumes and records an allowed route only when the
+// run already contains an approved gate bound to this exact MCP operation.
+func (r *RunRecorder) RecordApprovedToolCall(
+	key []byte,
+	runID string,
+	request Request,
+	arguments mcpairlock.ToolCallArguments,
+) (agentruns.Run, bool, error) {
+	if r == nil || r.store == nil {
+		return agentruns.Run{}, false, ErrRunStoreRequired
+	}
+	if err := validateRunID(runID); err != nil {
+		return agentruns.Run{}, false, err
+	}
+	if err := request.Validate(); err != nil {
+		return agentruns.Run{}, false, err
+	}
+	if _, err := NewToolApprovalBinding(key, runID, request, arguments); err != nil {
+		return agentruns.Run{}, false, err
+	}
+
+	run, ok := r.store.Get(runID)
+	if !ok {
+		return agentruns.Run{}, false, agentruns.ErrNotFound
+	}
+	if run.Project != request.Project || run.ProviderID != request.ProviderID || run.Mode != request.Mode {
+		return agentruns.Run{}, false, ErrRunScopeMismatch
+	}
+	for _, approval := range run.Approvals {
+		if approval.Status != agentruns.ApprovalApproved {
+			continue
+		}
+		if !ToolApprovalBinding(approval.OperationBinding.Value()).Matches(key, runID, request, arguments) {
+			continue
+		}
+		recorded, err := r.store.ConsumeApprovalBinding(runID, approval.ID, routeAuditMessage("Allowed", request))
+		if errors.Is(err, agentruns.ErrApprovalPending) {
+			return agentruns.Run{}, false, fmt.Errorf("%w: cannot record authorization while approval gates are pending", ErrInvalidDecision)
+		}
+		return recorded, true, err
+	}
+	return agentruns.Run{}, false, nil
+}
+
 func (r *RunRecorder) record(
 	runID string,
 	request Request,
