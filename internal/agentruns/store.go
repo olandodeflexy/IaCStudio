@@ -182,6 +182,7 @@ type ApprovalGate struct {
 	CreatedAt        time.Time       `json:"created_at"`
 	DecidedAt        *time.Time      `json:"decided_at,omitempty"`
 	DecidedBy        string          `json:"decided_by,omitempty"`
+	// Legacy and non-MCP gates may be unbound; MCP writes must require a match.
 	OperationBinding ApprovalBinding `json:"-"`
 }
 
