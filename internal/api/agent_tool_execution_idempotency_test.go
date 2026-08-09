@@ -110,6 +110,29 @@ func TestAgentToolExecutionAttemptStoreRejectsChangedScope(t *testing.T) {
 	}
 }
 
+func TestAgentToolExecutionAttemptStoreReplaysWhenServerRiskChanges(t *testing.T) {
+	store := newAgentToolExecutionAttemptStore(2)
+	request := testAgentToolExecutionRequest()
+	arguments := testAgentToolExecutionArguments(t, `{}`)
+	var calls atomic.Int32
+	execute := func() (agentrouting.ExecutionResult, error) {
+		calls.Add(1)
+		return testAgentToolExecutionResult("original"), nil
+	}
+
+	if _, replayed, err := store.execute(context.Background(), "run_000001", "same-key", request, arguments, execute); err != nil || replayed {
+		t.Fatalf("first execute error = %v, replayed = %t; want fresh success", err, replayed)
+	}
+	request.Risk = mcpairlock.RiskCloudMutation
+	got, replayed, err := store.execute(context.Background(), "run_000001", "same-key", request, arguments, execute)
+	if err != nil || !replayed || got.Result == nil || got.Result.Output != "original" {
+		t.Fatalf("risk-changed retry = %+v, replayed = %t, error = %v; want original replay", got, replayed, err)
+	}
+	if calls.Load() != 1 {
+		t.Fatalf("execution calls = %d, want 1", calls.Load())
+	}
+}
+
 func TestAgentToolExecutionAttemptStoreReleasesFailedAttempts(t *testing.T) {
 	store := newAgentToolExecutionAttemptStore(1)
 	request := testAgentToolExecutionRequest()
