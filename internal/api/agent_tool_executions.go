@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -37,8 +38,9 @@ func registerAgentToolExecutionRoutes(
 	projectsDir string,
 	store *agentruns.Store,
 	executor AgentToolExecutor,
+	evaluator agentrouting.ToolEvaluator,
 ) {
-	if executor == nil {
+	if executor == nil || evaluator == nil {
 		return
 	}
 	attempts := newAgentToolExecutionAttemptStore(maxAgentToolExecutionReplayEntries)
@@ -52,7 +54,7 @@ func registerAgentToolExecutionRoutes(
 		if !ok {
 			return
 		}
-		run, routeRequest, arguments, ok := readAgentToolExecutionRequest(w, r, projectsDir, store)
+		run, routeRequest, arguments, ok := readAgentToolExecutionRequest(w, r, projectsDir, store, evaluator)
 		if !ok {
 			return
 		}
@@ -93,6 +95,7 @@ func readAgentToolExecutionRequest(
 	r *http.Request,
 	projectsDir string,
 	store *agentruns.Store,
+	evaluator agentrouting.ToolEvaluator,
 ) (agentruns.Run, agentrouting.Request, mcpairlock.ToolCallArguments, bool) {
 	name := r.PathValue("name")
 	if !requireExistingAgentRunProject(w, projectsDir, name) {
@@ -119,6 +122,8 @@ func readAgentToolExecutionRequest(
 		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
 	}
 
+	// Risk is server-owned; unknown is used only for structural validation
+	// before Airlock resolves the discovered tool's current classification.
 	request := agentrouting.Request{
 		Project:      run.Project,
 		ProviderID:   run.ProviderID,
@@ -126,7 +131,7 @@ func readAgentToolExecutionRequest(
 		ServerID:     req.ServerID,
 		ToolName:     req.ToolName,
 		Mode:         run.Mode,
-		Risk:         mcpairlock.RiskReadOnly,
+		Risk:         mcpairlock.RiskUnknown,
 	}
 	if err := request.Validate(); err != nil {
 		http.Error(w, "invalid tool execution request", http.StatusBadRequest)
@@ -136,7 +141,33 @@ func readAgentToolExecutionRequest(
 		http.Error(w, "invalid tool execution arguments", http.StatusBadRequest)
 		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
 	}
+	risk, err := resolveAgentToolExecutionRisk(evaluator, request)
+	if err != nil {
+		writeAgentToolExecutionError(w, err)
+		return agentruns.Run{}, agentrouting.Request{}, mcpairlock.ToolCallArguments{}, false
+	}
+	request.Risk = risk
 	return run, request, req.Arguments, true
+}
+
+func resolveAgentToolExecutionRisk(
+	evaluator agentrouting.ToolEvaluator,
+	request agentrouting.Request,
+) (mcpairlock.ToolRisk, error) {
+	entry, err := evaluator.EvaluateTool(request.ServerID, request.Project, request.ToolName)
+	if err != nil {
+		return "", fmt.Errorf("evaluate MCP tool risk: %w", err)
+	}
+	if entry.ServerID != request.ServerID ||
+		entry.Name != request.ToolName ||
+		entry.Risk != entry.Decision.Risk {
+		return "", agentrouting.ErrInvalidToolExecution
+	}
+	request.Risk = entry.Risk
+	if err := request.Validate(); err != nil {
+		return "", agentrouting.ErrInvalidToolExecution
+	}
+	return entry.Risk, nil
 }
 
 func agentToolExecutionRunIsActive(run agentruns.Run) bool {
@@ -168,6 +199,7 @@ func writeAgentToolExecutionError(w http.ResponseWriter, err error) {
 		http.Error(w, "idempotency key was already used for a different tool execution", http.StatusConflict)
 	case errors.Is(err, errAgentToolExecutionInvalidIdempotencyKey),
 		errors.Is(err, agentrouting.ErrInvalidRequest),
+		errors.Is(err, mcpairlock.ErrUnknownServer),
 		errors.Is(err, mcpairlock.ErrInvalidToolCallArguments),
 		errors.Is(err, mcpairlock.ErrInvalidToolCallRequest):
 		http.Error(w, "invalid tool execution request", http.StatusBadRequest)

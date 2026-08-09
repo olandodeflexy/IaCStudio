@@ -24,6 +24,23 @@ type fakeAgentToolExecutor struct {
 	arguments mcpairlock.ToolCallArguments
 }
 
+type fakeAgentToolEvaluator struct {
+	entry    mcpairlock.ToolInventoryEntry
+	err      error
+	calls    int
+	serverID string
+	project  string
+	toolName string
+}
+
+func (f *fakeAgentToolEvaluator) EvaluateTool(serverID, project, toolName string) (mcpairlock.ToolInventoryEntry, error) {
+	f.calls++
+	f.serverID = serverID
+	f.project = project
+	f.toolName = toolName
+	return f.entry, f.err
+}
+
 func (f *fakeAgentToolExecutor) Execute(
 	_ context.Context,
 	runID string,
@@ -38,9 +55,27 @@ func (f *fakeAgentToolExecutor) Execute(
 }
 
 func agentToolExecutionMux(root string, store *agentruns.Store, executor AgentToolExecutor) *http.ServeMux {
+	return agentToolExecutionMuxWithEvaluator(root, store, executor, readOnlyAgentToolEvaluator())
+}
+
+func agentToolExecutionMuxWithEvaluator(
+	root string,
+	store *agentruns.Store,
+	executor AgentToolExecutor,
+	evaluator agentrouting.ToolEvaluator,
+) *http.ServeMux {
 	mux := http.NewServeMux()
-	registerAgentToolExecutionRoutes(mux, root, store, executor)
+	registerAgentToolExecutionRoutes(mux, root, store, executor, evaluator)
 	return mux
+}
+
+func readOnlyAgentToolEvaluator() *fakeAgentToolEvaluator {
+	return &fakeAgentToolEvaluator{entry: mcpairlock.ToolInventoryEntry{
+		ServerID: "aws",
+		Name:     "list_buckets",
+		Risk:     mcpairlock.RiskReadOnly,
+		Decision: mcpairlock.ToolDecision{Risk: mcpairlock.RiskReadOnly},
+	}}
 }
 
 func postAgentToolExecution(
@@ -67,7 +102,7 @@ func postAgentToolExecution(
 	return rec
 }
 
-func TestAgentToolExecutionUsesServerOwnedReadOnlyScope(t *testing.T) {
+func TestAgentToolExecutionUsesServerResolvedReadOnlyRisk(t *testing.T) {
 	root, store, run := agentToolRouteFixture(t, "codex")
 	wantResult := mcpairlock.NewToolCallResult([]byte("reports\n"), false)
 	wantDecision := agentrouting.Decision{
@@ -81,7 +116,8 @@ func TestAgentToolExecutionUsesServerOwnedReadOnlyScope(t *testing.T) {
 		Invoked: true,
 		Result:  &wantResult,
 	}}
-	mux := agentToolExecutionMux(root, store, fake)
+	evaluator := readOnlyAgentToolEvaluator()
+	mux := agentToolExecutionMuxWithEvaluator(root, store, fake, evaluator)
 
 	rec := postAgentToolExecution(mux, "demo", run.ID, `{
 		"connection_id":"aws-prod",
@@ -105,6 +141,9 @@ func TestAgentToolExecutionUsesServerOwnedReadOnlyScope(t *testing.T) {
 	if fake.calls != 1 || fake.runID != run.ID || fake.request != wantRequest {
 		t.Fatalf("Execute calls = %d, run = %q, request = %+v; want one server-scoped call", fake.calls, fake.runID, fake.request)
 	}
+	if evaluator.calls != 1 || evaluator.serverID != "aws" || evaluator.project != "demo" || evaluator.toolName != "list_buckets" {
+		t.Fatalf("EvaluateTool calls = %d, scope = %q/%q/%q; want exact server-owned lookup", evaluator.calls, evaluator.serverID, evaluator.project, evaluator.toolName)
+	}
 	if !bytes.Equal(fake.arguments.Bytes(), []byte(`{"bucket":"reports","limit":10}`)) {
 		t.Fatalf("arguments = %s, want normalized object", fake.arguments.Bytes())
 	}
@@ -118,6 +157,84 @@ func TestAgentToolExecutionUsesServerOwnedReadOnlyScope(t *testing.T) {
 	}
 	if response.Route.Decision != wantDecision || response.Route.Run.ID != run.ID {
 		t.Fatalf("route = %+v, want audited execution route", response.Route)
+	}
+}
+
+func TestAgentToolExecutionUsesServerResolvedMutationRisk(t *testing.T) {
+	root := scaffoldAgentRunProject(t)
+	store := agentruns.NewStore()
+	run, err := store.Create(agentruns.CreateRequest{
+		Project:    "demo",
+		Prompt:     "create a reports bucket",
+		ProviderID: "codex",
+		Mode:       agentruns.ModeApprovedExecute,
+	})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	evaluator := &fakeAgentToolEvaluator{entry: mcpairlock.ToolInventoryEntry{
+		ServerID: "aws",
+		Name:     "create_bucket",
+		Risk:     mcpairlock.RiskCloudMutation,
+		Decision: mcpairlock.ToolDecision{Risk: mcpairlock.RiskCloudMutation},
+	}}
+	fake := &fakeAgentToolExecutor{result: agentrouting.ExecutionResult{
+		Route: agentrouting.RouteResult{
+			Decision: agentrouting.Decision{
+				Status:           agentrouting.DecisionApprovalRequired,
+				Reason:           agentrouting.ReasonApprovalRequired,
+				ApprovalRequired: true,
+				UntrustedOutput:  true,
+			},
+			Run: run,
+		},
+	}}
+	mux := agentToolExecutionMuxWithEvaluator(root, store, fake, evaluator)
+
+	rec := postAgentToolExecution(
+		mux,
+		"demo",
+		run.ID,
+		`{"connection_id":"aws-prod","server_id":"aws","tool_name":"create_bucket","arguments":{"bucket":"reports"}}`,
+		"application/json",
+		"mutation-execution",
+	)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", rec.Code, rec.Body.String())
+	}
+	if fake.calls != 1 || fake.request.Risk != mcpairlock.RiskCloudMutation || fake.request.Mode != agentruns.ModeApprovedExecute {
+		t.Fatalf("Execute calls = %d, request = %+v; want server-resolved guarded mutation", fake.calls, fake.request)
+	}
+}
+
+func TestResolveAgentToolExecutionRiskFailsClosed(t *testing.T) {
+	request := agentrouting.Request{
+		Project:      "demo",
+		ProviderID:   "codex",
+		ConnectionID: "aws-prod",
+		ServerID:     "aws",
+		ToolName:     "list_buckets",
+		Mode:         agentruns.ModeReadOnly,
+		Risk:         mcpairlock.RiskUnknown,
+	}
+	evaluationError := errors.New("inventory unavailable")
+	tests := []struct {
+		name      string
+		evaluator *fakeAgentToolEvaluator
+		wantErr   error
+	}{
+		{name: "evaluation error", evaluator: &fakeAgentToolEvaluator{err: evaluationError}, wantErr: evaluationError},
+		{name: "server mismatch", evaluator: &fakeAgentToolEvaluator{entry: mcpairlock.ToolInventoryEntry{ServerID: "terraform", Name: "list_buckets", Risk: mcpairlock.RiskReadOnly, Decision: mcpairlock.ToolDecision{Risk: mcpairlock.RiskReadOnly}}}, wantErr: agentrouting.ErrInvalidToolExecution},
+		{name: "tool mismatch", evaluator: &fakeAgentToolEvaluator{entry: mcpairlock.ToolInventoryEntry{ServerID: "aws", Name: "create_bucket", Risk: mcpairlock.RiskReadOnly, Decision: mcpairlock.ToolDecision{Risk: mcpairlock.RiskReadOnly}}}, wantErr: agentrouting.ErrInvalidToolExecution},
+		{name: "risk mismatch", evaluator: &fakeAgentToolEvaluator{entry: mcpairlock.ToolInventoryEntry{ServerID: "aws", Name: "list_buckets", Risk: mcpairlock.RiskReadOnly, Decision: mcpairlock.ToolDecision{Risk: mcpairlock.RiskCloudMutation}}}, wantErr: agentrouting.ErrInvalidToolExecution},
+		{name: "invalid risk", evaluator: &fakeAgentToolEvaluator{entry: mcpairlock.ToolInventoryEntry{ServerID: "aws", Name: "list_buckets", Risk: "invalid", Decision: mcpairlock.ToolDecision{Risk: "invalid"}}}, wantErr: agentrouting.ErrInvalidToolExecution},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if _, err := resolveAgentToolExecutionRisk(test.evaluator, request); !errors.Is(err, test.wantErr) {
+				t.Fatalf("resolve error = %v, want %v", err, test.wantErr)
+			}
+		})
 	}
 }
 
@@ -138,8 +255,9 @@ func TestRouterOptionsMountAgentToolExecutionRoute(t *testing.T) {
 		Result:  &result,
 	}}
 	router := NewRouterWithOptions(nil, nil, nil, nil, root, RouterOptions{
-		AgentRuns:         store,
-		AgentToolExecutor: fake,
+		AgentRuns:          store,
+		AgentToolExecutor:  fake,
+		AgentToolEvaluator: readOnlyAgentToolEvaluator(),
 	})
 
 	rec := postAgentToolExecution(
@@ -158,6 +276,26 @@ func TestRouterOptionsMountAgentToolExecutionRoute(t *testing.T) {
 	}
 	if fake.request.Risk != mcpairlock.RiskReadOnly {
 		t.Fatalf("risk = %v, want RiskReadOnly; RouterOptions path must not weaken the read-only security boundary", fake.request.Risk)
+	}
+}
+
+func TestRouterOptionsOmitsExecutionRouteWithoutEvaluator(t *testing.T) {
+	root, store, run := agentToolRouteFixture(t, "codex")
+	router := NewRouterWithOptions(nil, nil, nil, nil, root, RouterOptions{
+		AgentRuns:         store,
+		AgentToolExecutor: &fakeAgentToolExecutor{},
+	})
+
+	rec := postAgentToolExecution(
+		router,
+		"demo",
+		run.ID,
+		`{"connection_id":"aws-prod","server_id":"aws","tool_name":"list_buckets","arguments":{}}`,
+		"application/json",
+		"absent-evaluator",
+	)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d (route must be absent when no evaluator is configured)", rec.Code, http.StatusNotFound)
 	}
 }
 
