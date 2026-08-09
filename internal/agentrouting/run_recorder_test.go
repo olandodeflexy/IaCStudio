@@ -147,6 +147,68 @@ func TestRunRecorderMapsApprovalKinds(t *testing.T) {
 	}
 }
 
+func TestRunRecorderRecordsExactOperationBinding(t *testing.T) {
+	request := validRequest()
+	request.Mode = agentruns.ModeApprovedExecute
+	request.Risk = mcpairlock.RiskCloudMutation
+	request.ToolName = "apply_workspace"
+	recorder, store, run := recorderFixture(t, request)
+	arguments := mustToolArguments(t, `{"workspace":"prod","auto_approve":false}`)
+
+	got, err := recorder.RecordBoundApproval(
+		testToolApprovalKey,
+		run.ID,
+		request,
+		arguments,
+		approvalRequired(),
+	)
+	if err != nil {
+		t.Fatalf("RecordBoundApproval(): %v", err)
+	}
+	if got.Status != agentruns.StatusWaitingApproval || len(got.Approvals) != 1 || got.Approvals[0].Kind != agentruns.ApprovalCloudWrite {
+		t.Fatalf("recorded run = %+v, want one pending cloud-write gate", got)
+	}
+	binding := ToolApprovalBinding(got.Approvals[0].OperationBinding.Value())
+	if !binding.Matches(testToolApprovalKey, run.ID, request, arguments) {
+		t.Fatal("stored approval binding does not match the exact operation")
+	}
+	stored, ok := store.Get(run.ID)
+	if !ok || len(stored.Approvals) != 1 || stored.Approvals[0].OperationBinding.Value() != string(binding) {
+		t.Fatalf("stored run did not retain exact operation binding: %+v", stored)
+	}
+}
+
+func TestRunRecorderRejectsInvalidBoundApprovalWithoutMutation(t *testing.T) {
+	request := validRequest()
+	request.Mode = agentruns.ModeApprovedExecute
+	request.Risk = mcpairlock.RiskCloudMutation
+	arguments := mustToolArguments(t, `{}`)
+	tests := []struct {
+		name      string
+		key       []byte
+		arguments mcpairlock.ToolCallArguments
+		decision  Decision
+		want      error
+	}{
+		{name: "short key", key: []byte("short"), arguments: arguments, decision: approvalRequired(), want: ErrInvalidToolApprovalBinding},
+		{name: "invalid arguments", key: testToolApprovalKey, decision: approvalRequired(), want: ErrInvalidToolApprovalBinding},
+		{name: "non-approval decision", key: testToolApprovalKey, arguments: arguments, decision: allowed(), want: ErrInvalidDecision},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			recorder, store, run := recorderFixture(t, request)
+			_, err := recorder.RecordBoundApproval(test.key, run.ID, request, test.arguments, test.decision)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("RecordBoundApproval() error = %v, want %v", err, test.want)
+			}
+			unchanged, ok := store.Get(run.ID)
+			if !ok || unchanged.Status != agentruns.StatusQueued || len(unchanged.Approvals) != 0 || len(unchanged.Logs) != 0 {
+				t.Fatalf("run mutated after invalid bound approval: %+v", unchanged)
+			}
+		})
+	}
+}
+
 func TestRunRecorderRejectsScopeMismatchWithoutMutation(t *testing.T) {
 	tests := []struct {
 		name   string
