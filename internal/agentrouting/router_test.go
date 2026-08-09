@@ -133,6 +133,109 @@ func TestRouterAuthorizesAndRecordsOutcomes(t *testing.T) {
 	}
 }
 
+func TestRouterRecordsAllowedExactToolCall(t *testing.T) {
+	policy, request, airlock := readOnlyEvaluation()
+	router, evaluator, _, run := routerFixture(t, policy, request, airlock)
+	arguments := mustToolArguments(t, `{"region":"us-east-1"}`)
+
+	result, err := router.RouteToolCall(testToolApprovalKey, run.ID, request, arguments)
+	if err != nil {
+		t.Fatalf("RouteToolCall(): %v", err)
+	}
+	if result.Decision.Status != DecisionAllowed || result.Run.Status != agentruns.StatusQueued || len(result.Run.Approvals) != 0 {
+		t.Fatalf("RouteToolCall() = %+v, want allowed queued run without approvals", result)
+	}
+	if evaluator.calls != 1 {
+		t.Fatalf("EvaluateTool calls = %d, want one", evaluator.calls)
+	}
+}
+
+func TestRouterRecordsExactToolCallApproval(t *testing.T) {
+	policy, request, airlock := readOnlyEvaluation()
+	policy.Rules[0].ApprovalRequired = true
+	router, evaluator, store, run := routerFixture(t, policy, request, airlock)
+	arguments := mustToolArguments(t, `{"region":"us-east-1","refresh":false}`)
+
+	result, err := router.RouteToolCall(testToolApprovalKey, run.ID, request, arguments)
+	if err != nil {
+		t.Fatalf("RouteToolCall(): %v", err)
+	}
+	if result.Decision.Status != DecisionApprovalRequired || result.Run.Status != agentruns.StatusWaitingApproval {
+		t.Fatalf("RouteToolCall() = %+v, want approval-required waiting run", result)
+	}
+	if len(result.Run.Approvals) != 1 {
+		t.Fatalf("RouteToolCall() approvals = %d, want one", len(result.Run.Approvals))
+	}
+	binding := ToolApprovalBinding(result.Run.Approvals[0].OperationBinding.Value())
+	if !binding.Matches(testToolApprovalKey, run.ID, request, arguments) {
+		t.Fatal("recorded gate is not bound to the exact tool call")
+	}
+	stored, ok := store.Get(run.ID)
+	if !ok || len(stored.Approvals) != 1 || stored.Approvals[0].OperationBinding.Value() != string(binding) {
+		t.Fatalf("stored run did not retain exact operation binding: %+v", stored)
+	}
+	if evaluator.calls != 1 {
+		t.Fatalf("EvaluateTool calls = %d, want one", evaluator.calls)
+	}
+}
+
+func TestRouterRejectsInvalidBoundToolCallBeforeAuthorization(t *testing.T) {
+	policy, request, airlock := readOnlyEvaluation()
+	validArguments := mustToolArguments(t, `{}`)
+	tests := []struct {
+		name      string
+		key       []byte
+		arguments mcpairlock.ToolCallArguments
+		mutate    func(*Request)
+		mutateID  func(string) string
+		want      error
+	}{
+		{name: "short key", key: []byte("short"), arguments: validArguments, want: ErrInvalidToolApprovalBinding},
+		{name: "invalid arguments", key: testToolApprovalKey, want: ErrInvalidToolApprovalBinding},
+		{name: "invalid route", key: testToolApprovalKey, arguments: validArguments, mutate: func(request *Request) {
+			request.ToolName = ""
+		}, want: ErrInvalidRequest},
+		{name: "empty run id", key: testToolApprovalKey, arguments: validArguments, mutateID: func(string) string {
+			return ""
+		}, want: ErrRunIDRequired},
+		{name: "padded run id", key: testToolApprovalKey, arguments: validArguments, mutateID: func(runID string) string {
+			return " " + runID
+		}, want: ErrInvalidRunID},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			router, evaluator, store, run := routerFixture(t, policy, request, airlock)
+			before, ok := store.Get(run.ID)
+			if !ok {
+				t.Fatalf("Get(%q) returned no run", run.ID)
+			}
+			candidate := request
+			if test.mutate != nil {
+				test.mutate(&candidate)
+			}
+			candidateRunID := run.ID
+			if test.mutateID != nil {
+				candidateRunID = test.mutateID(run.ID)
+			}
+
+			result, err := router.RouteToolCall(test.key, candidateRunID, candidate, test.arguments)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("RouteToolCall() error = %v, want %v", err, test.want)
+			}
+			if result.Decision != (Decision{}) || result.Run.ID != "" {
+				t.Fatalf("RouteToolCall() = %+v, want zero result", result)
+			}
+			after, ok := store.Get(run.ID)
+			if !ok || !reflect.DeepEqual(after, before) {
+				t.Fatalf("run mutated after invalid tool call: before=%+v after=%+v", before, after)
+			}
+			if evaluator.calls != 0 {
+				t.Fatalf("EvaluateTool calls = %d, want none", evaluator.calls)
+			}
+		})
+	}
+}
+
 func TestRouterDoesNotExposeUnrecordedDecision(t *testing.T) {
 	policy, request, airlock := readOnlyEvaluation()
 	router, evaluator, store, run := routerFixture(t, policy, request, airlock)

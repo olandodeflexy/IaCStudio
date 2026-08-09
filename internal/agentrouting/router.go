@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/iac-studio/iac-studio/internal/agentruns"
+	"github.com/iac-studio/iac-studio/internal/mcpairlock"
 )
 
 var (
@@ -67,6 +68,48 @@ func (r *Router) Route(runID string, request Request) (RouteResult, error) {
 	run, err := r.recorder.Record(runID, request, decision)
 	if err != nil {
 		return RouteResult{}, fmt.Errorf("record tool route authorization: %w", err)
+	}
+	return RouteResult{Decision: decision, Run: run}, nil
+}
+
+// RouteToolCall authorizes and records one exact MCP tool operation. Calls
+// requiring approval receive an operation-bound gate; no tool is invoked.
+func (r *Router) RouteToolCall(
+	key []byte,
+	runID string,
+	request Request,
+	arguments mcpairlock.ToolCallArguments,
+) (RouteResult, error) {
+	if r == nil || r.authorizer == nil {
+		return RouteResult{}, ErrAuthorizerRequired
+	}
+	if r.recorder == nil {
+		return RouteResult{}, ErrRunRecorderRequired
+	}
+	if err := validateRunID(runID); err != nil {
+		return RouteResult{}, err
+	}
+	if err := request.Validate(); err != nil {
+		return RouteResult{}, err
+	}
+	key = append([]byte(nil), key...)
+	defer clear(key)
+	if _, err := NewToolApprovalBinding(key, runID, request, arguments); err != nil {
+		return RouteResult{}, fmt.Errorf("validate bound tool route: %w", err)
+	}
+
+	decision := r.authorizer.Authorize(request)
+	var (
+		run agentruns.Run
+		err error
+	)
+	if decision.Status == DecisionApprovalRequired {
+		run, err = r.recorder.RecordBoundApproval(key, runID, request, arguments, decision)
+	} else {
+		run, err = r.recorder.Record(runID, request, decision)
+	}
+	if err != nil {
+		return RouteResult{}, fmt.Errorf("record exact tool route authorization: %w", err)
 	}
 	return RouteResult{Decision: decision, Run: run}, nil
 }
