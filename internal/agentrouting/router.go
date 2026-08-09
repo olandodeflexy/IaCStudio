@@ -103,7 +103,7 @@ func (r *Router) RouteToolCall(
 		run, err = r.recorder.Record(runID, request, decision)
 	}
 	if err != nil {
-		return RouteResult{}, fmt.Errorf("record bound tool route authorization: %w", err)
+		return RouteResult{}, fmt.Errorf("record exact tool route authorization: %w", err)
 	}
 	return RouteResult{Decision: decision, Run: run}, nil
 }
