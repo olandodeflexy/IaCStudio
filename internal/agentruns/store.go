@@ -15,11 +15,12 @@ import (
 )
 
 const (
-	defaultMaxRuns      = 100
-	maxPromptPreviewLen = 240
-	maxLogMessageLen    = 2000
-	maxPatchDiffLen     = 20000
-	promptHashKeyLen    = 32
+	defaultMaxRuns        = 100
+	maxPromptPreviewLen   = 240
+	maxLogMessageLen      = 2000
+	maxPatchDiffLen       = 20000
+	maxApprovalBindingLen = 256
+	promptHashKeyLen      = 32
 )
 
 type Status string
@@ -78,6 +79,36 @@ const (
 	ApprovalApproved ApprovalStatus = "approved"
 	ApprovalRejected ApprovalStatus = "rejected"
 )
+
+// ApprovalBinding is an opaque server-owned fingerprint of an exact operation.
+// Its value is intentionally excluded from Agent Run JSON responses.
+type ApprovalBinding struct {
+	value string
+}
+
+func NewApprovalBinding(value string) (ApprovalBinding, error) {
+	if err := validateApprovalBinding(value); err != nil {
+		return ApprovalBinding{}, err
+	}
+	return ApprovalBinding{value: value}, nil
+}
+
+// Value returns the opaque binding for server-side verification.
+func (b ApprovalBinding) Value() string {
+	return b.value
+}
+
+func validateApprovalBinding(value string) error {
+	if value == "" || len(value) > maxApprovalBindingLen {
+		return fmt.Errorf("%w: value must contain 1-%d bytes", ErrInvalidApprovalBinding, maxApprovalBindingLen)
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < '!' || value[i] > '~' {
+			return fmt.Errorf("%w: value must contain printable non-space ASCII only", ErrInvalidApprovalBinding)
+		}
+	}
+	return nil
+}
 
 type CreateRequest struct {
 	Project    string
@@ -144,13 +175,15 @@ type ProposedPatch struct {
 }
 
 type ApprovalGate struct {
-	ID        string         `json:"id"`
-	Kind      ApprovalKind   `json:"kind"`
-	Status    ApprovalStatus `json:"status"`
-	Summary   string         `json:"summary"`
-	CreatedAt time.Time      `json:"created_at"`
-	DecidedAt *time.Time     `json:"decided_at,omitempty"`
-	DecidedBy string         `json:"decided_by,omitempty"`
+	ID               string          `json:"id"`
+	Kind             ApprovalKind    `json:"kind"`
+	Status           ApprovalStatus  `json:"status"`
+	Summary          string          `json:"summary"`
+	CreatedAt        time.Time       `json:"created_at"`
+	DecidedAt        *time.Time      `json:"decided_at,omitempty"`
+	DecidedBy        string          `json:"decided_by,omitempty"`
+	// Legacy and non-MCP gates may be unbound; MCP writes must require a match.
+	OperationBinding ApprovalBinding `json:"-"`
 }
 
 type PendingApprovalGate struct {
@@ -400,6 +433,11 @@ func (s *Store) AddApproval(id string, gate ApprovalGate) (Run, error) {
 	if !validApprovalKind(gate.Kind) {
 		return Run{}, fmt.Errorf("invalid approval kind: %s", gate.Kind)
 	}
+	if gate.OperationBinding.value != "" {
+		if err := validateApprovalBinding(gate.OperationBinding.value); err != nil {
+			return Run{}, err
+		}
+	}
 	return s.update(id, func(run *Run, now time.Time) error {
 		if terminalStatus(run.Status) {
 			return ErrTerminated
@@ -562,12 +600,13 @@ func (s *Store) evictLocked() {
 }
 
 var (
-	ErrNotFound         = errors.New("agent run not found")
-	ErrTerminated       = errors.New("agent run is already in a terminal state")
-	ErrApprovalPending  = errors.New("agent run has pending approval gates")
-	ErrApprovalNotFound = errors.New("approval gate not found")
-	ErrApprovalDecided  = errors.New("approval gate is already decided")
-	ErrUnsafePatchPath  = errors.New("patch path must be a relative path within the project")
+	ErrNotFound               = errors.New("agent run not found")
+	ErrTerminated             = errors.New("agent run is already in a terminal state")
+	ErrApprovalPending        = errors.New("agent run has pending approval gates")
+	ErrApprovalNotFound       = errors.New("approval gate not found")
+	ErrApprovalDecided        = errors.New("approval gate is already decided")
+	ErrInvalidApprovalBinding = errors.New("invalid approval binding")
+	ErrUnsafePatchPath        = errors.New("patch path must be a relative path within the project")
 )
 
 func validStatus(status Status) bool {
