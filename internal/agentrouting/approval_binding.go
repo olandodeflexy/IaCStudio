@@ -42,10 +42,11 @@ func NewToolApprovalBinding(
 	if err := request.Validate(); err != nil {
 		return "", fmt.Errorf("%w: request: %v", ErrInvalidToolApprovalBinding, err)
 	}
-	encodedArguments, err := arguments.MarshalJSON()
+	toolRequest, err := mcpairlock.NewToolCallRequest(request.ServerID, request.ToolName, arguments)
 	if err != nil {
-		return "", fmt.Errorf("%w: arguments: %v", ErrInvalidToolApprovalBinding, err)
+		return "", fmt.Errorf("%w: MCP tool request: %v", ErrInvalidToolApprovalBinding, err)
 	}
+	encodedArguments := toolRequest.Arguments.Bytes()
 
 	mac := hmac.New(sha256.New, key)
 	_, _ = mac.Write([]byte(toolApprovalBindingPrefix))
@@ -54,8 +55,8 @@ func NewToolApprovalBinding(
 		[]byte(request.Project),
 		[]byte(request.ProviderID),
 		[]byte(request.ConnectionID),
-		[]byte(request.ServerID),
-		[]byte(request.ToolName),
+		[]byte(toolRequest.ServerID),
+		[]byte(toolRequest.ToolName),
 		[]byte(request.Mode),
 		[]byte(request.Risk),
 		encodedArguments,

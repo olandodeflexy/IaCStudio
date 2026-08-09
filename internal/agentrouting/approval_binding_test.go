@@ -104,6 +104,10 @@ func TestToolApprovalBindingCanonicalizesArgumentsAndHidesInput(t *testing.T) {
 func TestToolApprovalBindingRejectsInvalidInputsAndRepresentations(t *testing.T) {
 	request := validRequest()
 	arguments := mustToolArguments(t, `{}`)
+	invalidServerRequest := request
+	invalidServerRequest.ServerID = "aws\u200b"
+	invalidToolRequest := request
+	invalidToolRequest.ToolName = strings.Repeat("a", 129)
 	tests := []struct {
 		name      string
 		key       []byte
@@ -115,6 +119,8 @@ func TestToolApprovalBindingRejectsInvalidInputsAndRepresentations(t *testing.T)
 		{name: "empty run", key: testToolApprovalKey, runID: "", request: request, arguments: arguments},
 		{name: "padded run", key: testToolApprovalKey, runID: " run_000001", request: request, arguments: arguments},
 		{name: "invalid request", key: testToolApprovalKey, runID: "run_000001", request: Request{}, arguments: arguments},
+		{name: "invalid server identifier", key: testToolApprovalKey, runID: "run_000001", request: invalidServerRequest, arguments: arguments},
+		{name: "invalid tool identifier", key: testToolApprovalKey, runID: "run_000001", request: invalidToolRequest, arguments: arguments},
 		{name: "invalid arguments", key: testToolApprovalKey, runID: "run_000001", request: request},
 	}
 	for _, test := range tests {
