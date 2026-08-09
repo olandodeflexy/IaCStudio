@@ -128,6 +128,17 @@ func TestExecutorBindsApprovalToExactToolCall(t *testing.T) {
 	if invocations != 1 || !retry.Invoked || retry.Result == nil || retry.Route.Decision.Status != DecisionAllowed {
 		t.Fatalf("Execute(retry) = %+v, invocations = %d; want approved exact-call execution", retry, invocations)
 	}
+
+	replay, err := executor.Execute(context.Background(), run.ID, request, arguments)
+	if err != nil {
+		t.Fatalf("Execute(replay): %v", err)
+	}
+	if invocations != 1 || replay.Invoked || replay.Route.Decision.Status != DecisionApprovalRequired {
+		t.Fatalf("Execute(replay) = %+v, invocations = %d; want a fresh approval gate", replay, invocations)
+	}
+	if len(replay.Route.Run.Approvals) != 2 {
+		t.Fatalf("Execute(replay) approvals = %d, want two", len(replay.Route.Run.Approvals))
+	}
 }
 
 func TestExecutorDoesNotReuseApprovedBindingForDifferentArguments(t *testing.T) {

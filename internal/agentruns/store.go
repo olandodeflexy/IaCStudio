@@ -394,6 +394,33 @@ func (s *Store) AddLogIfNoPendingApprovals(id string, level LogLevel, message st
 	return s.addLog(id, level, message, true)
 }
 
+// ConsumeApprovalBinding atomically spends one approved operation binding and
+// appends its audit record. The approval decision remains in run history, while
+// clearing the private binding prevents another execution from reusing it.
+func (s *Store) ConsumeApprovalBinding(id, approvalID, message string) (Run, error) {
+	return s.update(id, func(run *Run, now time.Time) error {
+		if terminalStatus(run.Status) {
+			return ErrTerminated
+		}
+		if run.Status == StatusWaitingApproval || hasPendingApprovals(run.Approvals) {
+			return ErrApprovalPending
+		}
+		for i := range run.Approvals {
+			approval := &run.Approvals[i]
+			if approval.ID != approvalID {
+				continue
+			}
+			if approval.Status != ApprovalApproved || approval.OperationBinding.value == "" {
+				return ErrApprovalBindingUnavailable
+			}
+			approval.OperationBinding = ApprovalBinding{}
+			appendLog(run, now, LogAudit, message)
+			return nil
+		}
+		return ErrApprovalNotFound
+	})
+}
+
 func (s *Store) addLog(id string, level LogLevel, message string, rejectPendingApprovals bool) (Run, error) {
 	if !validLogLevel(level) {
 		return Run{}, fmt.Errorf("invalid agent log level: %s", level)
@@ -600,13 +627,14 @@ func (s *Store) evictLocked() {
 }
 
 var (
-	ErrNotFound               = errors.New("agent run not found")
-	ErrTerminated             = errors.New("agent run is already in a terminal state")
-	ErrApprovalPending        = errors.New("agent run has pending approval gates")
-	ErrApprovalNotFound       = errors.New("approval gate not found")
-	ErrApprovalDecided        = errors.New("approval gate is already decided")
-	ErrInvalidApprovalBinding = errors.New("invalid approval binding")
-	ErrUnsafePatchPath        = errors.New("patch path must be a relative path within the project")
+	ErrNotFound                   = errors.New("agent run not found")
+	ErrTerminated                 = errors.New("agent run is already in a terminal state")
+	ErrApprovalPending            = errors.New("agent run has pending approval gates")
+	ErrApprovalNotFound           = errors.New("approval gate not found")
+	ErrApprovalDecided            = errors.New("approval gate is already decided")
+	ErrApprovalBindingUnavailable = errors.New("approval operation binding is unavailable")
+	ErrInvalidApprovalBinding     = errors.New("invalid approval binding")
+	ErrUnsafePatchPath            = errors.New("patch path must be a relative path within the project")
 )
 
 func validStatus(status Status) bool {

@@ -51,7 +51,7 @@ func NewExecutor(router *Router, invoke ToolInvokeFunc) (*Executor, error) {
 	approvalKey := make([]byte, minToolApprovalBindingKeyBytes)
 	if _, err := rand.Read(approvalKey); err != nil {
 		clear(approvalKey)
-		return nil, fmt.Errorf("%w: %v", ErrToolApprovalKey, err)
+		return nil, fmt.Errorf("%w: %w", ErrToolApprovalKey, err)
 	}
 	return &Executor{
 		router:      router,

@@ -779,6 +779,49 @@ func TestStoreAddLogIfNoPendingApprovalsRejectsAtomically(t *testing.T) {
 	}
 }
 
+func TestStoreConsumeApprovalBindingIsSingleUse(t *testing.T) {
+	store := NewStore(WithClock(fixedClock().now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create returned error: %v", err)
+	}
+	binding, err := NewApprovalBinding("exact-operation-binding")
+	if err != nil {
+		t.Fatalf("NewApprovalBinding returned error: %v", err)
+	}
+	run, err = store.AddApproval(run.ID, ApprovalGate{
+		Kind:             ApprovalMCPNetwork,
+		Summary:          "authorize route",
+		OperationBinding: binding,
+	})
+	if err != nil {
+		t.Fatalf("AddApproval returned error: %v", err)
+	}
+	approvalID := run.Approvals[0].ID
+	if _, err := store.DecideApproval(run.ID, approvalID, ApprovalApproved, "operator"); err != nil {
+		t.Fatalf("DecideApproval returned error: %v", err)
+	}
+
+	consumed, err := store.ConsumeApprovalBinding(run.ID, approvalID, "allowed route")
+	if err != nil {
+		t.Fatalf("ConsumeApprovalBinding returned error: %v", err)
+	}
+	if consumed.Approvals[0].Status != ApprovalApproved || consumed.Approvals[0].OperationBinding.Value() != "" {
+		t.Fatalf("consumed approval = %+v, want approved gate without a reusable binding", consumed.Approvals[0])
+	}
+	if len(consumed.Logs) != 2 || consumed.Logs[1].Level != LogAudit || consumed.Logs[1].Message != "allowed route" {
+		t.Fatalf("consumption audit logs = %+v", consumed.Logs)
+	}
+
+	if _, err := store.ConsumeApprovalBinding(run.ID, approvalID, "replayed route"); !errors.Is(err, ErrApprovalBindingUnavailable) {
+		t.Fatalf("replayed ConsumeApprovalBinding error = %v, want ErrApprovalBindingUnavailable", err)
+	}
+	unchanged, ok := store.Get(run.ID)
+	if !ok || len(unchanged.Logs) != 2 {
+		t.Fatalf("replayed consumption mutated run: %+v", unchanged)
+	}
+}
+
 func TestStoreDecideApproval(t *testing.T) {
 	clock := fixedClock()
 	store := NewStore(WithClock(clock.now))
