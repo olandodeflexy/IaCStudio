@@ -28,6 +28,7 @@ type agentToolExecutionAttemptKey struct {
 type agentToolExecutionAttempt struct {
 	fingerprint [sha256.Size]byte
 	done        chan struct{}
+	released    bool
 	decision    agentrouting.Decision
 	invoked     bool
 	result      mcpairlock.ToolCallResult
@@ -83,37 +84,48 @@ func (s *agentToolExecutionAttemptStore) execute(
 		return agentrouting.ExecutionResult{}, false, err
 	}
 	key := agentToolExecutionAttemptKey{runID: runID, key: idempotencyKey}
+	var attempt *agentToolExecutionAttempt
 
 	s.mu.Lock()
-	if attempt, ok := s.entries[key]; ok {
-		if attempt.fingerprint != fingerprint {
+	if existing, ok := s.entries[key]; ok {
+		if existing.fingerprint != fingerprint {
 			s.mu.Unlock()
 			return agentrouting.ExecutionResult{}, false, errAgentToolExecutionIdempotencyConflict
 		}
-		done := attempt.done
-		s.mu.Unlock()
-
-		select {
-		case <-done:
-			if attempt.err != nil {
-				return agentrouting.ExecutionResult{}, true, attempt.err
+		if existing.released {
+			s.removeCompletedKeyLocked(key)
+			attempt = &agentToolExecutionAttempt{
+				fingerprint: fingerprint,
+				done:        make(chan struct{}),
 			}
-			return replayAgentToolExecution(attempt), true, nil
-		case <-ctx.Done():
-			return agentrouting.ExecutionResult{}, true, ctx.Err()
-		}
-	}
-	if !s.makeRoomLocked() {
-		s.mu.Unlock()
-		return agentrouting.ExecutionResult{}, false, errAgentToolExecutionAttemptCapacity
-	}
-	attempt := &agentToolExecutionAttempt{
-		fingerprint: fingerprint,
-		done:        make(chan struct{}),
-	}
-	s.entries[key] = attempt
-	s.mu.Unlock()
+			s.entries[key] = attempt
+			s.mu.Unlock()
+		} else {
+			done := existing.done
+			s.mu.Unlock()
 
+			select {
+			case <-done:
+				if existing.err != nil {
+					return agentrouting.ExecutionResult{}, true, existing.err
+				}
+				return replayAgentToolExecution(existing), true, nil
+			case <-ctx.Done():
+				return agentrouting.ExecutionResult{}, true, ctx.Err()
+			}
+		}
+	} else {
+		if !s.makeRoomLocked() {
+			s.mu.Unlock()
+			return agentrouting.ExecutionResult{}, false, errAgentToolExecutionAttemptCapacity
+		}
+		attempt = &agentToolExecutionAttempt{
+			fingerprint: fingerprint,
+			done:        make(chan struct{}),
+		}
+		s.entries[key] = attempt
+		s.mu.Unlock()
+	}
 	var result agentrouting.ExecutionResult
 	func() {
 		defer func() {
@@ -145,10 +157,9 @@ func (s *agentToolExecutionAttemptStore) execute(
 			attempt.hasResult = true
 		}
 		if result.Route.Decision.Status == agentrouting.DecisionApprovalRequired {
-			delete(s.entries, key)
-		} else {
-			s.completed = append(s.completed, key)
+			attempt.released = true
 		}
+		s.completed = append(s.completed, key)
 	} else {
 		delete(s.entries, key)
 	}
@@ -184,6 +195,16 @@ func (s *agentToolExecutionAttemptStore) makeRoomLocked() bool {
 		delete(s.entries, oldest)
 	}
 	return len(s.entries) < s.maxEntries
+}
+
+func (s *agentToolExecutionAttemptStore) removeCompletedKeyLocked(key agentToolExecutionAttemptKey) {
+	filtered := s.completed[:0]
+	for _, existing := range s.completed {
+		if existing != key {
+			filtered = append(filtered, existing)
+		}
+	}
+	s.completed = filtered
 }
 
 func replayAgentToolExecution(attempt *agentToolExecutionAttempt) agentrouting.ExecutionResult {

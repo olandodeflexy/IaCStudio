@@ -240,6 +240,106 @@ func TestAgentToolExecutionAttemptStoreRetriesWriteAfterApproval(t *testing.T) {
 	}
 }
 
+func TestAgentToolExecutionAttemptStoreRejectsChangedRequestAfterApproval(t *testing.T) {
+	store := newAgentToolExecutionAttemptStore(1)
+	request := testAgentToolExecutionRequest()
+	request.Risk = mcpairlock.RiskCloudMutation
+	request.Mode = "approved_execute"
+	arguments := testAgentToolExecutionArguments(t, `{"bucket":"reports"}`)
+
+	approvalRequired := agentrouting.ExecutionResult{
+		Route: agentrouting.RouteResult{
+			Decision: agentrouting.Decision{
+				Status:           agentrouting.DecisionApprovalRequired,
+				Reason:           agentrouting.ReasonApprovalRequired,
+				ApprovalRequired: true,
+				UntrustedOutput:  true,
+			},
+		},
+	}
+	if _, _, err := store.execute(context.Background(), "run_000001", "write", request, arguments, func() (agentrouting.ExecutionResult, error) {
+		return approvalRequired, nil
+	}); err != nil {
+		t.Fatalf("first execute: %v", err)
+	}
+
+	changedArguments := testAgentToolExecutionArguments(t, `{"bucket":"audit"}`)
+	if _, replayed, err := store.execute(context.Background(), "run_000001", "write", request, changedArguments, func() (agentrouting.ExecutionResult, error) {
+		return testAgentToolExecutionResult("unexpected"), nil
+	}); !errors.Is(err, errAgentToolExecutionIdempotencyConflict) || replayed {
+		t.Fatalf("changed request after approval = %v, replayed = %t; want idempotency conflict", err, replayed)
+	}
+}
+
+func TestAgentToolExecutionAttemptStoreCoalescesApprovedRetryAfterApproval(t *testing.T) {
+	store := newAgentToolExecutionAttemptStore(1)
+	request := testAgentToolExecutionRequest()
+	request.Risk = mcpairlock.RiskCloudMutation
+	request.Mode = "approved_execute"
+	arguments := testAgentToolExecutionArguments(t, `{}`)
+
+	approvalRequired := agentrouting.ExecutionResult{
+		Route: agentrouting.RouteResult{
+			Decision: agentrouting.Decision{
+				Status:           agentrouting.DecisionApprovalRequired,
+				Reason:           agentrouting.ReasonApprovalRequired,
+				ApprovalRequired: true,
+				UntrustedOutput:  true,
+			},
+		},
+	}
+	if _, _, err := store.execute(context.Background(), "run_000001", "write", request, arguments, func() (agentrouting.ExecutionResult, error) {
+		return approvalRequired, nil
+	}); err != nil {
+		t.Fatalf("first execute: %v", err)
+	}
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+	var calls atomic.Int32
+	execute := func() (agentrouting.ExecutionResult, error) {
+		if calls.Add(1) == 1 {
+			close(started)
+		}
+		<-release
+		return testAgentToolExecutionResult("applied"), nil
+	}
+
+	results := make(chan agentToolExecutionAttemptOutcome, 2)
+	run := func() {
+		result, replayed, err := store.execute(
+			context.Background(),
+			"run_000001",
+			"write",
+			request,
+			arguments,
+			execute,
+		)
+		results <- agentToolExecutionAttemptOutcome{result: result, replayed: replayed, err: err}
+	}
+	go run()
+	<-started
+	go run()
+	close(release)
+
+	replayed := 0
+	for range 2 {
+		outcome := <-results
+		if outcome.err != nil {
+			t.Fatalf("execute error = %v", outcome.err)
+		}
+		if outcome.result.Result == nil || outcome.result.Result.Output != "applied" {
+			t.Fatalf("execute result = %+v, want applied output", outcome.result)
+		}
+		if outcome.replayed {
+			replayed++
+		}
+	}
+	if calls.Load() != 1 || replayed != 1 {
+		t.Fatalf("execution calls = %d, replayed responses = %d; want 1, 1", calls.Load(), replayed)
+	}
+}
+
 func TestAgentToolExecutionAttemptStoreRejectsInvalidIdempotencyKeys(t *testing.T) {
 	store := newAgentToolExecutionAttemptStore(1)
 	request := testAgentToolExecutionRequest()
