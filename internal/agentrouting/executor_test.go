@@ -92,7 +92,7 @@ func TestExecutorDoesNotInvokeNonAllowedRoutes(t *testing.T) {
 func TestExecutorBindsApprovalToExactToolCall(t *testing.T) {
 	policy, request, airlock := readOnlyEvaluation()
 	policy.Rules[0].ApprovalRequired = true
-	router, _, _, run := routerFixture(t, policy, request, airlock)
+	router, _, store, run := routerFixture(t, policy, request, airlock)
 	arguments := executionArguments(t)
 	invocations := 0
 	executor, err := NewExecutor(router, func(context.Context, mcpairlock.ToolCallRequest) (mcpairlock.ToolCallResult, error) {
@@ -116,6 +116,59 @@ func TestExecutorBindsApprovalToExactToolCall(t *testing.T) {
 	binding := ToolApprovalBinding(result.Route.Run.Approvals[0].OperationBinding.Value())
 	if !binding.Matches(executor.approvalKey, run.ID, request, arguments) {
 		t.Fatal("approval gate is not bound to the exact executed tool call")
+	}
+	if _, err := store.DecideApproval(run.ID, result.Route.Run.Approvals[0].ID, agentruns.ApprovalApproved, "operator"); err != nil {
+		t.Fatalf("DecideApproval(): %v", err)
+	}
+
+	retry, err := executor.Execute(context.Background(), run.ID, request, arguments)
+	if err != nil {
+		t.Fatalf("Execute(retry): %v", err)
+	}
+	if invocations != 1 || !retry.Invoked || retry.Result == nil || retry.Route.Decision.Status != DecisionAllowed {
+		t.Fatalf("Execute(retry) = %+v, invocations = %d; want approved exact-call execution", retry, invocations)
+	}
+}
+
+func TestExecutorDoesNotReuseApprovedBindingForDifferentArguments(t *testing.T) {
+	policy, request, airlock := readOnlyEvaluation()
+	policy.Rules[0].ApprovalRequired = true
+	router, _, store, run := routerFixture(t, policy, request, airlock)
+	firstArguments := executionArguments(t)
+	secondArguments := mustExecutionArguments(t, `{"region":"us-west-2"}`)
+	invocations := 0
+	executor, err := NewExecutor(router, func(context.Context, mcpairlock.ToolCallRequest) (mcpairlock.ToolCallResult, error) {
+		invocations++
+		return mcpairlock.NewToolCallResult(nil, false), nil
+	})
+	if err != nil {
+		t.Fatalf("NewExecutor(): %v", err)
+	}
+
+	first, err := executor.Execute(context.Background(), run.ID, request, firstArguments)
+	if err != nil {
+		t.Fatalf("Execute(first): %v", err)
+	}
+	if len(first.Route.Run.Approvals) != 1 {
+		t.Fatalf("Execute(first) approvals = %d, want one", len(first.Route.Run.Approvals))
+	}
+	if _, err := store.DecideApproval(run.ID, first.Route.Run.Approvals[0].ID, agentruns.ApprovalApproved, "operator"); err != nil {
+		t.Fatalf("DecideApproval(): %v", err)
+	}
+
+	second, err := executor.Execute(context.Background(), run.ID, request, secondArguments)
+	if err != nil {
+		t.Fatalf("Execute(second): %v", err)
+	}
+	if invocations != 0 || second.Invoked || second.Route.Decision.Status != DecisionApprovalRequired {
+		t.Fatalf("Execute(second) = %+v, invocations = %d; want a new approval gate", second, invocations)
+	}
+	if len(second.Route.Run.Approvals) != 2 {
+		t.Fatalf("Execute(second) approvals = %d, want two", len(second.Route.Run.Approvals))
+	}
+	binding := ToolApprovalBinding(second.Route.Run.Approvals[1].OperationBinding.Value())
+	if !binding.Matches(executor.approvalKey, run.ID, request, secondArguments) {
+		t.Fatal("new approval gate is not bound to the retried tool call arguments")
 	}
 }
 
@@ -337,8 +390,12 @@ func TestExecutorRejectsMissingDependenciesAndContext(t *testing.T) {
 }
 
 func executionArguments(t *testing.T) mcpairlock.ToolCallArguments {
+	return mustExecutionArguments(t, `{"region":"us-east-1"}`)
+}
+
+func mustExecutionArguments(t *testing.T, raw string) mcpairlock.ToolCallArguments {
 	t.Helper()
-	arguments, err := mcpairlock.ParseToolCallArguments([]byte(`{"region":"us-east-1"}`))
+	arguments, err := mcpairlock.ParseToolCallArguments([]byte(raw))
 	if err != nil {
 		t.Fatalf("ParseToolCallArguments(): %v", err)
 	}
