@@ -17,7 +17,6 @@ var (
 	errAgentToolExecutionIdempotencyConflict   = errors.New("idempotency key reused for a different tool execution")
 	errAgentToolExecutionInvalidIdempotencyKey = errors.New("invalid tool execution idempotency key")
 	errAgentToolExecutionAttemptCapacity       = errors.New("tool execution idempotency capacity reached")
-	errAgentToolExecutionRequiresReadOnly      = errors.New("tool execution idempotency supports read-only routes only")
 	errAgentToolExecutionCallbackPanicked      = errors.New("tool execution callback panicked")
 )
 
@@ -37,8 +36,8 @@ type agentToolExecutionAttempt struct {
 }
 
 // agentToolExecutionAttemptStore coalesces concurrent retries and retains a
-// bounded replay window for successful read-only tool executions. Write-side
-// execution requires a durable approval and idempotency contract instead.
+// bounded replay window for completed tool executions. Approval-required
+// outcomes are released so the exact request can be retried after approval.
 type agentToolExecutionAttemptStore struct {
 	mu         sync.Mutex
 	entries    map[agentToolExecutionAttemptKey]*agentToolExecutionAttempt
@@ -78,9 +77,6 @@ func (s *agentToolExecutionAttemptStore) execute(
 	}
 	if !validAgentToolRouteIdempotencyKey(idempotencyKey) {
 		return agentrouting.ExecutionResult{}, false, errAgentToolExecutionInvalidIdempotencyKey
-	}
-	if request.Risk != mcpairlock.RiskReadOnly {
-		return agentrouting.ExecutionResult{}, false, errAgentToolExecutionRequiresReadOnly
 	}
 	fingerprint, err := agentToolExecutionFingerprint(request, arguments)
 	if err != nil {
@@ -148,7 +144,11 @@ func (s *agentToolExecutionAttemptStore) execute(
 			attempt.result = *result.Result
 			attempt.hasResult = true
 		}
-		s.completed = append(s.completed, key)
+		if result.Route.Decision.Status == agentrouting.DecisionApprovalRequired {
+			delete(s.entries, key)
+		} else {
+			s.completed = append(s.completed, key)
+		}
 	} else {
 		delete(s.entries, key)
 	}
