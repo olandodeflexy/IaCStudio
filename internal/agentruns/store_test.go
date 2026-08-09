@@ -78,6 +78,20 @@ func TestStorePreservesPrivateApprovalBinding(t *testing.T) {
 	if got := run.Approvals[0].OperationBinding.Value(); got != value {
 		t.Fatalf("stored binding = %q, want exact value", got)
 	}
+	got, ok := store.Get(run.ID)
+	if !ok {
+		t.Fatal("expected run to exist")
+	}
+	if binding := got.Approvals[0].OperationBinding.Value(); binding != value {
+		t.Fatalf("Get() binding = %q, want exact value", binding)
+	}
+	list := store.List()
+	if len(list) != 1 {
+		t.Fatalf("List() len = %d, want 1", len(list))
+	}
+	if binding := list[0].Approvals[0].OperationBinding.Value(); binding != value {
+		t.Fatalf("List() binding = %q, want exact value", binding)
+	}
 	encoded, err := json.Marshal(run)
 	if err != nil {
 		t.Fatalf("Marshal(run): %v", err)
@@ -92,6 +106,46 @@ func TestStorePreservesPrivateApprovalBinding(t *testing.T) {
 	}
 	if got := run.Approvals[0].OperationBinding.Value(); got != value {
 		t.Fatalf("decided approval binding = %q, want exact value", got)
+	}
+}
+
+func TestStoreApprovalBindingSnapshotsAreDefensive(t *testing.T) {
+	store := NewStore(WithClock(fixedClock().now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+	value := "mcp-tool-approval-v1:" + strings.Repeat("c", 64)
+	binding, err := NewApprovalBinding(value)
+	if err != nil {
+		t.Fatalf("NewApprovalBinding(): %v", err)
+	}
+	run, err = store.AddApproval(run.ID, ApprovalGate{
+		Kind:             ApprovalCloudWrite,
+		Summary:          "authorize exact cloud operation",
+		OperationBinding: binding,
+	})
+	if err != nil {
+		t.Fatalf("AddApproval(): %v", err)
+	}
+
+	run.Approvals[0].OperationBinding = ApprovalBinding{value: "mutated"}
+	got, ok := store.Get(run.ID)
+	if !ok {
+		t.Fatal("expected run to exist")
+	}
+	if gotValue := got.Approvals[0].OperationBinding.Value(); gotValue != value {
+		t.Fatalf("Get() binding = %q, want original value", gotValue)
+	}
+
+	list := store.List()
+	list[0].Approvals[0].OperationBinding = ApprovalBinding{value: "mutated-list"}
+	got, ok = store.Get(run.ID)
+	if !ok {
+		t.Fatal("expected run to exist")
+	}
+	if gotValue := got.Approvals[0].OperationBinding.Value(); gotValue != value {
+		t.Fatalf("binding after list mutation = %q, want original value", gotValue)
 	}
 }
 
@@ -113,6 +167,34 @@ func TestStoreRejectsForgedApprovalBindingWithoutMutation(t *testing.T) {
 	unchanged, ok := store.Get(run.ID)
 	if !ok || unchanged.Status != StatusQueued || len(unchanged.Approvals) != 0 {
 		t.Fatalf("run mutated after invalid binding: %+v", unchanged)
+	}
+}
+
+func TestStoreAllowsUnboundApprovalGates(t *testing.T) {
+	clock := fixedClock()
+	store := NewStore(WithClock(clock.now))
+	run, err := store.Create(CreateRequest{Project: "prod", Prompt: "x"})
+	if err != nil {
+		t.Fatalf("Create(): %v", err)
+	}
+
+	run, err = store.AddApproval(run.ID, ApprovalGate{
+		Kind:    ApprovalCloudWrite,
+		Summary: "authorize cloud operation",
+	})
+	if err != nil {
+		t.Fatalf("AddApproval() without binding: %v", err)
+	}
+	if got := run.Approvals[0].OperationBinding.Value(); got != "" {
+		t.Fatalf("unbound gate binding = %q, want empty", got)
+	}
+
+	run, err = store.DecideApproval(run.ID, run.Approvals[0].ID, ApprovalApproved, "operator")
+	if err != nil {
+		t.Fatalf("DecideApproval(): %v", err)
+	}
+	if got := run.Approvals[0].OperationBinding.Value(); got != "" {
+		t.Fatalf("decided unbound gate binding = %q, want empty", got)
 	}
 }
 
