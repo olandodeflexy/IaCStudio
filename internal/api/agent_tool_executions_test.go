@@ -378,6 +378,42 @@ func TestRouterOptionsOmitsExecutionRouteWithoutExecutor(t *testing.T) {
 	}
 }
 
+func TestRouterOptionsOmitsExecutionRouteForTypedNilDependencies(t *testing.T) {
+	var nilExecutor *fakeAgentToolExecutor
+	var nilEvaluator *fakeAgentToolEvaluator
+	tests := []struct {
+		name      string
+		executor  AgentToolExecutor
+		evaluator agentrouting.ToolEvaluator
+	}{
+		{name: "executor", executor: nilExecutor, evaluator: readOnlyAgentToolEvaluator()},
+		{name: "evaluator", executor: &fakeAgentToolExecutor{}, evaluator: nilEvaluator},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root, store, run := agentToolRouteFixture(t, "codex")
+			router := NewRouterWithOptions(nil, nil, nil, nil, root, RouterOptions{
+				AgentRuns:          store,
+				AgentToolExecutor:  test.executor,
+				AgentToolEvaluator: test.evaluator,
+			})
+
+			rec := postAgentToolExecution(
+				router,
+				"demo",
+				run.ID,
+				`{"connection_id":"aws-prod","server_id":"aws","tool_name":"list_buckets","arguments":{}}`,
+				"application/json",
+				"typed-nil-"+test.name,
+			)
+			if rec.Code != http.StatusNotFound {
+				t.Fatalf("status = %d, want %d for typed-nil %s", rec.Code, http.StatusNotFound, test.name)
+			}
+		})
+	}
+}
+
 func TestAgentToolExecutionRejectsClientScopeAndInactiveRuns(t *testing.T) {
 	root, store, run := agentToolRouteFixture(t, "codex")
 	fake := &fakeAgentToolExecutor{}

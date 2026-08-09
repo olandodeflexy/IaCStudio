@@ -8,6 +8,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"reflect"
 
 	"github.com/iac-studio/iac-studio/internal/agentrouting"
 	"github.com/iac-studio/iac-studio/internal/agentruns"
@@ -40,7 +41,7 @@ func registerAgentToolExecutionRoutes(
 	executor AgentToolExecutor,
 	evaluator agentrouting.ToolEvaluator,
 ) {
-	if executor == nil || evaluator == nil {
+	if missingAgentToolExecutionDependency(executor) || missingAgentToolExecutionDependency(evaluator) {
 		return
 	}
 	attempts := newAgentToolExecutionAttemptStore(maxAgentToolExecutionReplayEntries)
@@ -88,6 +89,19 @@ func registerAgentToolExecutionRoutes(
 		setAgentRunJSONHeader(w)
 		_ = json.NewEncoder(w).Encode(result)
 	})
+}
+
+func missingAgentToolExecutionDependency(dependency any) bool {
+	if dependency == nil {
+		return true
+	}
+	value := reflect.ValueOf(dependency)
+	switch value.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Interface, reflect.Map, reflect.Ptr, reflect.Slice:
+		return value.IsNil()
+	default:
+		return false
+	}
 }
 
 func readAgentToolExecutionRequest(
