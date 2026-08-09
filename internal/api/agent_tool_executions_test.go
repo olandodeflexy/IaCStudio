@@ -238,6 +238,65 @@ func TestResolveAgentToolExecutionRiskFailsClosed(t *testing.T) {
 	}
 }
 
+func TestAgentToolExecutionFailsClosedWhenRiskResolutionFails(t *testing.T) {
+	tests := []struct {
+		name      string
+		key       string
+		evaluator *fakeAgentToolEvaluator
+		wantCode  int
+	}{
+		{
+			name:      "inventory unavailable",
+			key:       "risk-resolution-unavailable",
+			evaluator: &fakeAgentToolEvaluator{err: errors.New("inventory unavailable")},
+			wantCode:  http.StatusInternalServerError,
+		},
+		{
+			name:      "unknown server",
+			key:       "risk-resolution-unknown-server",
+			evaluator: &fakeAgentToolEvaluator{err: mcpairlock.ErrUnknownServer},
+			wantCode:  http.StatusBadRequest,
+		},
+		{
+			name: "server mismatch",
+			key:  "risk-resolution-server-mismatch",
+			evaluator: &fakeAgentToolEvaluator{entry: mcpairlock.ToolInventoryEntry{
+				ServerID: "terraform",
+				Name:     "list_buckets",
+				Risk:     mcpairlock.RiskReadOnly,
+				Decision: mcpairlock.ToolDecision{Risk: mcpairlock.RiskReadOnly},
+			}},
+			wantCode: http.StatusConflict,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			root, store, run := agentToolRouteFixture(t, "codex")
+			fake := &fakeAgentToolExecutor{}
+			mux := agentToolExecutionMuxWithEvaluator(root, store, fake, test.evaluator)
+
+			rec := postAgentToolExecution(
+				mux,
+				"demo",
+				run.ID,
+				`{"connection_id":"aws-prod","server_id":"aws","tool_name":"list_buckets","arguments":{}}`,
+				"application/json",
+				test.key,
+			)
+			if rec.Code != test.wantCode {
+				t.Fatalf("status = %d, want %d, body = %s", rec.Code, test.wantCode, rec.Body.String())
+			}
+			if test.evaluator.calls != 1 {
+				t.Fatalf("EvaluateTool calls = %d, want one", test.evaluator.calls)
+			}
+			if fake.calls != 0 {
+				t.Fatalf("Execute calls = %d, want none when risk resolution fails", fake.calls)
+			}
+		})
+	}
+}
+
 func TestRouterOptionsMountAgentToolExecutionRoute(t *testing.T) {
 	root, store, run := agentToolRouteFixture(t, "codex")
 	result := mcpairlock.NewToolCallResult([]byte("reports\n"), false)
