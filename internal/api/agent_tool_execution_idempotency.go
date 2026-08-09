@@ -204,6 +204,7 @@ func (s *agentToolExecutionAttemptStore) removeCompletedKeyLocked(key agentToolE
 			filtered = append(filtered, existing)
 		}
 	}
+	clear(s.completed[len(filtered):])
 	s.completed = filtered
 }
 

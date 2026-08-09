@@ -428,6 +428,23 @@ func TestAgentToolExecutionAttemptStoreCapsReplayEntries(t *testing.T) {
 	}
 }
 
+func TestAgentToolExecutionAttemptStoreClearsRemovedCompletedKey(t *testing.T) {
+	store := newAgentToolExecutionAttemptStore(2)
+	removed := agentToolExecutionAttemptKey{runID: "run_000001", key: "removed"}
+	retained := agentToolExecutionAttemptKey{runID: "run_000002", key: "retained"}
+	store.completed = []agentToolExecutionAttemptKey{removed, retained}
+
+	store.removeCompletedKeyLocked(removed)
+
+	if len(store.completed) != 1 || store.completed[0] != retained {
+		t.Fatalf("completed keys = %+v, want retained key only", store.completed)
+	}
+	backing := store.completed[:cap(store.completed)]
+	if backing[1] != (agentToolExecutionAttemptKey{}) {
+		t.Fatalf("removed backing entry = %+v, want cleared value", backing[1])
+	}
+}
+
 func TestAgentToolExecutionAttemptStoreReplaysIndependentResult(t *testing.T) {
 	store := newAgentToolExecutionAttemptStore(1)
 	request := testAgentToolExecutionRequest()
