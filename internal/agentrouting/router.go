@@ -86,6 +86,9 @@ func (r *Router) RouteToolCall(
 	if r.recorder == nil {
 		return RouteResult{}, ErrRunRecorderRequired
 	}
+	if err := request.Validate(); err != nil {
+		return RouteResult{}, err
+	}
 	key = append([]byte(nil), key...)
 	defer clear(key)
 	if _, err := NewToolApprovalBinding(key, runID, request, arguments); err != nil {

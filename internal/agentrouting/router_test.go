@@ -186,9 +186,14 @@ func TestRouterRejectsInvalidBoundToolCallBeforeAuthorization(t *testing.T) {
 		name      string
 		key       []byte
 		arguments mcpairlock.ToolCallArguments
+		mutate    func(*Request)
+		want      error
 	}{
-		{name: "short key", key: []byte("short"), arguments: validArguments},
-		{name: "invalid arguments", key: testToolApprovalKey},
+		{name: "short key", key: []byte("short"), arguments: validArguments, want: ErrInvalidToolApprovalBinding},
+		{name: "invalid arguments", key: testToolApprovalKey, want: ErrInvalidToolApprovalBinding},
+		{name: "invalid route", key: testToolApprovalKey, arguments: validArguments, mutate: func(request *Request) {
+			request.ToolName = ""
+		}, want: ErrInvalidRequest},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -197,10 +202,14 @@ func TestRouterRejectsInvalidBoundToolCallBeforeAuthorization(t *testing.T) {
 			if !ok {
 				t.Fatalf("Get(%q) returned no run", run.ID)
 			}
+			candidate := request
+			if test.mutate != nil {
+				test.mutate(&candidate)
+			}
 
-			result, err := router.RouteToolCall(test.key, run.ID, request, test.arguments)
-			if !errors.Is(err, ErrInvalidToolApprovalBinding) {
-				t.Fatalf("RouteToolCall() error = %v, want ErrInvalidToolApprovalBinding", err)
+			result, err := router.RouteToolCall(test.key, run.ID, candidate, test.arguments)
+			if !errors.Is(err, test.want) {
+				t.Fatalf("RouteToolCall() error = %v, want %v", err, test.want)
 			}
 			if result.Decision != (Decision{}) || result.Run.ID != "" {
 				t.Fatalf("RouteToolCall() = %+v, want zero result", result)
