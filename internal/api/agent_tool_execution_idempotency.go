@@ -235,6 +235,9 @@ func agentToolExecutionFingerprint(
 	}
 
 	hash := sha256.New()
+	// Risk is resolved from server inventory and may change between retries.
+	// Bind idempotency to stable client intent; approval bindings remain
+	// independently bound to the evaluated risk.
 	for _, value := range [][]byte{
 		[]byte(request.Project),
 		[]byte(request.ProviderID),
@@ -242,7 +245,6 @@ func agentToolExecutionFingerprint(
 		[]byte(request.ServerID),
 		[]byte(request.ToolName),
 		[]byte(request.Mode),
-		[]byte(request.Risk),
 		encodedArguments,
 	} {
 		var length [8]byte
