@@ -323,13 +323,13 @@ function validApprovedExecutionResponse(
 ): response is AgentToolExecutionResponse & { result: AgentToolCallResult } {
   if (!isRecord(response)
     || response.invoked !== true
-    || !isRecord(response.route)
-    || !isRecord(response.route.run)
     || !validToolCallResult(response.result)) {
     return false;
   }
-  const { route } = response;
+  const route = response.route;
+  if (!isRecord(route)) return false;
   const run = route.run;
+  if (!isRecord(run)) return false;
   if (!validAllowedDecision(route.decision)
     || run.id !== runId
     || run.project !== projectName
@@ -556,7 +556,9 @@ export function ToolRoutePreviewPanel({
       );
       if (executionSequence.current !== requestId || currentScope.current !== requestScope) return;
       if (approvedRetry) {
-        if (!validApprovedExecutionResponse(response, projectName, runId, approvalGate)) {
+        const approvedGate = approvalGate;
+        if (approvedGate === null
+          || !validApprovedExecutionResponse(response, projectName, runId, approvedGate)) {
           setExecutionError({ scope: requestScope, message: 'Approved tool execution returned an invalid response.' });
           return;
         }
