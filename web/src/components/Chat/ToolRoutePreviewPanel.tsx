@@ -6,6 +6,7 @@ import {
   type AgentRunApproval,
   type AgentRunStatus,
   type AgentToolCallResult,
+  type AgentToolExecutionInput,
   type AgentToolExecutionResponse,
   type AgentToolRouteDecision,
   type AgentToolRoutePreviewInput,
@@ -22,6 +23,14 @@ interface ApprovalSnapshot {
   gate: AgentRunApproval;
   runStatus: AgentRunStatus;
   canceled: boolean;
+}
+
+interface ApprovalRequestState {
+  snapshot: ApprovalSnapshot;
+  operation: {
+    input: AgentToolExecutionInput;
+    idempotencyKey: string;
+  };
 }
 
 export interface ToolRoutePreviewPanelProps {
@@ -111,6 +120,15 @@ function validApproval(value: unknown): value is AgentRunApproval {
     && value.created_at.length > 0;
 }
 
+function validAllowedDecision(decision: unknown): decision is AgentToolRouteDecision {
+  return isRecord(decision)
+    && decision.status === 'allowed'
+    && decision.reason === 'allowed'
+    && decision.allowed === true
+    && decision.approval_required === false
+    && decision.untrusted_output === true;
+}
+
 function validDecision(
   decision: unknown,
   risk: MCPAirlockToolRisk,
@@ -123,8 +141,7 @@ function validDecision(
   }
   switch (decision.status) {
     case 'allowed':
-      return risk === 'read_only'
-        && decision.allowed && !decision.approval_required && decision.reason === 'allowed';
+      return risk === 'read_only' && validAllowedDecision(decision);
     case 'approval_required':
       return !decision.allowed && decision.approval_required && decision.reason === 'approval_required';
     case 'denied':
@@ -182,6 +199,15 @@ function parseArguments(value: string): Record<string, unknown> {
   return parsed as Record<string, unknown>;
 }
 
+function validToolCallResult(result: unknown): result is AgentToolCallResult {
+  return isRecord(result)
+    && result.untrusted_output === true
+    && typeof result.output === 'string'
+    && typeof result.is_error === 'boolean'
+    && typeof result.redacted === 'boolean'
+    && typeof result.truncated === 'boolean';
+}
+
 function validExecutionResponse(
   response: unknown,
   projectName: string,
@@ -197,11 +223,7 @@ function validExecutionResponse(
   const { result, route } = response;
   const run = route.run;
   const decision = route.decision;
-  return result.untrusted_output === true
-    && typeof result.output === 'string'
-    && typeof result.is_error === 'boolean'
-    && typeof result.redacted === 'boolean'
-    && typeof result.truncated === 'boolean'
+  return validToolCallResult(result)
     && validDecision(decision, 'read_only')
     && decision.status === 'allowed'
     && run.id === runId
@@ -293,6 +315,43 @@ function approvalFromRunResponse(
   return null;
 }
 
+function validApprovedExecutionResponse(
+  response: unknown,
+  projectName: string,
+  runId: string,
+  expectedGate: AgentRunApproval,
+): response is AgentToolExecutionResponse & { result: AgentToolCallResult } {
+  if (!isRecord(response)
+    || response.invoked !== true
+    || !isRecord(response.route)
+    || !isRecord(response.route.run)
+    || !validToolCallResult(response.result)) {
+    return false;
+  }
+  const { route } = response;
+  const run = route.run;
+  if (!validAllowedDecision(route.decision)
+    || run.id !== runId
+    || run.project !== projectName
+    || run.mode !== 'approved_execute'
+    || run.status !== 'running'
+    || run.canceled !== false
+    || !Array.isArray(run.approvals)
+    || !run.approvals.every(validApproval)
+    || run.approvals.some(approval => approval.status === 'pending')) {
+    return false;
+  }
+  const matches = run.approvals.filter(approval => approval.id === expectedGate.id);
+  if (matches.length !== 1) return false;
+  const gate = matches[0];
+  return gate.status === 'approved'
+    && gate.kind === expectedGate.kind
+    && gate.summary === expectedGate.summary
+    && gate.created_at === expectedGate.created_at
+    && typeof gate.decided_at === 'string'
+    && gate.decided_at.length > 0;
+}
+
 function createIdempotencyKey(): string {
   if (!globalThis.crypto?.randomUUID) {
     throw new Error('Secure execution identity is unavailable in this browser.');
@@ -314,7 +373,7 @@ export function ToolRoutePreviewPanel({
   const [pending, setPending] = useState<{ id: number; scope: string } | null>(null);
   const [argumentsText, setArgumentsText] = useState('{}');
   const [execution, setExecution] = useState<{ scope: string; result: AgentToolCallResult } | null>(null);
-  const [approvalRequest, setApprovalRequest] = useState<{ scope: string; snapshot: ApprovalSnapshot } | null>(null);
+  const [approvalRequest, setApprovalRequest] = useState<({ scope: string } & ApprovalRequestState) | null>(null);
   const [approvalRefreshError, setApprovalRefreshError] = useState<{ scope: string; message: string } | null>(null);
   const [approvalRefreshPending, setApprovalRefreshPending] = useState<{ id: number; scope: string } | null>(null);
   const [executionError, setExecutionError] = useState<{ scope: string; message: string } | null>(null);
@@ -340,6 +399,7 @@ export function ToolRoutePreviewPanel({
   const errorMessage = error?.scope === scope ? error.message : null;
   const executionResult = execution?.scope === scope ? execution.result : null;
   const approvalSnapshot = approvalRequest?.scope === scope ? approvalRequest.snapshot : null;
+  const approvalOperation = approvalRequest?.scope === scope ? approvalRequest.operation : null;
   const approvalGate = approvalSnapshot?.gate ?? null;
   const approvalRunStatus = approvalSnapshot?.runStatus ?? null;
   const approvalRefreshErrorMessage = approvalRefreshError?.scope === scope ? approvalRefreshError.message : null;
@@ -347,12 +407,26 @@ export function ToolRoutePreviewPanel({
   const executionErrorMessage = executionError?.scope === scope ? executionError.message : null;
   const executing = executionPending?.scope === scope;
   const approvalRequired = decision?.status === 'approval_required';
+  const approvedExecutionReady = approvalGate?.status === 'approved'
+    && approvalRunStatus === 'running'
+    && approvalSnapshot?.canceled === false
+    && Boolean(approvalOperation);
+  const approvalExecutionBlocked = approvalGate !== null
+    && (!approvedExecutionReady || Boolean(executionResult));
   const approvalLocked = approvalRequired && (executing || Boolean(approvalGate));
   let executionButtonLabel = 'Execute read-only';
-  if (executing) executionButtonLabel = approvalRequired ? 'Requesting...' : 'Executing...';
-  else if (approvalGate?.status === 'pending') executionButtonLabel = 'Waiting for approval';
-  else if (approvalGate?.status === 'approved') executionButtonLabel = 'Approval granted';
-  else if (approvalGate?.status === 'rejected') executionButtonLabel = 'Approval rejected';
+  if (executing) {
+    if (approvedExecutionReady) executionButtonLabel = 'Executing approved operation...';
+    else if (approvalRequired) executionButtonLabel = 'Requesting...';
+    else executionButtonLabel = 'Executing...';
+  } else if (approvalGate?.status === 'pending') executionButtonLabel = 'Waiting for approval';
+  else if (approvalGate?.status === 'approved') {
+    if (executionResult) executionButtonLabel = 'Approved operation executed';
+    else if (approvedExecutionReady) executionButtonLabel = executionErrorMessage
+      ? 'Retry approved operation'
+      : 'Execute approved operation';
+    else executionButtonLabel = 'Approval granted';
+  } else if (approvalGate?.status === 'rejected') executionButtonLabel = 'Approval rejected';
   else if (approvalRequired) executionButtonLabel = executionErrorMessage ? 'Retry approval request' : 'Request approval';
   else if (executionResult) executionButtonLabel = 'Replay result';
   else if (executionErrorMessage) executionButtonLabel = 'Retry execution';
@@ -417,33 +491,55 @@ export function ToolRoutePreviewPanel({
 
   async function execute(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if ((decision?.status !== 'allowed' && decision?.status !== 'approval_required') || executing || approvalGate) return;
-
-    let argumentsObject: Record<string, unknown>;
-    try {
-      argumentsObject = parseArguments(argumentsText);
-    } catch (argumentError) {
-      setExecutionError({
-        scope,
-        message: argumentError instanceof Error ? argumentError.message : 'Arguments are invalid.',
-      });
+    const approvedRetry = approvalGate?.status === 'approved'
+      && approvalRunStatus === 'running'
+      && approvalSnapshot?.canceled === false
+      && approvalOperation !== null;
+    if ((decision?.status !== 'allowed' && decision?.status !== 'approval_required')
+      || executing
+      || (approvalGate !== null && (!approvedRetry || executionResult !== null))) {
       return;
     }
 
-    let idempotencyKey = executionIdentity.current?.scope === scope
-      ? executionIdentity.current.key
-      : null;
-    try {
-      if (!idempotencyKey) {
-        idempotencyKey = idempotencyKeyFactory();
-        executionIdentity.current = { scope, key: idempotencyKey };
+    let executionInput: AgentToolExecutionInput;
+    let idempotencyKey: string;
+    if (approvedRetry) {
+      executionInput = approvalOperation.input;
+      idempotencyKey = approvalOperation.idempotencyKey;
+    } else {
+      let argumentsObject: Record<string, unknown>;
+      try {
+        argumentsObject = parseArguments(argumentsText);
+      } catch (argumentError) {
+        setExecutionError({
+          scope,
+          message: argumentError instanceof Error ? argumentError.message : 'Arguments are invalid.',
+        });
+        return;
       }
-    } catch (keyError) {
-      setExecutionError({
-        scope,
-        message: keyError instanceof Error ? keyError.message : 'Could not create execution identity.',
-      });
-      return;
+
+      let executionKey = executionIdentity.current?.scope === scope
+        ? executionIdentity.current.key
+        : null;
+      try {
+        if (!executionKey) {
+          executionKey = idempotencyKeyFactory();
+          executionIdentity.current = { scope, key: executionKey };
+        }
+      } catch (keyError) {
+        setExecutionError({
+          scope,
+          message: keyError instanceof Error ? keyError.message : 'Could not create execution identity.',
+        });
+        return;
+      }
+      idempotencyKey = executionKey;
+      executionInput = {
+        connection_id: normalized.connection_id,
+        server_id: normalized.server_id,
+        tool_name: normalized.tool_name,
+        arguments: argumentsObject,
+      };
     }
 
     const requestId = ++executionSequence.current;
@@ -455,22 +551,29 @@ export function ToolRoutePreviewPanel({
       const response = await executionClient.executeAgentToolRoute(
         projectName,
         runId,
-        {
-          connection_id: normalized.connection_id,
-          server_id: normalized.server_id,
-          tool_name: normalized.tool_name,
-          arguments: argumentsObject,
-        },
+        executionInput,
         idempotencyKey,
       );
       if (executionSequence.current !== requestId || currentScope.current !== requestScope) return;
+      if (approvedRetry) {
+        if (!validApprovedExecutionResponse(response, projectName, runId, approvalGate)) {
+          setExecutionError({ scope: requestScope, message: 'Approved tool execution returned an invalid response.' });
+          return;
+        }
+        setExecution({ scope: requestScope, result: response.result });
+        return;
+      }
       if (decision.status === 'approval_required') {
         const snapshot = pendingApprovalFromExecutionResponse(response, projectName, runId);
         if (!snapshot) {
           setExecutionError({ scope: requestScope, message: 'Tool execution returned an invalid response.' });
           return;
         }
-        setApprovalRequest({ scope: requestScope, snapshot });
+        setApprovalRequest({
+          scope: requestScope,
+          snapshot,
+          operation: { input: executionInput, idempotencyKey },
+        });
         return;
       }
       if (!validExecutionResponse(response, projectName, runId)) {
@@ -505,7 +608,9 @@ export function ToolRoutePreviewPanel({
         setApprovalRefreshError({ scope: requestScope, message: 'Agent run returned an invalid approval state.' });
         return;
       }
-      setApprovalRequest({ scope: requestScope, snapshot });
+      setApprovalRequest(current => current?.scope === requestScope
+        ? { ...current, snapshot }
+        : current);
     } catch (refreshError) {
       if (approvalRefreshSequence.current !== requestId || currentScope.current !== requestScope) return;
       setApprovalRefreshError({
@@ -674,8 +779,10 @@ export function ToolRoutePreviewPanel({
                 New execution
               </Button>
             )}
-            <Button type="submit" size="sm" disabled={executing || Boolean(approvalGate)}>
-              {approvalRequired ? <Clock3 className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+            <Button type="submit" size="sm" disabled={executing || approvalExecutionBlocked}>
+              {approvedExecutionReady || !approvalRequired
+                ? <Play className="h-3.5 w-3.5" />
+                : <Clock3 className="h-3.5 w-3.5" />}
               {executionButtonLabel}
             </Button>
           </div>
