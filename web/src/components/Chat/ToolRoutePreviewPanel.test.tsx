@@ -398,9 +398,22 @@ describe('ToolRoutePreviewPanel', () => {
   });
 
   it.each([
-    ['approved', approvedApprovalRunResponse, 'Approval granted'],
-    ['rejected', rejectedApprovalRunResponse, 'Approval rejected'],
-  ])('refreshes an %s gate without invoking the MCP tool again', async (_status, runResponse, label) => {
+    ['approved active', approvedApprovalRunResponse, 'Approval granted', 'run running'],
+    ['approved completed', {
+      ...approvedApprovalRunResponse,
+      status: 'completed' as const,
+    }, 'Approval granted', 'run completed'],
+    ['approved later failed', {
+      ...approvedApprovalRunResponse,
+      status: 'failed' as const,
+    }, 'Approval granted', 'run failed'],
+    ['approved then canceled', {
+      ...approvedApprovalRunResponse,
+      status: 'canceled' as const,
+      canceled: true,
+    }, 'Approval granted', 'run canceled'],
+    ['rejected', rejectedApprovalRunResponse, 'Approval rejected', 'run failed'],
+  ])('refreshes an %s gate without invoking the MCP tool again', async (_status, runResponse, label, runLabel) => {
     const { approval, executionClient, runClient } = await renderPendingApproval(runResponse);
 
     fireEvent.click(within(approval).getByRole('button', { name: 'Refresh approval' }));
@@ -408,6 +421,7 @@ describe('ToolRoutePreviewPanel', () => {
     await waitFor(() => {
       expect(runClient.getAgentRun).toHaveBeenCalledWith('demo', 'run_000001');
       expect(approval).toHaveTextContent(label);
+      expect(approval).toHaveTextContent(runLabel);
     });
     expect(screen.getByRole('button', { name: label })).toBeDisabled();
     expect(within(approval).queryByRole('button', { name: 'Refresh approval' })).not.toBeInTheDocument();

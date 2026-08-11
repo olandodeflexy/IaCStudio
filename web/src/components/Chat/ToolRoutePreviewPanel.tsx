@@ -4,6 +4,7 @@ import { AlertCircle, CheckCircle2, Clock3, Play, RefreshCw, RotateCcw, Route, S
 import {
   api,
   type AgentRunApproval,
+  type AgentRunStatus,
   type AgentToolCallResult,
   type AgentToolExecutionResponse,
   type AgentToolRouteDecision,
@@ -16,6 +17,12 @@ import { Input } from '../ui/input';
 type ToolRoutePreviewClient = Pick<typeof api, 'previewAgentToolRoute'>;
 type ToolRouteExecutionClient = Pick<typeof api, 'executeAgentToolRoute'>;
 type AgentRunClient = Pick<typeof api, 'getAgentRun'>;
+
+interface ApprovalSnapshot {
+  gate: AgentRunApproval;
+  runStatus: AgentRunStatus;
+  canceled: boolean;
+}
 
 export interface ToolRoutePreviewPanelProps {
   projectName: string;
@@ -77,6 +84,14 @@ const approvalKinds = new Set<AgentRunApproval['kind']>([
 ]);
 
 const approvalStatuses = new Set<AgentRunApproval['status']>(['pending', 'approved', 'rejected']);
+const agentRunStatuses = new Set<AgentRunStatus>([
+  'queued',
+  'running',
+  'waiting_approval',
+  'completed',
+  'failed',
+  'canceled',
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -199,7 +214,7 @@ function pendingApprovalFromExecutionResponse(
   response: unknown,
   projectName: string,
   runId: string,
-): AgentRunApproval | null {
+): ApprovalSnapshot | null {
   if (!isRecord(response)
     || response.invoked !== false
     || response.result !== undefined
@@ -221,7 +236,9 @@ function pendingApprovalFromExecutionResponse(
   }
   if (!run.approvals.every(validApproval)) return null;
   const pending = run.approvals.filter(approval => approval.status === 'pending');
-  return pending.length === 1 ? pending[0] : null;
+  return pending.length === 1
+    ? { gate: pending[0], runStatus: 'waiting_approval', canceled: false }
+    : null;
 }
 
 function approvalFromRunResponse(
@@ -229,16 +246,22 @@ function approvalFromRunResponse(
   projectName: string,
   runId: string,
   expectedGate: AgentRunApproval,
-): AgentRunApproval | null {
+): ApprovalSnapshot | null {
   if (!isRecord(response)
     || response.id !== runId
     || response.project !== projectName
     || response.mode !== 'approved_execute'
-    || response.canceled !== false
+    || typeof response.status !== 'string'
+    || !agentRunStatuses.has(response.status as AgentRunStatus)
+    || typeof response.canceled !== 'boolean'
     || !Array.isArray(response.approvals)
     || !response.approvals.every(validApproval)) {
     return null;
   }
+  const runStatus = response.status as AgentRunStatus;
+  const canceled = response.canceled;
+  if ((runStatus === 'canceled') !== canceled) return null;
+
   const matches = response.approvals.filter(approval => approval.id === expectedGate.id);
   if (matches.length !== 1) return null;
 
@@ -248,18 +271,24 @@ function approvalFromRunResponse(
     || gate.created_at !== expectedGate.created_at) {
     return null;
   }
-  if (gate.status === 'pending' && response.status === 'waiting_approval') return gate;
+  if (gate.status === 'pending' && runStatus === 'waiting_approval') {
+    return { gate, runStatus, canceled };
+  }
   if (gate.status === 'approved'
-    && response.status === 'running'
     && typeof gate.decided_at === 'string'
     && gate.decided_at.length > 0) {
-    return gate;
+    if (runStatus === 'running'
+      || runStatus === 'completed'
+      || runStatus === 'failed'
+      || runStatus === 'canceled') {
+      return { gate, runStatus, canceled };
+    }
   }
   if (gate.status === 'rejected'
-    && response.status === 'failed'
+    && runStatus === 'failed'
     && typeof gate.decided_at === 'string'
     && gate.decided_at.length > 0) {
-    return gate;
+    return { gate, runStatus, canceled };
   }
   return null;
 }
@@ -285,7 +314,7 @@ export function ToolRoutePreviewPanel({
   const [pending, setPending] = useState<{ id: number; scope: string } | null>(null);
   const [argumentsText, setArgumentsText] = useState('{}');
   const [execution, setExecution] = useState<{ scope: string; result: AgentToolCallResult } | null>(null);
-  const [approvalRequest, setApprovalRequest] = useState<{ scope: string; gate: AgentRunApproval } | null>(null);
+  const [approvalRequest, setApprovalRequest] = useState<{ scope: string; snapshot: ApprovalSnapshot } | null>(null);
   const [approvalRefreshError, setApprovalRefreshError] = useState<{ scope: string; message: string } | null>(null);
   const [approvalRefreshPending, setApprovalRefreshPending] = useState<{ id: number; scope: string } | null>(null);
   const [executionError, setExecutionError] = useState<{ scope: string; message: string } | null>(null);
@@ -310,7 +339,9 @@ export function ToolRoutePreviewPanel({
   const decision = result?.scope === scope ? result.decision : null;
   const errorMessage = error?.scope === scope ? error.message : null;
   const executionResult = execution?.scope === scope ? execution.result : null;
-  const approvalGate = approvalRequest?.scope === scope ? approvalRequest.gate : null;
+  const approvalSnapshot = approvalRequest?.scope === scope ? approvalRequest.snapshot : null;
+  const approvalGate = approvalSnapshot?.gate ?? null;
+  const approvalRunStatus = approvalSnapshot?.runStatus ?? null;
   const approvalRefreshErrorMessage = approvalRefreshError?.scope === scope ? approvalRefreshError.message : null;
   const refreshingApproval = approvalRefreshPending?.scope === scope;
   const executionErrorMessage = executionError?.scope === scope ? executionError.message : null;
@@ -434,12 +465,12 @@ export function ToolRoutePreviewPanel({
       );
       if (executionSequence.current !== requestId || currentScope.current !== requestScope) return;
       if (decision.status === 'approval_required') {
-        const gate = pendingApprovalFromExecutionResponse(response, projectName, runId);
-        if (!gate) {
+        const snapshot = pendingApprovalFromExecutionResponse(response, projectName, runId);
+        if (!snapshot) {
           setExecutionError({ scope: requestScope, message: 'Tool execution returned an invalid response.' });
           return;
         }
-        setApprovalRequest({ scope: requestScope, gate });
+        setApprovalRequest({ scope: requestScope, snapshot });
         return;
       }
       if (!validExecutionResponse(response, projectName, runId)) {
@@ -469,12 +500,12 @@ export function ToolRoutePreviewPanel({
     try {
       const response = await runClient.getAgentRun(projectName, runId);
       if (approvalRefreshSequence.current !== requestId || currentScope.current !== requestScope) return;
-      const gate = approvalFromRunResponse(response, projectName, runId, expectedGate);
-      if (!gate) {
+      const snapshot = approvalFromRunResponse(response, projectName, runId, expectedGate);
+      if (!snapshot) {
         setApprovalRefreshError({ scope: requestScope, message: 'Agent run returned an invalid approval state.' });
         return;
       }
-      setApprovalRequest({ scope: requestScope, gate });
+      setApprovalRequest({ scope: requestScope, snapshot });
     } catch (refreshError) {
       if (approvalRefreshSequence.current !== requestId || currentScope.current !== requestScope) return;
       setApprovalRefreshError({
@@ -609,6 +640,7 @@ export function ToolRoutePreviewPanel({
                 <div className="mt-1 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-widest opacity-80">
                   <span>{approvalGate.kind.replaceAll('_', ' ')}</span>
                   <span>{approvalGate.id}</span>
+                  {approvalRunStatus && <span>run {approvalRunStatus.replaceAll('_', ' ')}</span>}
                 </div>
                 {approvalGate.status === 'pending' && (
                   <Button
