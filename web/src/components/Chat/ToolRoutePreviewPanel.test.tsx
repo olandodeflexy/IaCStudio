@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 import { ToolRoutePreviewPanel } from './ToolRoutePreviewPanel';
@@ -80,10 +80,63 @@ const approvalExecutionResponse = {
   invoked: false,
 };
 
+const approvedApprovalRunResponse = {
+  ...approvalExecutionResponse.route.run,
+  status: 'running' as const,
+  updated_at: '2026-08-11T09:01:00Z',
+  approvals: [{
+    ...approvalExecutionResponse.route.run.approvals[0],
+    status: 'approved' as const,
+    decided_at: '2026-08-11T09:01:00Z',
+  }],
+};
+
+const rejectedApprovalRunResponse = {
+  ...approvalExecutionResponse.route.run,
+  status: 'failed' as const,
+  updated_at: '2026-08-11T09:01:00Z',
+  approvals: [{
+    ...approvalExecutionResponse.route.run.approvals[0],
+    status: 'rejected' as const,
+    decided_at: '2026-08-11T09:01:00Z',
+  }],
+};
+
 function fillRequiredFields() {
   fireEvent.change(screen.getByLabelText('Connection'), { target: { value: '  aws-prod  ' } });
   fireEvent.change(screen.getByLabelText('MCP server'), { target: { value: ' aws-official ' } });
   fireEvent.change(screen.getByLabelText('Tool'), { target: { value: ' list_resources ' } });
+}
+
+async function renderPendingApproval(runResponse: unknown) {
+  const client = {
+    previewAgentToolRoute: vi.fn().mockResolvedValue(approvalRequiredResponse),
+  };
+  const executionClient = {
+    executeAgentToolRoute: vi.fn().mockResolvedValue(approvalExecutionResponse),
+  };
+  const runClient = {
+    getAgentRun: vi.fn().mockResolvedValue(runResponse),
+  };
+  render(
+    <ToolRoutePreviewPanel
+      projectName="demo"
+      runId="run_000001"
+      client={client}
+      executionClient={executionClient}
+      runClient={runClient}
+      idempotencyKeyFactory={() => 'approval-key'}
+    />,
+  );
+
+  fillRequiredFields();
+  fireEvent.change(screen.getByLabelText('Risk'), { target: { value: 'cloud_mutation' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Preview access' }));
+  expect(await screen.findByText('Approval required')).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Request approval' }));
+  const approval = await screen.findByLabelText('MCP approval request');
+  expect(approval).toHaveTextContent('Approval requested');
+  return { approval, executionClient, runClient };
 }
 
 describe('ToolRoutePreviewPanel', () => {
@@ -341,6 +394,47 @@ describe('ToolRoutePreviewPanel', () => {
     expect(executionClient.executeAgentToolRoute).toHaveBeenCalledTimes(2);
     expect(executionClient.executeAgentToolRoute.mock.calls[0][3]).toBe('approval-key');
     expect(executionClient.executeAgentToolRoute.mock.calls[1][3]).toBe('approval-key');
+    expect(screen.queryByLabelText('Untrusted MCP output')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['approved', approvedApprovalRunResponse, 'Approval granted'],
+    ['rejected', rejectedApprovalRunResponse, 'Approval rejected'],
+  ])('refreshes an %s gate without invoking the MCP tool again', async (_status, runResponse, label) => {
+    const { approval, executionClient, runClient } = await renderPendingApproval(runResponse);
+
+    fireEvent.click(within(approval).getByRole('button', { name: 'Refresh approval' }));
+
+    await waitFor(() => {
+      expect(runClient.getAgentRun).toHaveBeenCalledWith('demo', 'run_000001');
+      expect(approval).toHaveTextContent(label);
+    });
+    expect(screen.getByRole('button', { name: label })).toBeDisabled();
+    expect(within(approval).queryByRole('button', { name: 'Refresh approval' })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview access' })).toBeDisabled();
+    expect(screen.getByLabelText('Arguments (JSON)')).toBeDisabled();
+    expect(executionClient.executeAgentToolRoute).toHaveBeenCalledTimes(1);
+    expect(screen.queryByLabelText('Untrusted MCP output')).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ['a cross-project run', { ...approvedApprovalRunResponse, project: 'other' }],
+    ['mutated gate metadata', {
+      ...approvedApprovalRunResponse,
+      approvals: [{
+        ...approvedApprovalRunResponse.approvals[0],
+        summary: 'A different operation',
+      }],
+    }],
+  ])('fails closed when an approval refresh returns %s', async (_label, runResponse) => {
+    const { approval, executionClient } = await renderPendingApproval(runResponse);
+
+    fireEvent.click(within(approval).getByRole('button', { name: 'Refresh approval' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Agent run returned an invalid approval state.');
+    expect(approval).toHaveTextContent('Approval requested');
+    expect(within(approval).getByRole('button', { name: 'Refresh approval' })).toBeEnabled();
+    expect(executionClient.executeAgentToolRoute).toHaveBeenCalledTimes(1);
     expect(screen.queryByLabelText('Untrusted MCP output')).not.toBeInTheDocument();
   });
 
