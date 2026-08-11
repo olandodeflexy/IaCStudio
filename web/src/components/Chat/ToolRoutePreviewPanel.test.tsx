@@ -245,8 +245,11 @@ describe('ToolRoutePreviewPanel', () => {
     const client = {
       previewAgentToolRoute: vi.fn().mockResolvedValue(approvalRequiredResponse),
     };
+    let resolveExecution!: (_value: typeof approvalExecutionResponse) => void;
     const executionClient = {
-      executeAgentToolRoute: vi.fn().mockResolvedValue(approvalExecutionResponse),
+      executeAgentToolRoute: vi.fn().mockReturnValue(
+        new Promise<typeof approvalExecutionResponse>(resolve => { resolveExecution = resolve; }),
+      ),
     };
     const keyFactory = vi.fn().mockReturnValue('approval-key');
     render(
@@ -267,6 +270,13 @@ describe('ToolRoutePreviewPanel', () => {
       target: { value: '{"bucket":"reports"}' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Request approval' }));
+    expect(screen.getByRole('button', { name: 'Requesting...' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Preview access' })).toBeDisabled();
+    expect(screen.getByLabelText('Connection')).toBeDisabled();
+    expect(screen.getByLabelText('MCP server')).toBeDisabled();
+    expect(screen.getByLabelText('Tool')).toBeDisabled();
+    expect(screen.getByLabelText('Risk')).toBeDisabled();
+    expect(screen.getByLabelText('Arguments (JSON)')).toBeDisabled();
 
     await waitFor(() => {
       expect(executionClient.executeAgentToolRoute).toHaveBeenCalledWith(
@@ -281,6 +291,10 @@ describe('ToolRoutePreviewPanel', () => {
         'approval-key',
       );
     });
+    await act(async () => {
+      resolveExecution(approvalExecutionResponse);
+      await Promise.resolve();
+    });
     const approval = await screen.findByLabelText('MCP approval request');
     expect(approval).toHaveTextContent('Approval requested');
     expect(approval).toHaveTextContent('Allow AWS cloud mutation through MCP Airlock');
@@ -291,6 +305,43 @@ describe('ToolRoutePreviewPanel', () => {
     expect(screen.getByLabelText('Arguments (JSON)')).toBeDisabled();
     expect(screen.queryByLabelText('Untrusted MCP output')).not.toBeInTheDocument();
     expect(keyFactory).toHaveBeenCalledTimes(1);
+  });
+
+  it('reuses the approval request identity on retry after a transport failure', async () => {
+    const client = {
+      previewAgentToolRoute: vi.fn().mockResolvedValue(approvalRequiredResponse),
+    };
+    const executionClient = {
+      executeAgentToolRoute: vi.fn()
+        .mockRejectedValueOnce(new Error('gateway timeout'))
+        .mockResolvedValueOnce(approvalExecutionResponse),
+    };
+    const keyFactory = vi.fn().mockReturnValue('approval-key');
+    render(
+      <ToolRoutePreviewPanel
+        projectName="demo"
+        runId="run_000001"
+        client={client}
+        executionClient={executionClient}
+        idempotencyKeyFactory={keyFactory}
+      />,
+    );
+
+    fillRequiredFields();
+    fireEvent.change(screen.getByLabelText('Risk'), { target: { value: 'cloud_mutation' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview access' }));
+    expect(await screen.findByText('Approval required')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Request approval' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('gateway timeout');
+    fireEvent.click(screen.getByRole('button', { name: 'Retry approval request' }));
+
+    const approval = await screen.findByLabelText('MCP approval request');
+    expect(approval).toHaveTextContent('Approval requested');
+    expect(keyFactory).toHaveBeenCalledTimes(1);
+    expect(executionClient.executeAgentToolRoute).toHaveBeenCalledTimes(2);
+    expect(executionClient.executeAgentToolRoute.mock.calls[0][3]).toBe('approval-key');
+    expect(executionClient.executeAgentToolRoute.mock.calls[1][3]).toBe('approval-key');
+    expect(screen.queryByLabelText('Untrusted MCP output')).not.toBeInTheDocument();
   });
 
   it.each([

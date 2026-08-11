@@ -251,6 +251,7 @@ export function ToolRoutePreviewPanel({
   const executionErrorMessage = executionError?.scope === scope ? executionError.message : null;
   const executing = executionPending?.scope === scope;
   const approvalRequired = decision?.status === 'approval_required';
+  const approvalLocked = approvalRequired && (executing || Boolean(approvalGate));
   let executionButtonLabel = 'Execute read-only';
   if (executing) executionButtonLabel = approvalRequired ? 'Requesting...' : 'Executing...';
   else if (approvalGate) executionButtonLabel = 'Waiting for approval';
@@ -406,7 +407,7 @@ export function ToolRoutePreviewPanel({
             <Input
               value={input.connection_id}
               onChange={event => updateInput('connection_id', event.target.value)}
-              disabled={Boolean(approvalGate)}
+              disabled={approvalLocked}
               placeholder="aws-prod"
               autoComplete="off"
               spellCheck={false}
@@ -418,7 +419,7 @@ export function ToolRoutePreviewPanel({
             <Input
               value={input.server_id}
               onChange={event => updateInput('server_id', event.target.value)}
-              disabled={Boolean(approvalGate)}
+              disabled={approvalLocked}
               placeholder="aws-official"
               autoComplete="off"
               spellCheck={false}
@@ -430,7 +431,7 @@ export function ToolRoutePreviewPanel({
             <Input
               value={input.tool_name}
               onChange={event => updateInput('tool_name', event.target.value)}
-              disabled={Boolean(approvalGate)}
+              disabled={approvalLocked}
               placeholder="list_resources"
               autoComplete="off"
               spellCheck={false}
@@ -442,7 +443,7 @@ export function ToolRoutePreviewPanel({
             <select
               value={input.risk}
               onChange={event => updateInput('risk', event.target.value as MCPAirlockToolRisk)}
-              disabled={Boolean(approvalGate)}
+              disabled={approvalLocked}
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs font-medium normal-case text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {riskOptions.map(option => (
@@ -452,7 +453,7 @@ export function ToolRoutePreviewPanel({
           </label>
         </div>
 
-        <Button type="submit" size="sm" className="self-end" disabled={!ready || loading || Boolean(approvalGate)}>
+        <Button type="submit" size="sm" className="self-end" disabled={!ready || loading || approvalLocked}>
           <ShieldCheck className="h-3.5 w-3.5" />
           {loading ? 'Checking...' : 'Preview access'}
         </Button>
