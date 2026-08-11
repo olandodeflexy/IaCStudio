@@ -338,6 +338,37 @@ func TestRouterOptionsMountAgentToolExecutionRoute(t *testing.T) {
 	}
 }
 
+func TestRouterOptionsDefaultsExecutionEvaluatorToMCPAirlock(t *testing.T) {
+	root, store, run := agentToolRouteFixture(t, "codex")
+	airlock := mcpairlock.NewManager(root)
+	t.Cleanup(func() {
+		if err := airlock.Close(); err != nil {
+			t.Fatalf("close MCP Airlock: %v", err)
+		}
+	})
+	fake := &fakeAgentToolExecutor{}
+	router := NewRouterWithOptions(nil, nil, nil, nil, root, RouterOptions{
+		MCPAirlock:        airlock,
+		AgentRuns:         store,
+		AgentToolExecutor: fake,
+	})
+
+	rec := postAgentToolExecution(
+		router,
+		"demo",
+		run.ID,
+		`{"connection_id":"aws-prod","server_id":"missing","tool_name":"list_buckets","arguments":{}}`,
+		"application/json",
+		"airlock-default-evaluator",
+	)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, body = %s; want Airlock evaluation failure", rec.Code, rec.Body.String())
+	}
+	if fake.calls != 0 {
+		t.Fatalf("Execute calls = %d, want none when Airlock rejects the server", fake.calls)
+	}
+}
+
 func TestRouterOptionsOmitsExecutionRouteWithoutEvaluator(t *testing.T) {
 	root, store, run := agentToolRouteFixture(t, "codex")
 	router := NewRouterWithOptions(nil, nil, nil, nil, root, RouterOptions{

@@ -1228,7 +1228,11 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	registerAgentRunRoutes(mux, projectsDir, agentRuns)
 	registerAgentToolPolicyRoutes(mux, projectsDir, opts.AgentToolPolicies)
 	registerAgentToolRouteRoutes(mux, projectsDir, agentRuns, opts.AgentToolRouter)
-	registerAgentToolExecutionRoutes(mux, projectsDir, agentRuns, opts.AgentToolExecutor, opts.AgentToolEvaluator)
+	agentToolEvaluator := opts.AgentToolEvaluator
+	if missingAgentToolExecutionDependency(agentToolEvaluator) && opts.MCPAirlock != nil {
+		agentToolEvaluator = opts.MCPAirlock
+	}
+	registerAgentToolExecutionRoutes(mux, projectsDir, agentRuns, opts.AgentToolExecutor, agentToolEvaluator)
 
 	// Resource catalog — returns all resources for a tool, optionally filtered by provider
 	mux.HandleFunc("GET /api/catalog", func(w http.ResponseWriter, r *http.Request) {
