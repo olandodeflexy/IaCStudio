@@ -419,6 +419,14 @@ describe('ToolRoutePreviewPanel', () => {
 
   it.each([
     ['a cross-project run', { ...approvedApprovalRunResponse, project: 'other' }],
+    ['an approved gate in a waiting lifecycle state', {
+      ...approvedApprovalRunResponse,
+      status: 'waiting_approval' as const,
+    }],
+    ['a rejected gate in a running lifecycle state', {
+      ...rejectedApprovalRunResponse,
+      status: 'running' as const,
+    }],
     ['mutated gate metadata', {
       ...approvedApprovalRunResponse,
       approvals: [{
@@ -436,6 +444,61 @@ describe('ToolRoutePreviewPanel', () => {
     expect(within(approval).getByRole('button', { name: 'Refresh approval' })).toBeEnabled();
     expect(executionClient.executeAgentToolRoute).toHaveBeenCalledTimes(1);
     expect(screen.queryByLabelText('Untrusted MCP output')).not.toBeInTheDocument();
+  });
+
+  it('discards a late approval refresh after the run scope changes', async () => {
+    let resolveRun!: (_value: typeof approvedApprovalRunResponse) => void;
+    const client = {
+      previewAgentToolRoute: vi.fn().mockResolvedValue(approvalRequiredResponse),
+    };
+    const executionClient = {
+      executeAgentToolRoute: vi.fn().mockResolvedValue(approvalExecutionResponse),
+    };
+    const runClient = {
+      getAgentRun: vi.fn().mockReturnValue(
+        new Promise<typeof approvedApprovalRunResponse>(resolve => { resolveRun = resolve; }),
+      ),
+    };
+    const { rerender } = render(
+      <ToolRoutePreviewPanel
+        projectName="demo"
+        runId="run_000001"
+        client={client}
+        executionClient={executionClient}
+        runClient={runClient}
+        idempotencyKeyFactory={() => 'approval-key'}
+      />,
+    );
+
+    fillRequiredFields();
+    fireEvent.change(screen.getByLabelText('Risk'), { target: { value: 'cloud_mutation' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Preview access' }));
+    expect(await screen.findByText('Approval required')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Request approval' }));
+    const approval = await screen.findByLabelText('MCP approval request');
+    fireEvent.click(within(approval).getByRole('button', { name: 'Refresh approval' }));
+    expect(within(approval).getByRole('button', { name: 'Refreshing...' })).toBeDisabled();
+
+    rerender(
+      <ToolRoutePreviewPanel
+        projectName="demo"
+        runId="run_000002"
+        client={client}
+        executionClient={executionClient}
+        runClient={runClient}
+        idempotencyKeyFactory={() => 'approval-key'}
+      />,
+    );
+
+    await act(async () => {
+      resolveRun(approvedApprovalRunResponse);
+      await Promise.resolve();
+    });
+
+    expect(screen.queryByText('Approval granted')).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('MCP approval request')).not.toBeInTheDocument();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Preview access' })).toBeEnabled();
   });
 
   it.each([
