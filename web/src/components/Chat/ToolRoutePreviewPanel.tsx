@@ -3,6 +3,7 @@ import { AlertCircle, CheckCircle2, Clock3, Play, RotateCcw, Route, ShieldCheck,
 
 import {
   api,
+  type AgentRunApproval,
   type AgentToolCallResult,
   type AgentToolExecutionResponse,
   type AgentToolRouteDecision,
@@ -64,8 +65,33 @@ const deniedReasons = new Set<AgentToolRouteDecision['reason']>([
   'airlock_blocked',
 ]);
 
+const approvalKinds = new Set<AgentRunApproval['kind']>([
+  'file_write',
+  'command',
+  'iac_action',
+  'cloud_write',
+  'secret_read',
+  'mcp_network',
+]);
+
+const approvalStatuses = new Set<AgentRunApproval['status']>(['pending', 'approved', 'rejected']);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
+}
+
+function validApproval(value: unknown): value is AgentRunApproval {
+  return isRecord(value)
+    && typeof value.id === 'string'
+    && value.id.length > 0
+    && typeof value.kind === 'string'
+    && approvalKinds.has(value.kind as AgentRunApproval['kind'])
+    && typeof value.status === 'string'
+    && approvalStatuses.has(value.status as AgentRunApproval['status'])
+    && typeof value.summary === 'string'
+    && value.summary.length > 0
+    && typeof value.created_at === 'string'
+    && value.created_at.length > 0;
 }
 
 function validDecision(
@@ -150,6 +176,35 @@ function validExecutionResponse(
     && run.canceled === false;
 }
 
+function pendingApprovalFromExecutionResponse(
+  response: unknown,
+  projectName: string,
+  runId: string,
+): AgentRunApproval | null {
+  if (!isRecord(response)
+    || response.invoked !== false
+    || response.result !== undefined
+    || !isRecord(response.route)
+    || !isRecord(response.route.run)) {
+    return null;
+  }
+  const { route } = response;
+  const run = route.run;
+  if (!validDecision(route.decision, 'unknown')
+    || route.decision.status !== 'approval_required'
+    || run.id !== runId
+    || run.project !== projectName
+    || run.mode !== 'approved_execute'
+    || run.status !== 'waiting_approval'
+    || run.canceled !== false
+    || !Array.isArray(run.approvals)) {
+    return null;
+  }
+  if (!run.approvals.every(validApproval)) return null;
+  const pending = run.approvals.filter(approval => approval.status === 'pending');
+  return pending.length === 1 ? pending[0] : null;
+}
+
 function createIdempotencyKey(): string {
   if (!globalThis.crypto?.randomUUID) {
     throw new Error('Secure execution identity is unavailable in this browser.');
@@ -170,6 +225,7 @@ export function ToolRoutePreviewPanel({
   const [pending, setPending] = useState<{ id: number; scope: string } | null>(null);
   const [argumentsText, setArgumentsText] = useState('{}');
   const [execution, setExecution] = useState<{ scope: string; result: AgentToolCallResult } | null>(null);
+  const [approvalRequest, setApprovalRequest] = useState<{ scope: string; gate: AgentRunApproval } | null>(null);
   const [executionError, setExecutionError] = useState<{ scope: string; message: string } | null>(null);
   const [executionPending, setExecutionPending] = useState<{ id: number; scope: string } | null>(null);
   const requestSequence = useRef(0);
@@ -191,14 +247,24 @@ export function ToolRoutePreviewPanel({
   const decision = result?.scope === scope ? result.decision : null;
   const errorMessage = error?.scope === scope ? error.message : null;
   const executionResult = execution?.scope === scope ? execution.result : null;
+  const approvalGate = approvalRequest?.scope === scope ? approvalRequest.gate : null;
   const executionErrorMessage = executionError?.scope === scope ? executionError.message : null;
   const executing = executionPending?.scope === scope;
+  const approvalRequired = decision?.status === 'approval_required';
+  const approvalLocked = approvalRequired && (executing || Boolean(approvalGate));
+  let executionButtonLabel = 'Execute read-only';
+  if (executing) executionButtonLabel = approvalRequired ? 'Requesting...' : 'Executing...';
+  else if (approvalGate) executionButtonLabel = 'Waiting for approval';
+  else if (approvalRequired) executionButtonLabel = executionErrorMessage ? 'Retry approval request' : 'Request approval';
+  else if (executionResult) executionButtonLabel = 'Replay result';
+  else if (executionErrorMessage) executionButtonLabel = 'Retry execution';
 
   function clearExecution() {
     executionSequence.current += 1;
     executionIdentity.current = null;
     setExecutionPending(null);
     setExecution(null);
+    setApprovalRequest(null);
     setExecutionError(null);
   }
 
@@ -250,7 +316,7 @@ export function ToolRoutePreviewPanel({
 
   async function execute(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (decision?.status !== 'allowed' || executing) return;
+    if ((decision?.status !== 'allowed' && decision?.status !== 'approval_required') || executing || approvalGate) return;
 
     let argumentsObject: Record<string, unknown>;
     try {
@@ -297,6 +363,15 @@ export function ToolRoutePreviewPanel({
         idempotencyKey,
       );
       if (executionSequence.current !== requestId || currentScope.current !== requestScope) return;
+      if (decision.status === 'approval_required') {
+        const gate = pendingApprovalFromExecutionResponse(response, projectName, runId);
+        if (!gate) {
+          setExecutionError({ scope: requestScope, message: 'Tool execution returned an invalid response.' });
+          return;
+        }
+        setApprovalRequest({ scope: requestScope, gate });
+        return;
+      }
       if (!validExecutionResponse(response, projectName, runId)) {
         setExecutionError({ scope: requestScope, message: 'Tool execution returned an invalid response.' });
         return;
@@ -332,6 +407,7 @@ export function ToolRoutePreviewPanel({
             <Input
               value={input.connection_id}
               onChange={event => updateInput('connection_id', event.target.value)}
+              disabled={approvalLocked}
               placeholder="aws-prod"
               autoComplete="off"
               spellCheck={false}
@@ -343,6 +419,7 @@ export function ToolRoutePreviewPanel({
             <Input
               value={input.server_id}
               onChange={event => updateInput('server_id', event.target.value)}
+              disabled={approvalLocked}
               placeholder="aws-official"
               autoComplete="off"
               spellCheck={false}
@@ -354,6 +431,7 @@ export function ToolRoutePreviewPanel({
             <Input
               value={input.tool_name}
               onChange={event => updateInput('tool_name', event.target.value)}
+              disabled={approvalLocked}
               placeholder="list_resources"
               autoComplete="off"
               spellCheck={false}
@@ -365,6 +443,7 @@ export function ToolRoutePreviewPanel({
             <select
               value={input.risk}
               onChange={event => updateInput('risk', event.target.value as MCPAirlockToolRisk)}
+              disabled={approvalLocked}
               className="h-9 w-full rounded-md border border-input bg-background px-3 text-xs font-medium normal-case text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             >
               {riskOptions.map(option => (
@@ -374,7 +453,7 @@ export function ToolRoutePreviewPanel({
           </label>
         </div>
 
-        <Button type="submit" size="sm" className="self-end" disabled={!ready || loading}>
+        <Button type="submit" size="sm" className="self-end" disabled={!ready || loading || approvalLocked}>
           <ShieldCheck className="h-3.5 w-3.5" />
           {loading ? 'Checking...' : 'Preview access'}
         </Button>
@@ -402,13 +481,14 @@ export function ToolRoutePreviewPanel({
         </div>
       )}
 
-      {decision?.status === 'allowed' && (
+      {(decision?.status === 'allowed' || decision?.status === 'approval_required') && (
         <form className="flex flex-col gap-3 border-t border-border pt-3" onSubmit={execute} aria-busy={executing}>
           <label className="flex min-w-0 flex-col gap-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground">
             Arguments (JSON)
             <textarea
               value={argumentsText}
               onChange={event => updateArguments(event.target.value)}
+              disabled={executing || Boolean(approvalGate)}
               rows={4}
               spellCheck={false}
               className="w-full resize-y rounded-md border border-input bg-background px-3 py-2 font-mono text-xs font-normal normal-case text-foreground shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -422,6 +502,20 @@ export function ToolRoutePreviewPanel({
             </div>
           )}
 
+          {approvalGate && (
+            <div aria-label="MCP approval request" aria-live="polite" className="flex items-start gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
+              <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <div className="min-w-0 flex-1">
+                <div className="font-semibold">Approval requested</div>
+                <div className="mt-0.5 break-words">{approvalGate.summary}</div>
+                <div className="mt-1 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-widest opacity-80">
+                  <span>{approvalGate.kind.replaceAll('_', ' ')}</span>
+                  <span>{approvalGate.id}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="flex justify-end gap-2">
             {executionResult && (
               <Button type="button" size="sm" variant="outline" onClick={clearExecution} disabled={executing}>
@@ -429,9 +523,9 @@ export function ToolRoutePreviewPanel({
                 New execution
               </Button>
             )}
-            <Button type="submit" size="sm" disabled={executing}>
-              <Play className="h-3.5 w-3.5" />
-              {executing ? 'Executing...' : executionResult ? 'Replay result' : executionErrorMessage ? 'Retry execution' : 'Execute read-only'}
+            <Button type="submit" size="sm" disabled={executing || Boolean(approvalGate)}>
+              {approvalRequired ? <Clock3 className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+              {executionButtonLabel}
             </Button>
           </div>
         </form>
