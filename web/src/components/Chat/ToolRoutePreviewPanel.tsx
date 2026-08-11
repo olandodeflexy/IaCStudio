@@ -1,9 +1,10 @@
 import { type FormEvent, useRef, useState } from 'react';
-import { AlertCircle, CheckCircle2, Clock3, Play, RotateCcw, Route, ShieldCheck, XCircle } from 'lucide-react';
+import { AlertCircle, CheckCircle2, Clock3, Play, RefreshCw, RotateCcw, Route, ShieldCheck, XCircle } from 'lucide-react';
 
 import {
   api,
   type AgentRunApproval,
+  type AgentRunStatus,
   type AgentToolCallResult,
   type AgentToolExecutionResponse,
   type AgentToolRouteDecision,
@@ -15,12 +16,20 @@ import { Input } from '../ui/input';
 
 type ToolRoutePreviewClient = Pick<typeof api, 'previewAgentToolRoute'>;
 type ToolRouteExecutionClient = Pick<typeof api, 'executeAgentToolRoute'>;
+type AgentRunClient = Pick<typeof api, 'getAgentRun'>;
+
+interface ApprovalSnapshot {
+  gate: AgentRunApproval;
+  runStatus: AgentRunStatus;
+  canceled: boolean;
+}
 
 export interface ToolRoutePreviewPanelProps {
   projectName: string;
   runId: string;
   client?: ToolRoutePreviewClient;
   executionClient?: ToolRouteExecutionClient;
+  runClient?: AgentRunClient;
   idempotencyKeyFactory?: () => string;
 }
 
@@ -75,6 +84,14 @@ const approvalKinds = new Set<AgentRunApproval['kind']>([
 ]);
 
 const approvalStatuses = new Set<AgentRunApproval['status']>(['pending', 'approved', 'rejected']);
+const agentRunStatuses = new Set<AgentRunStatus>([
+  'queued',
+  'running',
+  'waiting_approval',
+  'completed',
+  'failed',
+  'canceled',
+]);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === 'object' && !Array.isArray(value);
@@ -135,6 +152,23 @@ function DecisionIcon({ status }: { status: AgentToolRouteDecision['status'] }) 
   return <XCircle className="h-4 w-4" />;
 }
 
+function approvalLabel(status: AgentRunApproval['status']): string {
+  if (status === 'approved') return 'Approval granted';
+  return status === 'rejected' ? 'Approval rejected' : 'Approval requested';
+}
+
+function approvalStyle(status: AgentRunApproval['status']): string {
+  if (status === 'approved') return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300';
+  if (status === 'rejected') return 'border-destructive/40 bg-destructive/10 text-destructive';
+  return 'border-yellow-500/30 bg-yellow-500/10 text-yellow-200';
+}
+
+function ApprovalIcon({ status }: { status: AgentRunApproval['status'] }) {
+  if (status === 'approved') return <CheckCircle2 className="h-3.5 w-3.5" />;
+  if (status === 'rejected') return <XCircle className="h-3.5 w-3.5" />;
+  return <Clock3 className="h-3.5 w-3.5" />;
+}
+
 function parseArguments(value: string): Record<string, unknown> {
   let parsed: unknown;
   try {
@@ -180,7 +214,7 @@ function pendingApprovalFromExecutionResponse(
   response: unknown,
   projectName: string,
   runId: string,
-): AgentRunApproval | null {
+): ApprovalSnapshot | null {
   if (!isRecord(response)
     || response.invoked !== false
     || response.result !== undefined
@@ -202,7 +236,61 @@ function pendingApprovalFromExecutionResponse(
   }
   if (!run.approvals.every(validApproval)) return null;
   const pending = run.approvals.filter(approval => approval.status === 'pending');
-  return pending.length === 1 ? pending[0] : null;
+  return pending.length === 1
+    ? { gate: pending[0], runStatus: 'waiting_approval', canceled: false }
+    : null;
+}
+
+function approvalFromRunResponse(
+  response: unknown,
+  projectName: string,
+  runId: string,
+  expectedGate: AgentRunApproval,
+): ApprovalSnapshot | null {
+  if (!isRecord(response)
+    || response.id !== runId
+    || response.project !== projectName
+    || response.mode !== 'approved_execute'
+    || typeof response.status !== 'string'
+    || !agentRunStatuses.has(response.status as AgentRunStatus)
+    || typeof response.canceled !== 'boolean'
+    || !Array.isArray(response.approvals)
+    || !response.approvals.every(validApproval)) {
+    return null;
+  }
+  const runStatus = response.status as AgentRunStatus;
+  const canceled = response.canceled;
+  if ((runStatus === 'canceled') !== canceled) return null;
+
+  const matches = response.approvals.filter(approval => approval.id === expectedGate.id);
+  if (matches.length !== 1) return null;
+
+  const gate = matches[0];
+  if (gate.kind !== expectedGate.kind
+    || gate.summary !== expectedGate.summary
+    || gate.created_at !== expectedGate.created_at) {
+    return null;
+  }
+  if (gate.status === 'pending' && runStatus === 'waiting_approval') {
+    return { gate, runStatus, canceled };
+  }
+  if (gate.status === 'approved'
+    && typeof gate.decided_at === 'string'
+    && gate.decided_at.length > 0) {
+    if (runStatus === 'running'
+      || runStatus === 'completed'
+      || runStatus === 'failed'
+      || runStatus === 'canceled') {
+      return { gate, runStatus, canceled };
+    }
+  }
+  if (gate.status === 'rejected'
+    && runStatus === 'failed'
+    && typeof gate.decided_at === 'string'
+    && gate.decided_at.length > 0) {
+    return { gate, runStatus, canceled };
+  }
+  return null;
 }
 
 function createIdempotencyKey(): string {
@@ -217,6 +305,7 @@ export function ToolRoutePreviewPanel({
   runId,
   client = api,
   executionClient = api,
+  runClient = api,
   idempotencyKeyFactory = createIdempotencyKey,
 }: ToolRoutePreviewPanelProps) {
   const [input, setInput] = useState<AgentToolRoutePreviewInput>(emptyInput);
@@ -225,11 +314,14 @@ export function ToolRoutePreviewPanel({
   const [pending, setPending] = useState<{ id: number; scope: string } | null>(null);
   const [argumentsText, setArgumentsText] = useState('{}');
   const [execution, setExecution] = useState<{ scope: string; result: AgentToolCallResult } | null>(null);
-  const [approvalRequest, setApprovalRequest] = useState<{ scope: string; gate: AgentRunApproval } | null>(null);
+  const [approvalRequest, setApprovalRequest] = useState<{ scope: string; snapshot: ApprovalSnapshot } | null>(null);
+  const [approvalRefreshError, setApprovalRefreshError] = useState<{ scope: string; message: string } | null>(null);
+  const [approvalRefreshPending, setApprovalRefreshPending] = useState<{ id: number; scope: string } | null>(null);
   const [executionError, setExecutionError] = useState<{ scope: string; message: string } | null>(null);
   const [executionPending, setExecutionPending] = useState<{ id: number; scope: string } | null>(null);
   const requestSequence = useRef(0);
   const executionSequence = useRef(0);
+  const approvalRefreshSequence = useRef(0);
   const executionIdentity = useRef<{ scope: string; key: string } | null>(null);
   const scope = JSON.stringify([projectName, runId]);
   const currentScope = useRef(scope);
@@ -247,24 +339,33 @@ export function ToolRoutePreviewPanel({
   const decision = result?.scope === scope ? result.decision : null;
   const errorMessage = error?.scope === scope ? error.message : null;
   const executionResult = execution?.scope === scope ? execution.result : null;
-  const approvalGate = approvalRequest?.scope === scope ? approvalRequest.gate : null;
+  const approvalSnapshot = approvalRequest?.scope === scope ? approvalRequest.snapshot : null;
+  const approvalGate = approvalSnapshot?.gate ?? null;
+  const approvalRunStatus = approvalSnapshot?.runStatus ?? null;
+  const approvalRefreshErrorMessage = approvalRefreshError?.scope === scope ? approvalRefreshError.message : null;
+  const refreshingApproval = approvalRefreshPending?.scope === scope;
   const executionErrorMessage = executionError?.scope === scope ? executionError.message : null;
   const executing = executionPending?.scope === scope;
   const approvalRequired = decision?.status === 'approval_required';
   const approvalLocked = approvalRequired && (executing || Boolean(approvalGate));
   let executionButtonLabel = 'Execute read-only';
   if (executing) executionButtonLabel = approvalRequired ? 'Requesting...' : 'Executing...';
-  else if (approvalGate) executionButtonLabel = 'Waiting for approval';
+  else if (approvalGate?.status === 'pending') executionButtonLabel = 'Waiting for approval';
+  else if (approvalGate?.status === 'approved') executionButtonLabel = 'Approval granted';
+  else if (approvalGate?.status === 'rejected') executionButtonLabel = 'Approval rejected';
   else if (approvalRequired) executionButtonLabel = executionErrorMessage ? 'Retry approval request' : 'Request approval';
   else if (executionResult) executionButtonLabel = 'Replay result';
   else if (executionErrorMessage) executionButtonLabel = 'Retry execution';
 
   function clearExecution() {
     executionSequence.current += 1;
+    approvalRefreshSequence.current += 1;
     executionIdentity.current = null;
     setExecutionPending(null);
     setExecution(null);
     setApprovalRequest(null);
+    setApprovalRefreshPending(null);
+    setApprovalRefreshError(null);
     setExecutionError(null);
   }
 
@@ -364,12 +465,12 @@ export function ToolRoutePreviewPanel({
       );
       if (executionSequence.current !== requestId || currentScope.current !== requestScope) return;
       if (decision.status === 'approval_required') {
-        const gate = pendingApprovalFromExecutionResponse(response, projectName, runId);
-        if (!gate) {
+        const snapshot = pendingApprovalFromExecutionResponse(response, projectName, runId);
+        if (!snapshot) {
           setExecutionError({ scope: requestScope, message: 'Tool execution returned an invalid response.' });
           return;
         }
-        setApprovalRequest({ scope: requestScope, gate });
+        setApprovalRequest({ scope: requestScope, snapshot });
         return;
       }
       if (!validExecutionResponse(response, projectName, runId)) {
@@ -385,6 +486,34 @@ export function ToolRoutePreviewPanel({
       });
     } finally {
       setExecutionPending(current => current?.id === requestId ? null : current);
+    }
+  }
+
+  async function refreshApproval() {
+    if (!approvalGate || approvalGate.status !== 'pending' || refreshingApproval) return;
+
+    const requestId = ++approvalRefreshSequence.current;
+    const requestScope = scope;
+    const expectedGate = approvalGate;
+    setApprovalRefreshPending({ id: requestId, scope: requestScope });
+    setApprovalRefreshError(null);
+    try {
+      const response = await runClient.getAgentRun(projectName, runId);
+      if (approvalRefreshSequence.current !== requestId || currentScope.current !== requestScope) return;
+      const snapshot = approvalFromRunResponse(response, projectName, runId, expectedGate);
+      if (!snapshot) {
+        setApprovalRefreshError({ scope: requestScope, message: 'Agent run returned an invalid approval state.' });
+        return;
+      }
+      setApprovalRequest({ scope: requestScope, snapshot });
+    } catch (refreshError) {
+      if (approvalRefreshSequence.current !== requestId || currentScope.current !== requestScope) return;
+      setApprovalRefreshError({
+        scope: requestScope,
+        message: refreshError instanceof Error ? refreshError.message : 'Could not refresh approval state.',
+      });
+    } finally {
+      setApprovalRefreshPending(current => current?.id === requestId ? null : current);
     }
   }
 
@@ -503,16 +632,38 @@ export function ToolRoutePreviewPanel({
           )}
 
           {approvalGate && (
-            <div aria-label="MCP approval request" aria-live="polite" className="flex items-start gap-2 rounded-md border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
-              <Clock3 className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+            <div aria-label="MCP approval request" aria-live="polite" className={`flex items-start gap-2 rounded-md border px-3 py-2 text-xs ${approvalStyle(approvalGate.status)}`}>
+              <span className="mt-0.5 shrink-0"><ApprovalIcon status={approvalGate.status} /></span>
               <div className="min-w-0 flex-1">
-                <div className="font-semibold">Approval requested</div>
+                <div className="font-semibold">{approvalLabel(approvalGate.status)}</div>
                 <div className="mt-0.5 break-words">{approvalGate.summary}</div>
                 <div className="mt-1 flex flex-wrap gap-2 font-mono text-[10px] uppercase tracking-widest opacity-80">
                   <span>{approvalGate.kind.replaceAll('_', ' ')}</span>
                   <span>{approvalGate.id}</span>
+                  {approvalRunStatus && <span>run {approvalRunStatus.replaceAll('_', ' ')}</span>}
                 </div>
+                {approvalGate.status === 'pending' && (
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="mt-2"
+                    onClick={refreshApproval}
+                    disabled={refreshingApproval}
+                    aria-busy={refreshingApproval}
+                  >
+                    <RefreshCw className={`h-3.5 w-3.5 ${refreshingApproval ? 'animate-spin' : ''}`} />
+                    {refreshingApproval ? 'Refreshing...' : 'Refresh approval'}
+                  </Button>
+                )}
               </div>
+            </div>
+          )}
+
+          {approvalRefreshErrorMessage && (
+            <div role="alert" className="flex items-start gap-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+              <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{approvalRefreshErrorMessage}</span>
             </div>
           )}
 
