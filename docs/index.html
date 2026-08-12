@@ -734,7 +734,7 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
           </div>
         </section>
 
-        <section id="agent-hub-runs" class="doc-section" data-title="agent hub runs lifecycle approval gates patches cancellation read only propose approved execute">
+        <section id="agent-hub-runs" class="doc-section" data-title="agent hub runs lifecycle approval gates patches cancellation read only propose approved execute mcp routing tool permissions">
           <h2>Agent Hub Runs</h2>
           <p>
             Agent Hub runs turn AI work into an auditable project-scoped workflow.
@@ -766,6 +766,52 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
               <h3>Near-live view</h3>
               <p>The Runs tab refreshes active summaries and open run details while work is in progress, then stops polling after terminal states.</p>
             </article>
+          </div>
+
+          <h3>Guarded MCP tool workflow</h3>
+          <ol class="steps">
+            <li><strong>Review tool permissions.</strong> A route must match the active project, provider, Cloud Connection, MCP server, tool, run mode, and server-classified risk. Missing routes deny by default.</li>
+            <li><strong>Queue and select a run.</strong> Open a non-terminal run in the Runs tab, then enter the intended connection, server, tool, and expected risk in MCP tool route.</li>
+            <li><strong>Preview access.</strong> Previewing evaluates policy and Airlock inventory without invoking the tool. Execution resolves risk again on the server, so client input cannot widen access.</li>
+            <li><strong>Execute a safe route.</strong> Read-only routes launch a fresh, one-shot isolated MCP process for each call. Bounded, redacted output is always displayed as untrusted text.</li>
+            <li><strong>Approve a guarded route.</strong> Request approval with the exact JSON arguments, decide the gate, refresh its status, and explicitly execute the locked operation. Approval never triggers execution automatically.</li>
+          </ol>
+
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Run mode</th>
+                  <th>Typical workflow</th>
+                  <th>Execution boundary</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>read_only</code></td>
+                  <td>Inventory, inspection, and explanation</td>
+                  <td>Only tools classified read-only can run.</td>
+                </tr>
+                <tr>
+                  <td><code>propose_only</code></td>
+                  <td>Plan and code-generation proposals</td>
+                  <td>Generated changes remain review artifacts.</td>
+                </tr>
+                <tr>
+                  <td><code>approved_execute</code></td>
+                  <td>Cloud or IaC changes, plus secret or network access</td>
+                  <td>The exact operation requires a user-decided gate.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="callout">
+            <strong>Credential boundary:</strong>
+            <code>connection_id</code> scopes authorization; it does not export credentials.
+            Airlock withholds ambient cloud profiles and raw Cloud Connection secrets from external MCP processes.
+            Scoped, short-lived credential delivery remains a separate
+            <a href="https://github.com/olandodeflexy/IaCStudio/issues/63">credential-broker task</a>.
           </div>
 
           <div class="callout">

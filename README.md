@@ -150,6 +150,38 @@ Run modes are intentionally conservative:
 | `propose_only` | Produce diffs or review artifacts, but do not apply them |
 | `approved_execute` | Allow gated actions only after explicit approval |
 
+### Guarded MCP tool workflow
+
+Agent Hub routes external AWS, Terraform, and future MCP tools through the
+selected run instead of giving a model unrestricted MCP access:
+
+1. Open a provider in **Agent Hub** and review **Tool permissions**. A route is
+   matched exactly by project, provider, Cloud Connection, MCP server, tool,
+   run mode, and server-classified risk. Missing routes deny by default.
+2. Queue a run in **Runs**, open its details, and enter the intended connection,
+   server, tool, and expected risk in **MCP tool route**.
+3. Select **Preview access**. Previewing never invokes the tool. Execution
+   resolves the tool risk again from MCP Airlock, so a stale or forged client
+   risk cannot widen access.
+4. Read-only routes expose **Execute read-only**. IaC Studio launches a fresh,
+   one-shot isolated MCP process for each call and renders bounded, redacted
+   output as untrusted text.
+5. Guarded routes expose **Request approval**. Approving the gate does not run
+   the tool: refresh its status, review the locked operation, then select
+   **Execute approved operation**. The approval is bound to the exact arguments
+   and retries reuse one idempotency key, preventing a changed or duplicate
+   mutation.
+
+Typical modes are `read_only` for inventory and explanation tools,
+`propose_only` for plan or code-generation tools, and `approved_execute` for
+explicitly gated infrastructure changes. Every accepted or denied route is
+recorded on the Agent Run before invocation.
+
+`connection_id` is currently an authorization scope, not a credential export.
+Airlock withholds ambient cloud profiles and raw Cloud Connection secrets from
+external MCP processes. Scoped, short-lived credential delivery is tracked
+separately in [issue #63](https://github.com/olandodeflexy/IaCStudio/issues/63).
+
 The run model stores prompt previews and HMAC fingerprints instead of raw prompt
 history. Cloud secrets are not returned in run responses or logs.
 
