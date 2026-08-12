@@ -773,7 +773,7 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
             <li><strong>Review tool permissions.</strong> A route must match the active project, provider, Cloud Connection, MCP server, tool, run mode, and server-classified risk. Missing routes deny by default.</li>
             <li><strong>Queue and select a run.</strong> Open a non-terminal run in the Runs tab, then enter the intended connection, server, tool, and expected risk in MCP tool route.</li>
             <li><strong>Preview access.</strong> Previewing evaluates policy and Airlock inventory without invoking the tool. Execution resolves risk again on the server, so client input cannot widen access.</li>
-            <li><strong>Execute a safe route.</strong> Read-only routes launch a fresh isolated MCP process. Bounded, redacted output is always displayed as untrusted text.</li>
+            <li><strong>Execute a safe route.</strong> Read-only routes invoke the tool through an isolated Airlock MCP process. Bounded, redacted output is always displayed as untrusted text.</li>
             <li><strong>Approve a guarded route.</strong> Request approval with the exact JSON arguments, decide the gate, refresh its status, and explicitly execute the locked operation. Approval never triggers execution automatically.</li>
           </ol>
 

@@ -163,8 +163,9 @@ selected run instead of giving a model unrestricted MCP access:
 3. Select **Preview access**. Previewing never invokes the tool. Execution
    resolves the tool risk again from MCP Airlock, so a stale or forged client
    risk cannot widen access.
-4. Read-only routes expose **Execute read-only**. IaC Studio launches a fresh,
-   isolated MCP process and renders bounded, redacted output as untrusted text.
+4. Read-only routes expose **Execute read-only**. IaC Studio invokes the tool
+   through an isolated Airlock MCP process and renders bounded, redacted output
+   as untrusted text.
 5. Guarded routes expose **Request approval**. Approving the gate does not run
    the tool: refresh its status, review the locked operation, then select
    **Execute approved operation**. The approval is bound to the exact arguments
