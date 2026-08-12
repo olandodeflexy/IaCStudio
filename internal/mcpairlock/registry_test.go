@@ -33,6 +33,50 @@ func TestListIncludesTrustedBuiltinsWithoutHealthProbe(t *testing.T) {
 		if !status.Server.Trusted || !status.Server.ReadOnlyDefault || status.Server.CredentialMode != "none" {
 			t.Fatalf("built-in server is not locked down by default: %+v", status.Server)
 		}
+		if status.Server.LaunchSource != LaunchSourceRegistry {
+			t.Fatalf("built-in server launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceRegistry)
+		}
+	}
+}
+
+func TestEnvironmentCommandOverrideDoesNotInheritRegistryTrust(t *testing.T) {
+	t.Setenv("IAC_STUDIO_MCP_TERRAFORM_OFFICIAL_COMMAND", testExecutable(t))
+	launches := 0
+	manager := NewManager(t.TempDir(), WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
+		launches++
+		return newFakeProcess(), nil
+	}))
+
+	status, err := manager.Start(context.Background(), "terraform-official")
+
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if status.State != "blocked" || status.Server.Trusted {
+		t.Fatalf("environment override must be blocked, got %+v", status)
+	}
+	if launches != 0 {
+		t.Fatalf("blocked environment override launched %d processes", launches)
+	}
+	if status.Server.LaunchSource != LaunchSourceEnvironmentOverride {
+		t.Fatalf("launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceEnvironmentOverride)
+	}
+	if !hasCheck(status.Checks, "launch_provenance", "error") {
+		t.Fatalf("expected failed launch provenance check, got %+v", status.Checks)
+	}
+}
+
+func TestEnvironmentArgumentsOverrideDoesNotInheritRegistryTrust(t *testing.T) {
+	t.Setenv("IAC_STUDIO_MCP_TERRAFORM_OFFICIAL_ARGS", "--transport stdio")
+	manager := NewManager(t.TempDir())
+
+	status := statusByID(t, manager.List(context.Background()), "terraform-official")
+
+	if status.State != "blocked" || status.Server.Trusted {
+		t.Fatalf("environment arguments override must be blocked, got %+v", status)
+	}
+	if status.Server.LaunchSource != LaunchSourceEnvironmentOverride {
+		t.Fatalf("launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceEnvironmentOverride)
 	}
 }
 
@@ -453,6 +497,17 @@ func containsStatus(statuses []ServerStatus, id string) bool {
 		}
 	}
 	return false
+}
+
+func statusByID(t *testing.T, statuses []ServerStatus, id string) ServerStatus {
+	t.Helper()
+	for _, status := range statuses {
+		if status.Server.ID == id {
+			return status
+		}
+	}
+	t.Fatalf("status %q not found in %+v", id, statuses)
+	return ServerStatus{}
 }
 
 func assertUniqueCheckNames(t *testing.T, status ServerStatus) {
