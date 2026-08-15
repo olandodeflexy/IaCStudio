@@ -118,6 +118,9 @@ func (s *ExecutableAttestationStore) Get(serverID, launchSource string) (Executa
 }
 
 func loadExecutableAttestations(path string) (map[attestationKey]ExecutableAttestation, error) {
+	if err := secureExistingAttestationDir(filepath.Dir(path), true); err != nil {
+		return nil, err
+	}
 	pathInfo, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return make(map[attestationKey]ExecutableAttestation), nil
@@ -222,14 +225,33 @@ func ensurePrivateAttestationDir(dir string) error {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return fmt.Errorf("create MCP attestation directory: %w", err)
 	}
+	return secureExistingAttestationDir(dir, false)
+}
+
+func secureExistingAttestationDir(dir string, missingOK bool) error {
 	info, err := os.Lstat(dir)
+	if missingOK && errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
 	if err != nil {
 		return fmt.Errorf("inspect MCP attestation directory: %w", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return ErrInvalidAttestationStore
 	}
-	if err := os.Chmod(dir, 0o700); err != nil {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return fmt.Errorf("open MCP attestation directory: %w", err)
+	}
+	defer func() { _ = handle.Close() }()
+	openInfo, err := handle.Stat()
+	if err != nil {
+		return fmt.Errorf("inspect MCP attestation directory: %w", err)
+	}
+	if !os.SameFile(info, openInfo) || !openInfo.IsDir() {
+		return ErrInvalidAttestationStore
+	}
+	if err := handle.Chmod(0o700); err != nil {
 		return fmt.Errorf("secure MCP attestation directory: %w", err)
 	}
 	return nil

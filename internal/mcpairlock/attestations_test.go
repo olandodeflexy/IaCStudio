@@ -135,6 +135,21 @@ func TestExecutableAttestationStoreRejectsOversizedAndSymlinkedFiles(t *testing.
 			t.Fatalf("error = %v, want ErrInvalidAttestationStore", err)
 		}
 	})
+
+	t.Run("symlinked directory", func(t *testing.T) {
+		root := t.TempDir()
+		targetDir := t.TempDir()
+		if err := os.WriteFile(filepath.Join(targetDir, attestationStoreFileName), []byte(`{"version":1,"attestations":[]}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(targetDir, filepath.Join(root, ".iac-studio")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		_, err := NewExecutableAttestationStore(root)
+		if !errors.Is(err, ErrInvalidAttestationStore) {
+			t.Fatalf("error = %v, want ErrInvalidAttestationStore", err)
+		}
+	})
 }
 
 func TestExecutableAttestationStoreSaveFailurePreservesState(t *testing.T) {
