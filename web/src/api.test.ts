@@ -188,10 +188,11 @@ describe('api.mcpAirlock', () => {
   });
 
   it('approves an MCP Airlock executable through the attestation endpoint', async () => {
+    const expectedFingerprint = { algorithm: 'sha256' as const, digest: 'ab'.repeat(32) };
     const response = {
       server_id: 'terraform-official',
       launch_source: 'registry',
-      fingerprint: { algorithm: 'sha256', digest: 'ab'.repeat(32) },
+      fingerprint: expectedFingerprint,
       approved_at: '2026-08-15T20:00:00Z',
     };
     const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(response), {
@@ -200,9 +201,11 @@ describe('api.mcpAirlock', () => {
     }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(api.approveMCPAirlockExecutable('terraform-official')).resolves.toEqual(response);
+    await expect(api.approveMCPAirlockExecutable('terraform-official', expectedFingerprint)).resolves.toEqual(response);
     expect(fetchMock).toHaveBeenCalledWith('/api/mcp-airlock/servers/terraform-official/approve-executable', {
       method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected_fingerprint: expectedFingerprint }),
     });
   });
 

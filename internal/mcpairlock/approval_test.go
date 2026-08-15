@@ -16,11 +16,7 @@ import (
 func TestApproveExecutablePersistsServerDerivedFingerprint(t *testing.T) {
 	root := t.TempDir()
 	command := testExecutable(t)
-	contents, err := os.ReadFile(command)
-	if err != nil {
-		t.Fatal(err)
-	}
-	wantDigest := sha256.Sum256(contents)
+	expected := executableFingerprintForTest(t, command)
 	probes := 0
 	launches := 0
 	manager := NewManager(root,
@@ -35,14 +31,14 @@ func TestApproveExecutablePersistsServerDerivedFingerprint(t *testing.T) {
 		}),
 	)
 
-	attestation, err := manager.ApproveExecutable(context.Background(), "terraform")
+	attestation, err := manager.ApproveExecutable(context.Background(), "terraform", expected)
 	if err != nil {
 		t.Fatalf("ApproveExecutable: %v", err)
 	}
 	if attestation.ServerID != "terraform" || attestation.LaunchSource != LaunchSourceExplicitDefinition {
 		t.Fatalf("unexpected approval identity: %+v", attestation)
 	}
-	if attestation.Fingerprint.Algorithm != "sha256" || attestation.Fingerprint.Digest != hex.EncodeToString(wantDigest[:]) {
+	if attestation.Fingerprint != expected {
 		t.Fatalf("unexpected approval fingerprint: %+v", attestation.Fingerprint)
 	}
 	if attestation.ApprovedAt.IsZero() || attestation.ApprovedAt.Location() != time.UTC {
@@ -64,17 +60,25 @@ func TestApproveExecutablePersistsServerDerivedFingerprint(t *testing.T) {
 
 func TestApproveExecutableFailsClosed(t *testing.T) {
 	command := testExecutable(t)
+	expected := executableFingerprintForTest(t, command)
 
 	t.Run("unknown server", func(t *testing.T) {
 		manager := NewManager(t.TempDir(), WithDefinitions(nil))
-		if _, err := manager.ApproveExecutable(context.Background(), "unknown"); !errors.Is(err, ErrUnknownServer) {
+		if _, err := manager.ApproveExecutable(context.Background(), "unknown", expected); !errors.Is(err, ErrUnknownServer) {
 			t.Fatalf("ApproveExecutable error = %v, want ErrUnknownServer", err)
+		}
+	})
+
+	t.Run("invalid expected fingerprint", func(t *testing.T) {
+		manager := NewManager(t.TempDir(), WithDefinitions([]ServerDefinition{executableApprovalDefinition(command)}))
+		if _, err := manager.ApproveExecutable(context.Background(), "terraform", ExecutableFingerprint{}); !errors.Is(err, ErrInvalidExecutableFingerprint) {
+			t.Fatalf("ApproveExecutable error = %v, want ErrInvalidExecutableFingerprint", err)
 		}
 	})
 
 	t.Run("storage not configured", func(t *testing.T) {
 		manager := NewManager("", WithDefinitions([]ServerDefinition{executableApprovalDefinition(command)}))
-		if _, err := manager.ApproveExecutable(context.Background(), "terraform"); !errors.Is(err, ErrExecutableApprovalUnavailable) {
+		if _, err := manager.ApproveExecutable(context.Background(), "terraform", expected); !errors.Is(err, ErrExecutableApprovalUnavailable) {
 			t.Fatalf("ApproveExecutable error = %v, want ErrExecutableApprovalUnavailable", err)
 		}
 	})
@@ -84,7 +88,7 @@ func TestApproveExecutableFailsClosed(t *testing.T) {
 		definition := executableApprovalDefinition(command)
 		definition.Trusted = false
 		manager := NewManager(root, WithDefinitions([]ServerDefinition{definition}))
-		if _, err := manager.ApproveExecutable(context.Background(), "terraform"); !errors.Is(err, ErrExecutableApprovalUnavailable) {
+		if _, err := manager.ApproveExecutable(context.Background(), "terraform", expected); !errors.Is(err, ErrExecutableApprovalUnavailable) {
 			t.Fatalf("ApproveExecutable error = %v, want ErrExecutableApprovalUnavailable", err)
 		}
 		assertApprovalStoreNotCreated(t, root)
@@ -93,7 +97,7 @@ func TestApproveExecutableFailsClosed(t *testing.T) {
 	t.Run("missing executable", func(t *testing.T) {
 		root := t.TempDir()
 		manager := NewManager(root, WithDefinitions([]ServerDefinition{executableApprovalDefinition(filepath.Join(root, "missing"))}))
-		if _, err := manager.ApproveExecutable(context.Background(), "terraform"); !errors.Is(err, ErrExecutableApprovalUnavailable) {
+		if _, err := manager.ApproveExecutable(context.Background(), "terraform", expected); !errors.Is(err, ErrExecutableApprovalUnavailable) {
 			t.Fatalf("ApproveExecutable error = %v, want ErrExecutableApprovalUnavailable", err)
 		}
 		assertApprovalStoreNotCreated(t, root)
@@ -110,7 +114,7 @@ func TestApproveExecutableFailsClosed(t *testing.T) {
 			t.Fatal(err)
 		}
 		manager := NewManager(root, WithDefinitions([]ServerDefinition{executableApprovalDefinition(command)}))
-		if _, err := manager.ApproveExecutable(context.Background(), "terraform"); !errors.Is(err, ErrExecutableApprovalUnavailable) {
+		if _, err := manager.ApproveExecutable(context.Background(), "terraform", expected); !errors.Is(err, ErrExecutableApprovalUnavailable) {
 			t.Fatalf("ApproveExecutable error = %v, want ErrExecutableApprovalUnavailable", err)
 		}
 		got, err := os.ReadFile(path)
@@ -127,11 +131,28 @@ func TestApproveExecutableFailsClosed(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		manager := NewManager(root, WithDefinitions([]ServerDefinition{executableApprovalDefinition(command)}))
-		if _, err := manager.ApproveExecutable(ctx, "terraform"); !errors.Is(err, context.Canceled) {
+		if _, err := manager.ApproveExecutable(ctx, "terraform", expected); !errors.Is(err, context.Canceled) {
 			t.Fatalf("ApproveExecutable error = %v, want context.Canceled", err)
 		}
 		assertApprovalStoreNotCreated(t, root)
 	})
+}
+
+func TestApproveExecutableRejectsChangedFingerprintBeforePersistence(t *testing.T) {
+	root := t.TempDir()
+	command := testExecutable(t)
+	manager := NewManager(root, WithDefinitions([]ServerDefinition{executableApprovalDefinition(command)}))
+	expected := executableFingerprintForTest(t, command)
+	replacement := "0"
+	if expected.Digest[0] == '0' {
+		replacement = "1"
+	}
+	expected.Digest = replacement + expected.Digest[1:]
+
+	if _, err := manager.ApproveExecutable(context.Background(), "terraform", expected); !errors.Is(err, ErrExecutableFingerprintMismatch) {
+		t.Fatalf("ApproveExecutable error = %v, want ErrExecutableFingerprintMismatch", err)
+	}
+	assertApprovalStoreNotCreated(t, root)
 }
 
 func TestExecutableApprovalPersistenceErrorIsDiagnosticAndSanitized(t *testing.T) {
@@ -167,4 +188,14 @@ func assertApprovalStoreNotCreated(t *testing.T, root string) {
 	if _, err := os.Stat(filepath.Join(root, ".iac-studio", attestationStoreFileName)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("approval store unexpectedly exists: %v", err)
 	}
+}
+
+func executableFingerprintForTest(t *testing.T, path string) ExecutableFingerprint {
+	t.Helper()
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest := sha256.Sum256(contents)
+	return ExecutableFingerprint{Algorithm: "sha256", Digest: hex.EncodeToString(digest[:])}
 }

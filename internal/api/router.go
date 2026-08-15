@@ -2221,11 +2221,43 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 	})
 
 	mux.HandleFunc("POST /api/mcp-airlock/servers/{id}/approve-executable", func(w http.ResponseWriter, r *http.Request) {
-		attestation, err := mcpAirlock.ApproveExecutable(r.Context(), r.PathValue("id"))
+		limitBody(w, r)
+		if !requireJSONContentType(w, r) {
+			return
+		}
+		var req struct {
+			ExpectedFingerprint mcpairlock.ExecutableFingerprint `json:"expected_fingerprint"`
+		}
+		decoder := json.NewDecoder(r.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&req); err != nil {
+			var maxBytes *http.MaxBytesError
+			if errors.As(err, &maxBytes) {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, "invalid executable approval request", http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+			var maxBytes *http.MaxBytesError
+			if errors.As(err, &maxBytes) {
+				http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+				return
+			}
+			http.Error(w, "invalid executable approval request", http.StatusBadRequest)
+			return
+		}
+
+		attestation, err := mcpAirlock.ApproveExecutable(r.Context(), r.PathValue("id"), req.ExpectedFingerprint)
 		if err != nil {
 			switch {
 			case errors.Is(err, mcpairlock.ErrUnknownServer):
 				http.Error(w, "mcp airlock server not found", http.StatusNotFound)
+			case errors.Is(err, mcpairlock.ErrInvalidExecutableFingerprint):
+				http.Error(w, "invalid expected executable fingerprint", http.StatusBadRequest)
+			case errors.Is(err, mcpairlock.ErrExecutableFingerprintMismatch):
+				http.Error(w, "mcp executable changed before approval", http.StatusConflict)
 			case errors.Is(err, mcpairlock.ErrExecutableApprovalUnavailable):
 				http.Error(w, "mcp executable approval unavailable", http.StatusConflict)
 			default:

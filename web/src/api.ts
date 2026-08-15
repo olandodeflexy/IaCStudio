@@ -779,8 +779,15 @@ export const api = {
     return (await check(res)).json();
   },
 
-  async approveMCPAirlockExecutable(id: string): Promise<MCPAirlockExecutableAttestation> {
-    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/approve-executable`, { method: 'POST' });
+  async approveMCPAirlockExecutable(
+    id: string,
+    expectedFingerprint: MCPAirlockExecutableFingerprint,
+  ): Promise<MCPAirlockExecutableAttestation> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/approve-executable`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expected_fingerprint: expectedFingerprint }),
+    });
     return (await check(res)).json();
   },
 

@@ -113,12 +113,23 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
 
   const approveExecutable = async (status: MCPAirlockServerStatus) => {
     const id = status.server.id;
+    const expectedFingerprint = status.executable_fingerprint;
+    if (!expectedFingerprint) {
+      setError('MCP executable approval requires an observed fingerprint');
+      return;
+    }
     setBusyId(id);
     setError(null);
     try {
-      const attestation = await client.approveMCPAirlockExecutable(id);
+      const attestation = await client.approveMCPAirlockExecutable(id, expectedFingerprint);
       if (attestation.server_id !== id || attestation.launch_source !== status.server.launch_source) {
         throw new Error('MCP executable approval identity mismatch');
+      }
+      if (
+        attestation.fingerprint.algorithm !== expectedFingerprint.algorithm ||
+        attestation.fingerprint.digest !== expectedFingerprint.digest
+      ) {
+        throw new Error('MCP executable approval fingerprint mismatch');
       }
       setServers(current => current.map(currentStatus => {
         if (currentStatus.server.id !== id) return currentStatus;
