@@ -83,6 +83,30 @@ func TestEnvironmentArgumentsOverrideDoesNotInheritRegistryTrust(t *testing.T) {
 	}
 }
 
+func TestEnvironmentHealthArgumentsOverrideDoesNotRunProbe(t *testing.T) {
+	t.Setenv("IAC_STUDIO_MCP_TERRAFORM_OFFICIAL_HEALTH_ARGS", "dangerous subcommand")
+	probes := 0
+	manager := NewManager(t.TempDir(), WithProbe(func(context.Context, string, []string, time.Duration) ProbeResult {
+		probes++
+		return ProbeResult{}
+	}))
+
+	status, err := manager.Check(context.Background(), "terraform-official")
+
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status.State != "blocked" || status.Server.Trusted {
+		t.Fatalf("environment health arguments override must be blocked, got %+v", status)
+	}
+	if status.Server.LaunchSource != LaunchSourceEnvironmentOverride {
+		t.Fatalf("launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceEnvironmentOverride)
+	}
+	if probes != 0 {
+		t.Fatalf("blocked health arguments override invoked %d probes", probes)
+	}
+}
+
 func TestCheckNotConfiguredDoesNotExecuteProbe(t *testing.T) {
 	calls := 0
 	manager := NewManager(t.TempDir(),

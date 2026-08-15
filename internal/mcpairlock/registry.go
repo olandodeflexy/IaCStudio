@@ -382,6 +382,7 @@ func applyEnvOverrides(definition ServerDefinition) ServerDefinition {
 	}
 	if args := splitEnvArgs(os.Getenv(prefix + "_HEALTH_ARGS")); len(args) > 0 {
 		definition.HealthCheckArgs = args
+		launchOverridden = true
 	}
 	if launchOverridden {
 		definition.LaunchSource = LaunchSourceEnvironmentOverride
