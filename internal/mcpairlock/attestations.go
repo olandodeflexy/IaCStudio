@@ -22,6 +22,10 @@ const (
 	maxAttestationStoreBytes   = 1 << 20
 	maxExecutableAttestations  = 1024
 	executableDigestByteLength = sha256.Size
+
+	ExecutableAttestationApproved         ExecutableAttestationVerdict = "approved"
+	ExecutableAttestationApprovalRequired ExecutableAttestationVerdict = "approval_required"
+	ExecutableAttestationChanged          ExecutableAttestationVerdict = "executable_changed"
 )
 
 var (
@@ -37,6 +41,10 @@ type ExecutableAttestation struct {
 	Fingerprint  ExecutableFingerprint `json:"fingerprint"`
 	ApprovedAt   time.Time             `json:"approved_at"`
 }
+
+// ExecutableAttestationVerdict describes whether an observed executable
+// matches the approval recorded for its exact server and launch source.
+type ExecutableAttestationVerdict string
 
 type attestationKey struct {
 	serverID     string
@@ -115,6 +123,18 @@ func (s *ExecutableAttestationStore) Get(serverID, launchSource string) (Executa
 	defer s.mu.RUnlock()
 	attestation, ok := s.attestations[executableAttestationKey(serverID, launchSource)]
 	return attestation, ok
+}
+
+// Verdict compares an observed fingerprint with the exact stored approval.
+func (s *ExecutableAttestationStore) Verdict(serverID, launchSource string, fingerprint ExecutableFingerprint) ExecutableAttestationVerdict {
+	attestation, ok := s.Get(serverID, launchSource)
+	if !ok {
+		return ExecutableAttestationApprovalRequired
+	}
+	if attestation.Fingerprint != fingerprint {
+		return ExecutableAttestationChanged
+	}
+	return ExecutableAttestationApproved
 }
 
 func loadExecutableAttestations(path string) (map[attestationKey]ExecutableAttestation, error) {

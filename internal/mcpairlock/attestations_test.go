@@ -76,6 +76,61 @@ func TestExecutableAttestationStoreReplacesExactKey(t *testing.T) {
 	}
 }
 
+func TestExecutableAttestationStoreVerdict(t *testing.T) {
+	store, err := NewExecutableAttestationStore(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	approved := testAttestation("terraform-official", LaunchSourceRegistry, "ab")
+	if err := store.Save(approved); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name         string
+		serverID     string
+		launchSource string
+		fingerprint  ExecutableFingerprint
+		want         ExecutableAttestationVerdict
+	}{
+		{
+			name:         "approved",
+			serverID:     approved.ServerID,
+			launchSource: approved.LaunchSource,
+			fingerprint:  approved.Fingerprint,
+			want:         ExecutableAttestationApproved,
+		},
+		{
+			name:         "missing",
+			serverID:     "aws-official",
+			launchSource: LaunchSourceRegistry,
+			fingerprint:  approved.Fingerprint,
+			want:         ExecutableAttestationApprovalRequired,
+		},
+		{
+			name:         "changed",
+			serverID:     approved.ServerID,
+			launchSource: approved.LaunchSource,
+			fingerprint:  testAttestation(approved.ServerID, approved.LaunchSource, "cd").Fingerprint,
+			want:         ExecutableAttestationChanged,
+		},
+		{
+			name:         "wrong launch source",
+			serverID:     approved.ServerID,
+			launchSource: LaunchSourceEnvironmentOverride,
+			fingerprint:  approved.Fingerprint,
+			want:         ExecutableAttestationApprovalRequired,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := store.Verdict(tt.serverID, tt.launchSource, tt.fingerprint); got != tt.want {
+				t.Fatalf("Verdict() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExecutableAttestationStoreRejectsInvalidSnapshots(t *testing.T) {
 	digest := strings.Repeat("ab", 32)
 	record := `{"server_id":"terraform-official","launch_source":"registry","fingerprint":{"algorithm":"sha256","digest":"` + digest + `"},"approved_at":"2026-08-15T12:00:00Z"}`

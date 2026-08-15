@@ -72,19 +72,20 @@ type ServerDefinition struct {
 // ServerStatus is the public health/status view returned by the API and MCP
 // tools. It deliberately excludes resolved executable paths and environment.
 type ServerStatus struct {
-	Server                ServerDefinition       `json:"server"`
-	ExecutableFingerprint *ExecutableFingerprint `json:"executable_fingerprint,omitempty"`
-	Ready                 bool                   `json:"ready"`
-	Running               bool                   `json:"running"`
-	Configured            bool                   `json:"configured"`
-	CommandAvailable      bool                   `json:"command_available"`
-	State                 string                 `json:"state"`
-	Summary               string                 `json:"summary"`
-	Checks                []Check                `json:"checks"`
-	CheckedAt             string                 `json:"checked_at,omitempty"`
-	StartedAt             string                 `json:"started_at,omitempty"`
-	LastExitAt            string                 `json:"last_exit_at,omitempty"`
-	LastExitReason        string                 `json:"last_exit_reason,omitempty"`
+	Server                ServerDefinition             `json:"server"`
+	ExecutableFingerprint *ExecutableFingerprint       `json:"executable_fingerprint,omitempty"`
+	ExecutableAttestation ExecutableAttestationVerdict `json:"executable_attestation,omitempty"`
+	Ready                 bool                         `json:"ready"`
+	Running               bool                         `json:"running"`
+	Configured            bool                         `json:"configured"`
+	CommandAvailable      bool                         `json:"command_available"`
+	State                 string                       `json:"state"`
+	Summary               string                       `json:"summary"`
+	Checks                []Check                      `json:"checks"`
+	CheckedAt             string                       `json:"checked_at,omitempty"`
+	StartedAt             string                       `json:"started_at,omitempty"`
+	LastExitAt            string                       `json:"last_exit_at,omitempty"`
+	LastExitReason        string                       `json:"last_exit_reason,omitempty"`
 }
 
 // ExecutableFingerprint identifies the exact executable observed during a
@@ -218,6 +219,9 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 	}
 	status.ExecutableFingerprint = &fingerprint
 	status.Checks = append(status.Checks, Check{Name: "executable_fingerprint", Status: "pass", Message: "resolved executable fingerprinted with SHA-256"})
+	attestationVerdict, attestationCheck := m.executableAttestationStatus(definition, fingerprint)
+	status.ExecutableAttestation = attestationVerdict
+	status.Checks = append(status.Checks, attestationCheck)
 	args := append([]string{}, definition.Args...)
 	args = append(args, definition.HealthCheckArgs...)
 	if len(args) == 0 {
@@ -255,6 +259,38 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 	}
 	status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "pass", Message: message})
 	return m.withLifecycleStatus(status), nil
+}
+
+func (m *Manager) executableAttestationStatus(definition ServerDefinition, fingerprint ExecutableFingerprint) (ExecutableAttestationVerdict, Check) {
+	if strings.TrimSpace(m.projectsDir) == "" {
+		return ExecutableAttestationApprovalRequired, Check{
+			Name:    "executable_attestation",
+			Status:  "warn",
+			Message: "executable approvals are unavailable without a projects directory",
+		}
+	}
+	store, err := NewExecutableAttestationStore(m.projectsDir)
+	if err != nil {
+		return ExecutableAttestationApprovalRequired, Check{
+			Name:    "executable_attestation",
+			Status:  "error",
+			Message: "executable approval could not be verified",
+		}
+	}
+	verdict := store.Verdict(definition.ID, definition.LaunchSource, fingerprint)
+	check := Check{Name: "executable_attestation"}
+	switch verdict {
+	case ExecutableAttestationApproved:
+		check.Status = "pass"
+		check.Message = "executable matches the approved fingerprint for this launch source"
+	case ExecutableAttestationChanged:
+		check.Status = "error"
+		check.Message = "executable fingerprint changed after approval"
+	default:
+		check.Status = "warn"
+		check.Message = "executable has not been approved for this launch source"
+	}
+	return verdict, check
 }
 
 func (m *Manager) lookup(id string) (ServerDefinition, bool) {
