@@ -181,6 +181,7 @@ export interface MCPAirlockServerStatus {
     algorithm: 'sha256';
     digest: string;
   };
+  executable_attestation?: 'approved' | 'approval_required' | 'executable_changed';
   ready: boolean;
   running: boolean;
   configured: boolean;

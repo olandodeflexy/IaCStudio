@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { api, ApiError, normalizeSuggestions } from './api';
+import { api, ApiError, type MCPAirlockServerStatus, normalizeSuggestions } from './api';
 
 describe('api.generateTopologyFromImages', () => {
   afterEach(() => {
@@ -116,6 +116,42 @@ describe('api.cloudConnections', () => {
 describe('api.mcpAirlock', () => {
   afterEach(() => {
     vi.unstubAllGlobals();
+  });
+
+  it('returns executable attestation verdicts from health checks', async () => {
+    const response: MCPAirlockServerStatus = {
+      server: {
+        id: 'terraform-official',
+        name: 'Terraform MCP Server',
+        vendor: 'HashiCorp',
+        description: 'Official Terraform MCP server',
+        source_url: 'https://github.com/hashicorp/terraform-mcp-server',
+        transport: 'stdio',
+        launch_source: 'registry',
+        trusted: true,
+        read_only_default: true,
+        credential_mode: 'none',
+      },
+      executable_fingerprint: { algorithm: 'sha256', digest: 'ab'.repeat(32) },
+      executable_attestation: 'executable_changed',
+      ready: true,
+      running: false,
+      configured: true,
+      command_available: true,
+      state: 'ready',
+      summary: 'health check completed',
+      checks: [],
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.checkMCPAirlockServer('terraform-official')).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith('/api/mcp-airlock/servers/terraform-official/health', {
+      method: 'POST',
+    });
   });
 
   it('calls MCP Airlock lifecycle endpoints', async () => {

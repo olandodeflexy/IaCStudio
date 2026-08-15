@@ -257,13 +257,29 @@ func TestCheckRedactsProbeOutput(t *testing.T) {
 }
 
 func TestCheckReportsExecutableFingerprint(t *testing.T) {
+	root := t.TempDir()
 	command := testExecutable(t)
 	contents, err := os.ReadFile(command)
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := sha256.Sum256(contents)
-	manager := NewManager(t.TempDir(),
+	store, err := NewExecutableAttestationStore(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Save(ExecutableAttestation{
+		ServerID:     "terraform",
+		LaunchSource: LaunchSourceExplicitDefinition,
+		Fingerprint: ExecutableFingerprint{
+			Algorithm: "sha256",
+			Digest:    hex.EncodeToString(want[:]),
+		},
+		ApprovedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	manager := NewManager(root,
 		WithDefinitions([]ServerDefinition{{
 			ID:              "terraform",
 			Name:            "Terraform",
@@ -291,6 +307,9 @@ func TestCheckReportsExecutableFingerprint(t *testing.T) {
 	}
 	if !hasCheck(status.Checks, "executable_fingerprint", "pass") {
 		t.Fatalf("expected executable fingerprint check, got %+v", status.Checks)
+	}
+	if status.ExecutableAttestation != ExecutableAttestationApproved || !hasCheck(status.Checks, "executable_attestation", "pass") {
+		t.Fatalf("expected approved executable attestation, got %+v", status)
 	}
 }
 
