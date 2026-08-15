@@ -145,7 +145,6 @@ func TestExecutableAttestationStoreRejectsInvalidSnapshots(t *testing.T) {
 		{name: "trailing data", data: `{"version":1,"attestations":[]} {}`},
 		{name: "duplicate key", data: `{"version":1,"attestations":[` + record + `,` + record + `]}`},
 		{name: "unsupported launch source", data: strings.Replace(`{"version":1,"attestations":[`+record+`]}`, `"registry"`, `"unknown"`, 1)},
-		{name: "environment override launch source", data: strings.Replace(`{"version":1,"attestations":[`+record+`]}`, `"registry"`, `"environment_override"`, 1)},
 		{name: "unsupported algorithm", data: strings.Replace(`{"version":1,"attestations":[`+record+`]}`, `"sha256"`, `"sha1"`, 1)},
 		{name: "uppercase digest", data: strings.Replace(`{"version":1,"attestations":[`+record+`]}`, digest, strings.ToUpper(digest), 1)},
 		{name: "missing timestamp", data: strings.Replace(`{"version":1,"attestations":[`+record+`]}`, `"approved_at":"2026-08-15T12:00:00Z"`, `"approved_at":null`, 1)},
@@ -160,6 +159,21 @@ func TestExecutableAttestationStoreRejectsInvalidSnapshots(t *testing.T) {
 				t.Fatalf("error = %v, want ErrInvalidAttestationStore", err)
 			}
 		})
+	}
+}
+
+func TestExecutableAttestationStoreLoadsVersionOneEnvironmentOverride(t *testing.T) {
+	root := t.TempDir()
+	digest := strings.Repeat("ab", 32)
+	snapshot := `{"version":1,"attestations":[{"server_id":"terraform-official","launch_source":"environment_override","fingerprint":{"algorithm":"sha256","digest":"` + digest + `"},"approved_at":"2026-08-15T12:00:00Z"}]}`
+	writeAttestationSnapshot(t, root, []byte(snapshot))
+
+	store, err := NewExecutableAttestationStore(root)
+	if err != nil {
+		t.Fatalf("load version 1 environment override: %v", err)
+	}
+	if _, ok := store.Get("terraform-official", LaunchSourceEnvironmentOverride); !ok {
+		t.Fatal("version 1 environment override attestation was not preserved")
 	}
 }
 

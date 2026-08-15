@@ -5,8 +5,10 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -130,6 +132,22 @@ func TestApproveExecutableFailsClosed(t *testing.T) {
 		}
 		assertApprovalStoreNotCreated(t, root)
 	})
+}
+
+func TestExecutableApprovalPersistenceErrorIsDiagnosticAndSanitized(t *testing.T) {
+	invalid := executableApprovalPersistenceError(fmt.Errorf("%w: store changed since it was loaded", ErrInvalidAttestationStore))
+	if !strings.Contains(invalid.Error(), "invalid, changed, or full") {
+		t.Fatalf("invalid store error = %q", invalid)
+	}
+
+	secretPath := "/private/credentials/mcp-airlock-attestations.json"
+	pathErr := executableApprovalPersistenceError(&os.PathError{Op: "rename", Path: secretPath, Err: os.ErrPermission})
+	if strings.Contains(pathErr.Error(), secretPath) {
+		t.Fatalf("persistence error disclosed store path: %q", pathErr)
+	}
+	if !errors.Is(pathErr, ErrExecutableApprovalUnavailable) {
+		t.Fatalf("persistence error = %v, want ErrExecutableApprovalUnavailable", pathErr)
+	}
 }
 
 func executableApprovalDefinition(command string) ServerDefinition {

@@ -49,7 +49,18 @@ func (m *Manager) ApproveExecutable(ctx context.Context, id string) (ExecutableA
 		ApprovedAt:   time.Now().UTC(),
 	}
 	if err := store.Save(attestation); err != nil {
-		return ExecutableAttestation{}, fmt.Errorf("%w: approval could not be persisted", ErrExecutableApprovalUnavailable)
+		return ExecutableAttestation{}, executableApprovalPersistenceError(err)
 	}
 	return attestation, nil
+}
+
+func executableApprovalPersistenceError(err error) error {
+	detail := "approval storage write failed"
+	switch {
+	case errors.Is(err, ErrAttestationStorePathRequired):
+		detail = "approval storage is not configured"
+	case errors.Is(err, ErrInvalidAttestationStore):
+		detail = "approval store is invalid, changed, or full"
+	}
+	return fmt.Errorf("%w: %s", ErrExecutableApprovalUnavailable, detail)
 }
