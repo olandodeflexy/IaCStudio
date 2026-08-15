@@ -4,7 +4,7 @@ import { CheckCircle2, ExternalLink, Play, RefreshCw, ServerCog, ShieldCheck, Sq
 import { api, type MCPAirlockServerStatus, type MCPAirlockToolInventory, type MCPAirlockToolRisk } from '../../api';
 import { Button } from '../ui/button';
 
-type MCPAirlockClient = Pick<typeof api, 'listMCPAirlockServers' | 'checkMCPAirlockServer' | 'startMCPAirlockServer' | 'stopMCPAirlockServer' | 'getMCPAirlockTools' | 'discoverMCPAirlockTools'>;
+type MCPAirlockClient = Pick<typeof api, 'listMCPAirlockServers' | 'checkMCPAirlockServer' | 'approveMCPAirlockExecutable' | 'startMCPAirlockServer' | 'stopMCPAirlockServer' | 'getMCPAirlockTools' | 'discoverMCPAirlockTools'>;
 
 export interface MCPAirlockPanelProps {
   client?: MCPAirlockClient;
@@ -104,6 +104,39 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
     try {
       const next = await client.startMCPAirlockServer(id);
       setServers(current => current.map(status => status.server.id === id ? next : status));
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const approveExecutable = async (status: MCPAirlockServerStatus) => {
+    const id = status.server.id;
+    setBusyId(id);
+    setError(null);
+    try {
+      const attestation = await client.approveMCPAirlockExecutable(id);
+      if (attestation.server_id !== id || attestation.launch_source !== status.server.launch_source) {
+        throw new Error('MCP executable approval identity mismatch');
+      }
+      setServers(current => current.map(currentStatus => {
+        if (currentStatus.server.id !== id) return currentStatus;
+        const approvedCheck = {
+          name: 'executable_attestation',
+          status: 'pass' as const,
+          message: 'executable matches the approved fingerprint for this launch source',
+        };
+        const hasAttestationCheck = currentStatus.checks.some(check => check.name === approvedCheck.name);
+        return {
+          ...currentStatus,
+          executable_fingerprint: attestation.fingerprint,
+          executable_attestation: 'approved',
+          checks: hasAttestationCheck
+            ? currentStatus.checks.map(check => check.name === approvedCheck.name ? approvedCheck : check)
+            : [...currentStatus.checks, approvedCheck],
+        };
+      }));
     } catch (err) {
       setError(String(err));
     } finally {
@@ -249,6 +282,31 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
               <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
                 {status.summary}
               </p>
+
+              {(status.executable_attestation === 'approval_required' || status.executable_attestation === 'executable_changed') && status.executable_fingerprint && (
+                <div className="mt-2 flex items-center gap-2 border-l-2 border-yellow-400 bg-yellow-500/10 px-2 py-2">
+                  <ShieldCheck className="h-4 w-4 shrink-0 text-yellow-200" />
+                  <div className="min-w-0 flex-1">
+                    <div className="text-[11px] font-medium text-foreground">
+                      {status.executable_attestation === 'executable_changed' ? 'Executable changed' : 'Executable approval required'}
+                    </div>
+                    <div className="break-all font-mono text-[10px] leading-relaxed text-muted-foreground">
+                      SHA-256 {status.executable_fingerprint.digest}
+                    </div>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 shrink-0 px-2 text-[10px]"
+                    onClick={() => approveExecutable(status)}
+                    disabled={busyId === status.server.id || discoveringId === status.server.id || status.running || !status.command_available}
+                    title={status.running ? 'Stop the MCP server before approving its executable' : 'Approve this executable fingerprint'}
+                    aria-label={`Approve executable for ${status.server.name}`}
+                  >
+                    {busyId === status.server.id ? '...' : 'Approve'}
+                  </Button>
+                </div>
+              )}
 
               <div className="mt-2 flex flex-wrap gap-1.5">
                 {status.server.trusted && (
