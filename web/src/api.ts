@@ -175,12 +175,21 @@ export interface MCPAirlockServerDefinition {
   capabilities?: string[];
 }
 
+export interface MCPAirlockExecutableFingerprint {
+  algorithm: 'sha256';
+  digest: string;
+}
+
+export interface MCPAirlockExecutableAttestation {
+  server_id: string;
+  launch_source: string;
+  fingerprint: MCPAirlockExecutableFingerprint;
+  approved_at: string;
+}
+
 export interface MCPAirlockServerStatus {
   server: MCPAirlockServerDefinition;
-  executable_fingerprint?: {
-    algorithm: 'sha256';
-    digest: string;
-  };
+  executable_fingerprint?: MCPAirlockExecutableFingerprint;
   executable_attestation?: 'approved' | 'approval_required' | 'executable_changed';
   ready: boolean;
   running: boolean;
@@ -767,6 +776,11 @@ export const api = {
 
   async checkMCPAirlockServer(id: string): Promise<MCPAirlockServerStatus> {
     const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/health`, { method: 'POST' });
+    return (await check(res)).json();
+  },
+
+  async approveMCPAirlockExecutable(id: string): Promise<MCPAirlockExecutableAttestation> {
+    const res = await fetch(`${BASE}/api/mcp-airlock/servers/${encodeURIComponent(id)}/approve-executable`, { method: 'POST' });
     return (await check(res)).json();
   },
 
