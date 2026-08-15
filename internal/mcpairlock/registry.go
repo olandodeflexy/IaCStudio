@@ -248,18 +248,22 @@ func (m *Manager) passiveStatus(definition ServerDefinition) ServerStatus {
 			{Name: "credential_scope", Status: "pass", Message: "Airlock health checks do not forward cloud credentials"},
 		},
 	}
+	provenanceCheck := Check{Name: "launch_provenance", Status: "pass", Message: "launch source is " + definition.LaunchSource}
+	if definition.LaunchSource == LaunchSourceEnvironmentOverride {
+		provenanceCheck.Status = "error"
+		provenanceCheck.Message = "environment launch overrides do not inherit registry trust"
+	}
+	status.Checks = append(status.Checks, provenanceCheck)
 	if !definition.Trusted {
 		status.State = "blocked"
 		status.Summary = "Server is not marked trusted."
 		if definition.LaunchSource == LaunchSourceEnvironmentOverride {
 			status.Summary = "Launch override is blocked until its executable and arguments are explicitly attested."
-			status.Checks = append(status.Checks, Check{Name: "launch_provenance", Status: "error", Message: "environment launch overrides do not inherit registry trust"})
 		}
 		status.Checks = append(status.Checks, Check{Name: "trusted_registry", Status: "error", Message: "definition is not trusted"})
 		return status
 	}
 	status.Checks = append(status.Checks, Check{Name: "trusted_registry", Status: "pass", Message: "server is in IaC Studio's trusted MCP Airlock registry"})
-	status.Checks = append(status.Checks, Check{Name: "launch_provenance", Status: "pass", Message: "launch source is " + definition.LaunchSource})
 	if !definition.ReadOnlyDefault {
 		status.Checks = append(status.Checks, Check{Name: "default_mode", Status: "warn", Message: "server is not read-only by default"})
 	} else {
@@ -306,7 +310,7 @@ func builtInDefinitions() []ServerDefinition {
 			Description:     "Official AWS MCP entry point for cloud inventory and operational context.",
 			SourceURL:       "https://github.com/awslabs/mcp",
 			DocsURL:         "https://github.com/awslabs/mcp",
-			InstallHint:     "Set IAC_STUDIO_MCP_AWS_OFFICIAL_COMMAND after installing the AWS MCP server locally.",
+			InstallHint:     "Install the official AWS MCP server locally. Environment command and argument overrides remain blocked until executable attestation is configured.",
 			Transport:       "stdio",
 			LaunchSource:    LaunchSourceRegistry,
 			Trusted:         true,
@@ -321,7 +325,7 @@ func builtInDefinitions() []ServerDefinition {
 			Description:     "Official Terraform MCP server for registry, module, provider, and Terraform workflow context.",
 			SourceURL:       "https://github.com/hashicorp/terraform-mcp-server",
 			DocsURL:         "https://developer.hashicorp.com/terraform/mcp-server",
-			InstallHint:     "Install terraform-mcp-server on PATH or set IAC_STUDIO_MCP_TERRAFORM_OFFICIAL_COMMAND.",
+			InstallHint:     "Install terraform-mcp-server on PATH. Environment command and argument overrides remain blocked until executable attestation is configured.",
 			Transport:       "stdio",
 			Command:         "terraform-mcp-server",
 			LaunchSource:    LaunchSourceRegistry,

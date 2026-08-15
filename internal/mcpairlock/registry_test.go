@@ -36,6 +36,9 @@ func TestListIncludesTrustedBuiltinsWithoutHealthProbe(t *testing.T) {
 		if status.Server.LaunchSource != LaunchSourceRegistry {
 			t.Fatalf("built-in server launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceRegistry)
 		}
+		if strings.Contains(status.Server.InstallHint, "IAC_STUDIO_MCP_") {
+			t.Fatalf("built-in install hint recommends blocked environment overrides: %q", status.Server.InstallHint)
+		}
 	}
 }
 
@@ -160,6 +163,9 @@ func TestListReportsSingleTrustVerdictForUntrustedDefinitions(t *testing.T) {
 	}
 	if trustChecks != 1 {
 		t.Fatalf("expected one trusted_registry check, got %d in %+v", trustChecks, status.Checks)
+	}
+	if !hasCheck(status.Checks, "launch_provenance", "pass") {
+		t.Fatalf("expected explicit launch provenance check, got %+v", status.Checks)
 	}
 }
 
