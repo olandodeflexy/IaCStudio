@@ -162,6 +162,21 @@ func TestExecutableAttestationStoreRejectsInvalidSnapshots(t *testing.T) {
 	}
 }
 
+func TestExecutableAttestationStoreLoadsVersionOneEnvironmentOverride(t *testing.T) {
+	root := t.TempDir()
+	digest := strings.Repeat("ab", 32)
+	snapshot := `{"version":1,"attestations":[{"server_id":"terraform-official","launch_source":"environment_override","fingerprint":{"algorithm":"sha256","digest":"` + digest + `"},"approved_at":"2026-08-15T12:00:00Z"}]}`
+	writeAttestationSnapshot(t, root, []byte(snapshot))
+
+	store, err := NewExecutableAttestationStore(root)
+	if err != nil {
+		t.Fatalf("load version 1 environment override: %v", err)
+	}
+	if _, ok := store.Get("terraform-official", LaunchSourceEnvironmentOverride); !ok {
+		t.Fatal("version 1 environment override attestation was not preserved")
+	}
+}
+
 func TestExecutableAttestationStoreRejectsOversizedAndSymlinkedFiles(t *testing.T) {
 	t.Run("oversized", func(t *testing.T) {
 		root := t.TempDir()
