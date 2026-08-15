@@ -187,6 +187,25 @@ describe('api.mcpAirlock', () => {
     });
   });
 
+  it('approves an MCP Airlock executable through the attestation endpoint', async () => {
+    const response = {
+      server_id: 'terraform-official',
+      launch_source: 'registry',
+      fingerprint: { algorithm: 'sha256', digest: 'ab'.repeat(32) },
+      approved_at: '2026-08-15T20:00:00Z',
+    };
+    const fetchMock = vi.fn().mockResolvedValueOnce(new Response(JSON.stringify(response), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(api.approveMCPAirlockExecutable('terraform-official')).resolves.toEqual(response);
+    expect(fetchMock).toHaveBeenCalledWith('/api/mcp-airlock/servers/terraform-official/approve-executable', {
+      method: 'POST',
+    });
+  });
+
   it('calls MCP Airlock tool inventory and firewall endpoints', async () => {
     const inventory = {
       server_id: 'terraform-official',
