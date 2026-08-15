@@ -313,6 +313,34 @@ func TestCheckReportsExecutableFingerprint(t *testing.T) {
 	}
 }
 
+func TestCheckWarnsWhenAttestationStorageIsNotConfigured(t *testing.T) {
+	manager := NewManager("",
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         testExecutable(t),
+			HealthCheckArgs: []string{"version"},
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithProbe(func(context.Context, string, []string, time.Duration) ProbeResult {
+			return ProbeResult{}
+		}),
+	)
+
+	status, err := manager.Check(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status.ExecutableAttestation != ExecutableAttestationApprovalRequired {
+		t.Fatalf("attestation verdict = %q, want %q", status.ExecutableAttestation, ExecutableAttestationApprovalRequired)
+	}
+	if !hasCheck(status.Checks, "executable_attestation", "warn") {
+		t.Fatalf("expected unavailable storage warning, got %+v", status.Checks)
+	}
+}
+
 func TestCheckRejectsOversizedExecutableBeforeProbe(t *testing.T) {
 	name := "oversized-mcp"
 	if runtime.GOOS == "windows" {

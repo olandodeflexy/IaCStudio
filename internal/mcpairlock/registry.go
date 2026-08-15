@@ -262,6 +262,13 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 }
 
 func (m *Manager) executableAttestationStatus(definition ServerDefinition, fingerprint ExecutableFingerprint) (ExecutableAttestationVerdict, Check) {
+	if strings.TrimSpace(m.projectsDir) == "" {
+		return ExecutableAttestationApprovalRequired, Check{
+			Name:    "executable_attestation",
+			Status:  "warn",
+			Message: "executable approvals are unavailable without a projects directory",
+		}
+	}
 	store, err := NewExecutableAttestationStore(m.projectsDir)
 	if err != nil {
 		return ExecutableAttestationApprovalRequired, Check{
