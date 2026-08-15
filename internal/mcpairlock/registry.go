@@ -202,7 +202,14 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 	if status.State != "available" {
 		return m.withLifecycleStatus(status), nil
 	}
-	fingerprint, err := fingerprintExecutable(definition.Command)
+	resolvedCommand, err := resolveExecutable(definition.Command)
+	if err != nil {
+		status.State = "fingerprint_failed"
+		status.Summary = "Airlock could not fingerprint the configured MCP executable."
+		status.Checks = append(status.Checks, Check{Name: "executable_fingerprint", Status: "error", Message: "resolved executable is unavailable, not a regular file, or exceeds the fingerprint size limit"})
+		return m.withLifecycleStatus(status), nil
+	}
+	fingerprint, err := fingerprintExecutable(resolvedCommand)
 	if err != nil {
 		status.State = "fingerprint_failed"
 		status.Summary = "Airlock could not fingerprint the configured MCP executable."
@@ -220,7 +227,7 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 		status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "warn", Message: "no version or health command is configured"})
 		return m.withLifecycleStatus(status), nil
 	}
-	result := m.probe(ctx, definition.Command, args, m.timeout)
+	result := m.probe(ctx, resolvedCommand, args, m.timeout)
 	if result.TimedOut {
 		status.Ready = false
 		status.State = "timeout"
@@ -461,11 +468,15 @@ func defaultProbe(ctx context.Context, command string, args []string, timeout ti
 	}
 }
 
-func fingerprintExecutable(command string) (ExecutableFingerprint, error) {
+func resolveExecutable(command string) (string, error) {
 	path, err := exec.LookPath(command)
 	if err != nil {
-		return ExecutableFingerprint{}, err
+		return "", err
 	}
+	return filepath.Abs(path)
+}
+
+func fingerprintExecutable(path string) (ExecutableFingerprint, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return ExecutableFingerprint{}, err

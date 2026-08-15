@@ -220,6 +220,10 @@ func TestValidateCommandRejectsRelativeCommandsWithSpaces(t *testing.T) {
 }
 
 func TestCheckRedactsProbeOutput(t *testing.T) {
+	wantCommand, err := resolveExecutable("go")
+	if err != nil {
+		t.Fatal(err)
+	}
 	manager := NewManager(t.TempDir(),
 		WithDefinitions([]ServerDefinition{{
 			ID:              "terraform",
@@ -231,7 +235,7 @@ func TestCheckRedactsProbeOutput(t *testing.T) {
 			CredentialMode:  "none",
 		}}),
 		WithProbe(func(_ context.Context, command string, args []string, _ time.Duration) ProbeResult {
-			if command != "go" || strings.Join(args, " ") != "version" {
+			if command != wantCommand || strings.Join(args, " ") != "version" {
 				t.Fatalf("unexpected probe command: %s %v", command, args)
 			}
 			return ProbeResult{Output: "ok aws_secret_access_key=super-secret AKIA1234567890ABCDE"}
