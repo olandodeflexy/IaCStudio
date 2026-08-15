@@ -2220,6 +2220,23 @@ func NewRouterWithOptions(hub *Hub, fw *watcher.FileWatcher, aiClient *ai.Client
 		_ = json.NewEncoder(w).Encode(status)
 	})
 
+	mux.HandleFunc("POST /api/mcp-airlock/servers/{id}/approve-executable", func(w http.ResponseWriter, r *http.Request) {
+		attestation, err := mcpAirlock.ApproveExecutable(r.Context(), r.PathValue("id"))
+		if err != nil {
+			switch {
+			case errors.Is(err, mcpairlock.ErrUnknownServer):
+				http.Error(w, "mcp airlock server not found", http.StatusNotFound)
+			case errors.Is(err, mcpairlock.ErrExecutableApprovalUnavailable):
+				http.Error(w, "mcp executable approval unavailable", http.StatusConflict)
+			default:
+				http.Error(w, "mcp executable approval failed", http.StatusInternalServerError)
+			}
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(attestation)
+	})
+
 	mux.HandleFunc("GET /api/mcp-airlock/servers/{id}/tools", func(w http.ResponseWriter, r *http.Request) {
 		inventory, err := mcpAirlock.Inventory(r.PathValue("id"))
 		if err != nil {
