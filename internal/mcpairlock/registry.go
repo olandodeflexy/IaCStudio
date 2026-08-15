@@ -15,7 +15,13 @@ import (
 	"time"
 )
 
-const defaultHealthTimeout = 2 * time.Second
+const (
+	defaultHealthTimeout = 2 * time.Second
+
+	LaunchSourceRegistry            = "registry"
+	LaunchSourceExplicitDefinition  = "explicit_definition"
+	LaunchSourceEnvironmentOverride = "environment_override"
+)
 
 var (
 	// ErrUnknownServer is returned when callers request a server outside the
@@ -49,6 +55,7 @@ type ServerDefinition struct {
 	InstallHint       string   `json:"install_hint,omitempty"`
 	Transport         string   `json:"transport"`
 	Command           string   `json:"command,omitempty"`
+	LaunchSource      string   `json:"launch_source"`
 	Args              []string `json:"args,omitempty"`
 	HealthCheckArgs   []string `json:"health_check_args,omitempty"`
 	VersionConstraint string   `json:"version_constraint,omitempty"`
@@ -241,9 +248,18 @@ func (m *Manager) passiveStatus(definition ServerDefinition) ServerStatus {
 			{Name: "credential_scope", Status: "pass", Message: "Airlock health checks do not forward cloud credentials"},
 		},
 	}
+	provenanceCheck := Check{Name: "launch_provenance", Status: "pass", Message: "launch source is " + definition.LaunchSource}
+	if definition.LaunchSource == LaunchSourceEnvironmentOverride {
+		provenanceCheck.Status = "error"
+		provenanceCheck.Message = "environment launch overrides do not inherit registry trust"
+	}
+	status.Checks = append(status.Checks, provenanceCheck)
 	if !definition.Trusted {
 		status.State = "blocked"
 		status.Summary = "Server is not marked trusted."
+		if definition.LaunchSource == LaunchSourceEnvironmentOverride {
+			status.Summary = "Launch override is blocked until its executable and arguments are explicitly attested."
+		}
 		status.Checks = append(status.Checks, Check{Name: "trusted_registry", Status: "error", Message: "definition is not trusted"})
 		return status
 	}
@@ -294,8 +310,9 @@ func builtInDefinitions() []ServerDefinition {
 			Description:     "Official AWS MCP entry point for cloud inventory and operational context.",
 			SourceURL:       "https://github.com/awslabs/mcp",
 			DocsURL:         "https://github.com/awslabs/mcp",
-			InstallHint:     "Set IAC_STUDIO_MCP_AWS_OFFICIAL_COMMAND after installing the AWS MCP server locally.",
+			InstallHint:     "Install the official AWS MCP server locally. Environment command and argument overrides remain blocked until executable attestation is configured.",
 			Transport:       "stdio",
+			LaunchSource:    LaunchSourceRegistry,
 			Trusted:         true,
 			ReadOnlyDefault: true,
 			CredentialMode:  "none",
@@ -308,9 +325,10 @@ func builtInDefinitions() []ServerDefinition {
 			Description:     "Official Terraform MCP server for registry, module, provider, and Terraform workflow context.",
 			SourceURL:       "https://github.com/hashicorp/terraform-mcp-server",
 			DocsURL:         "https://developer.hashicorp.com/terraform/mcp-server",
-			InstallHint:     "Install terraform-mcp-server on PATH or set IAC_STUDIO_MCP_TERRAFORM_OFFICIAL_COMMAND.",
+			InstallHint:     "Install terraform-mcp-server on PATH. Environment command and argument overrides remain blocked until executable attestation is configured.",
 			Transport:       "stdio",
 			Command:         "terraform-mcp-server",
+			LaunchSource:    LaunchSourceRegistry,
 			HealthCheckArgs: []string{"--version"},
 			Trusted:         true,
 			ReadOnlyDefault: true,
@@ -326,6 +344,9 @@ func normalizeDefinitions(definitions []ServerDefinition) []ServerDefinition {
 		out[i].ID = strings.TrimSpace(out[i].ID)
 		out[i].Command = strings.TrimSpace(out[i].Command)
 		out[i] = applyEnvOverrides(out[i])
+		if out[i].LaunchSource == "" {
+			out[i].LaunchSource = LaunchSourceExplicitDefinition
+		}
 		if out[i].Transport == "" {
 			out[i].Transport = "stdio"
 		}
@@ -350,14 +371,22 @@ func copyDefinitions(definitions []ServerDefinition) []ServerDefinition {
 
 func applyEnvOverrides(definition ServerDefinition) ServerDefinition {
 	prefix := "IAC_STUDIO_MCP_" + strings.ToUpper(strings.ReplaceAll(definition.ID, "-", "_"))
+	launchOverridden := false
 	if command := strings.TrimSpace(os.Getenv(prefix + "_COMMAND")); command != "" {
 		definition.Command = command
+		launchOverridden = true
 	}
 	if args := splitEnvArgs(os.Getenv(prefix + "_ARGS")); len(args) > 0 {
 		definition.Args = args
+		launchOverridden = true
 	}
 	if args := splitEnvArgs(os.Getenv(prefix + "_HEALTH_ARGS")); len(args) > 0 {
 		definition.HealthCheckArgs = args
+		launchOverridden = true
+	}
+	if launchOverridden {
+		definition.LaunchSource = LaunchSourceEnvironmentOverride
+		definition.Trusted = false
 	}
 	return definition
 }

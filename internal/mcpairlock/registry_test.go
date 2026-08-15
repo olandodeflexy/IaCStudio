@@ -33,6 +33,77 @@ func TestListIncludesTrustedBuiltinsWithoutHealthProbe(t *testing.T) {
 		if !status.Server.Trusted || !status.Server.ReadOnlyDefault || status.Server.CredentialMode != "none" {
 			t.Fatalf("built-in server is not locked down by default: %+v", status.Server)
 		}
+		if status.Server.LaunchSource != LaunchSourceRegistry {
+			t.Fatalf("built-in server launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceRegistry)
+		}
+		if strings.Contains(status.Server.InstallHint, "IAC_STUDIO_MCP_") {
+			t.Fatalf("built-in install hint recommends blocked environment overrides: %q", status.Server.InstallHint)
+		}
+	}
+}
+
+func TestEnvironmentCommandOverrideDoesNotInheritRegistryTrust(t *testing.T) {
+	t.Setenv("IAC_STUDIO_MCP_TERRAFORM_OFFICIAL_COMMAND", testExecutable(t))
+	launches := 0
+	manager := NewManager(t.TempDir(), WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
+		launches++
+		return newFakeProcess(), nil
+	}))
+
+	status, err := manager.Start(context.Background(), "terraform-official")
+
+	if err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	if status.State != "blocked" || status.Server.Trusted {
+		t.Fatalf("environment override must be blocked, got %+v", status)
+	}
+	if launches != 0 {
+		t.Fatalf("blocked environment override launched %d processes", launches)
+	}
+	if status.Server.LaunchSource != LaunchSourceEnvironmentOverride {
+		t.Fatalf("launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceEnvironmentOverride)
+	}
+	if !hasCheck(status.Checks, "launch_provenance", "error") {
+		t.Fatalf("expected failed launch provenance check, got %+v", status.Checks)
+	}
+}
+
+func TestEnvironmentArgumentsOverrideDoesNotInheritRegistryTrust(t *testing.T) {
+	t.Setenv("IAC_STUDIO_MCP_TERRAFORM_OFFICIAL_ARGS", "--transport stdio")
+	manager := NewManager(t.TempDir())
+
+	status := statusByID(t, manager.List(context.Background()), "terraform-official")
+
+	if status.State != "blocked" || status.Server.Trusted {
+		t.Fatalf("environment arguments override must be blocked, got %+v", status)
+	}
+	if status.Server.LaunchSource != LaunchSourceEnvironmentOverride {
+		t.Fatalf("launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceEnvironmentOverride)
+	}
+}
+
+func TestEnvironmentHealthArgumentsOverrideDoesNotRunProbe(t *testing.T) {
+	t.Setenv("IAC_STUDIO_MCP_TERRAFORM_OFFICIAL_HEALTH_ARGS", "dangerous subcommand")
+	probes := 0
+	manager := NewManager(t.TempDir(), WithProbe(func(context.Context, string, []string, time.Duration) ProbeResult {
+		probes++
+		return ProbeResult{}
+	}))
+
+	status, err := manager.Check(context.Background(), "terraform-official")
+
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status.State != "blocked" || status.Server.Trusted {
+		t.Fatalf("environment health arguments override must be blocked, got %+v", status)
+	}
+	if status.Server.LaunchSource != LaunchSourceEnvironmentOverride {
+		t.Fatalf("launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceEnvironmentOverride)
+	}
+	if probes != 0 {
+		t.Fatalf("blocked health arguments override invoked %d probes", probes)
 	}
 }
 
@@ -116,6 +187,9 @@ func TestListReportsSingleTrustVerdictForUntrustedDefinitions(t *testing.T) {
 	}
 	if trustChecks != 1 {
 		t.Fatalf("expected one trusted_registry check, got %d in %+v", trustChecks, status.Checks)
+	}
+	if !hasCheck(status.Checks, "launch_provenance", "pass") {
+		t.Fatalf("expected explicit launch provenance check, got %+v", status.Checks)
 	}
 }
 
@@ -453,6 +527,17 @@ func containsStatus(statuses []ServerStatus, id string) bool {
 		}
 	}
 	return false
+}
+
+func statusByID(t *testing.T, statuses []ServerStatus, id string) ServerStatus {
+	t.Helper()
+	for _, status := range statuses {
+		if status.Server.ID == id {
+			return status
+		}
+	}
+	t.Fatalf("status %q not found in %+v", id, statuses)
+	return ServerStatus{}
 }
 
 func assertUniqueCheckNames(t *testing.T, status ServerStatus) {
