@@ -700,7 +700,7 @@ func writeFileAtomic(path string, data []byte) error {
 		return fmt.Errorf("close temporary file: %w", err)
 	}
 	if err := replaceFileAtomic(tmpName, path); err != nil {
-		return fmt.Errorf("replace inventory file: %w", err)
+		return fmt.Errorf("replace file: %w", err)
 	}
 	keepTemp = false
 	syncDirBestEffort(dir)
