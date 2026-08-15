@@ -284,8 +284,16 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
               </p>
 
               {(status.executable_attestation === 'approval_required' || status.executable_attestation === 'executable_changed') && status.executable_fingerprint && (
-                <div className="mt-2 flex items-center gap-2 border-l-2 border-yellow-400 bg-yellow-500/10 px-2 py-2">
-                  <ShieldCheck className="h-4 w-4 shrink-0 text-yellow-200" />
+                <div
+                  role="alert"
+                  className={`mt-2 flex items-center gap-2 border-l-2 px-2 py-2 ${status.executable_attestation === 'executable_changed'
+                    ? 'border-destructive bg-destructive/10'
+                    : 'border-yellow-400 bg-yellow-500/10'
+                  }`}
+                >
+                  {status.executable_attestation === 'executable_changed'
+                    ? <XCircle className="h-4 w-4 shrink-0 text-destructive" />
+                    : <ShieldCheck className="h-4 w-4 shrink-0 text-yellow-200" />}
                   <div className="min-w-0 flex-1">
                     <div className="text-[11px] font-medium text-foreground">
                       {status.executable_attestation === 'executable_changed' ? 'Executable changed' : 'Executable approval required'}

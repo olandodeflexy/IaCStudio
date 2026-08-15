@@ -139,6 +139,37 @@ describe('MCPAirlockPanel', () => {
     expect(screen.getByRole('button', { name: 'Approve executable for Terraform MCP Server' })).toBeInTheDocument();
   });
 
+  it('treats executable drift as an error and allows explicit reapproval', async () => {
+    const initial = server({
+      command_available: true,
+      state: 'ready',
+      executable_fingerprint: approval().fingerprint,
+      executable_attestation: 'executable_changed',
+      checks: [{ name: 'executable_attestation', status: 'error', message: 'executable fingerprint changed after approval' }],
+    });
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
+      startMCPAirlockServer: vi.fn(async () => initial),
+      stopMCPAirlockServer: vi.fn(async () => initial),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Executable changed');
+    expect(alert).toHaveClass('border-destructive');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve executable for Terraform MCP Server' }));
+    await waitFor(() => {
+      expect(client.approveMCPAirlockExecutable).toHaveBeenCalledWith('terraform-official');
+    });
+    expect(screen.queryByText('Executable changed')).not.toBeInTheDocument();
+  });
+
   it('starts and stops configured servers', async () => {
     const initial = server({
       command_available: true,
