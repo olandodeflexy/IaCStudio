@@ -282,7 +282,7 @@ func validateExecutableAttestation(attestation ExecutableAttestation) error {
 		return fmt.Errorf("%w: %v", ErrInvalidAttestationStore, err)
 	}
 	switch attestation.LaunchSource {
-	case LaunchSourceRegistry, LaunchSourceExplicitDefinition, LaunchSourceEnvironmentOverride:
+	case LaunchSourceRegistry, LaunchSourceExplicitDefinition:
 	default:
 		return fmt.Errorf("%w: unsupported launch source", ErrInvalidAttestationStore)
 	}
