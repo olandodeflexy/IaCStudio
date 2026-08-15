@@ -67,6 +67,98 @@ func TestMCPAirlockHealthUnknownServerFailsClosed(t *testing.T) {
 	}
 }
 
+func TestMCPAirlockApproveExecutableRoute(t *testing.T) {
+	root := t.TempDir()
+	manager := mcpairlock.NewManager(root,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         apiTestExecutable(t),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
+	defer srv.Close()
+
+	resp, err := http.Post(srv.URL+"/api/mcp-airlock/servers/terraform/approve-executable", "application/json", nil)
+	if err != nil {
+		t.Fatalf("POST approve executable: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		t.Fatalf("expected 200, got %d: %s", resp.StatusCode, body)
+	}
+
+	var attestation mcpairlock.ExecutableAttestation
+	if err := json.NewDecoder(resp.Body).Decode(&attestation); err != nil {
+		t.Fatalf("decode executable approval: %v", err)
+	}
+	if attestation.ServerID != "terraform" || attestation.LaunchSource != mcpairlock.LaunchSourceExplicitDefinition {
+		t.Fatalf("unexpected executable approval identity: %+v", attestation)
+	}
+	if attestation.Fingerprint.Algorithm != "sha256" || attestation.Fingerprint.Digest == "" || attestation.ApprovedAt.IsZero() {
+		t.Fatalf("incomplete executable approval: %+v", attestation)
+	}
+
+	store, err := mcpairlock.NewExecutableAttestationStore(root)
+	if err != nil {
+		t.Fatalf("load executable approval store: %v", err)
+	}
+	if stored, ok := store.Get(attestation.ServerID, attestation.LaunchSource); !ok || stored != attestation {
+		t.Fatalf("persisted executable approval = (%+v, %t), want %+v", stored, ok, attestation)
+	}
+}
+
+func TestMCPAirlockApproveExecutableRouteFailsClosed(t *testing.T) {
+	root := t.TempDir()
+	manager := mcpairlock.NewManager(root,
+		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         filepath.Join(root, "private", "missing-terraform-mcp"),
+			Transport:       "stdio",
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+	)
+	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
+	defer srv.Close()
+
+	tests := []struct {
+		name       string
+		serverID   string
+		wantStatus int
+		wantBody   string
+	}{
+		{name: "unknown server", serverID: "unknown", wantStatus: http.StatusNotFound, wantBody: "mcp airlock server not found"},
+		{name: "unavailable executable", serverID: "terraform", wantStatus: http.StatusConflict, wantBody: "mcp executable approval unavailable"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			resp, err := http.Post(srv.URL+"/api/mcp-airlock/servers/"+test.serverID+"/approve-executable", "application/json", nil)
+			if err != nil {
+				t.Fatalf("POST approve executable: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+			body, err := io.ReadAll(resp.Body)
+			if err != nil {
+				t.Fatalf("read response: %v", err)
+			}
+			if resp.StatusCode != test.wantStatus || strings.TrimSpace(string(body)) != test.wantBody {
+				t.Fatalf("response = (%d, %q), want (%d, %q)", resp.StatusCode, body, test.wantStatus, test.wantBody)
+			}
+			if strings.Contains(string(body), root) {
+				t.Fatalf("response disclosed project path: %q", body)
+			}
+		})
+	}
+}
+
 func TestMCPAirlockStartStopRoutesUseLifecycle(t *testing.T) {
 	root := t.TempDir()
 	handle := newAPIFakeProcess()
