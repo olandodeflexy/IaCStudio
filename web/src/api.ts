@@ -166,6 +166,7 @@ export interface MCPAirlockServerDefinition {
   install_hint?: string;
   transport: string;
   command?: string;
+  launch_source: string;
   args?: string[];
   health_check_args?: string[];
   trusted: boolean;
@@ -176,6 +177,10 @@ export interface MCPAirlockServerDefinition {
 
 export interface MCPAirlockServerStatus {
   server: MCPAirlockServerDefinition;
+  executable_fingerprint?: {
+    algorithm: 'sha256';
+    digest: string;
+  };
   ready: boolean;
   running: boolean;
   configured: boolean;
