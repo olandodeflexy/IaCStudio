@@ -16,6 +16,7 @@ function server(overrides: Partial<MCPAirlockServerStatus> = {}): MCPAirlockServ
       install_hint: 'Install terraform-mcp-server on PATH.',
       transport: 'stdio',
       command: 'terraform-mcp-server',
+      launch_source: 'registry',
       trusted: true,
       read_only_default: true,
       credential_mode: 'none',

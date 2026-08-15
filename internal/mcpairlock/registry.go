@@ -2,8 +2,11 @@ package mcpairlock
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -16,7 +19,8 @@ import (
 )
 
 const (
-	defaultHealthTimeout = 2 * time.Second
+	defaultHealthTimeout          = 2 * time.Second
+	maxExecutableFingerprintBytes = int64(512 << 20)
 
 	LaunchSourceRegistry            = "registry"
 	LaunchSourceExplicitDefinition  = "explicit_definition"
@@ -68,18 +72,26 @@ type ServerDefinition struct {
 // ServerStatus is the public health/status view returned by the API and MCP
 // tools. It deliberately excludes resolved executable paths and environment.
 type ServerStatus struct {
-	Server           ServerDefinition `json:"server"`
-	Ready            bool             `json:"ready"`
-	Running          bool             `json:"running"`
-	Configured       bool             `json:"configured"`
-	CommandAvailable bool             `json:"command_available"`
-	State            string           `json:"state"`
-	Summary          string           `json:"summary"`
-	Checks           []Check          `json:"checks"`
-	CheckedAt        string           `json:"checked_at,omitempty"`
-	StartedAt        string           `json:"started_at,omitempty"`
-	LastExitAt       string           `json:"last_exit_at,omitempty"`
-	LastExitReason   string           `json:"last_exit_reason,omitempty"`
+	Server                ServerDefinition       `json:"server"`
+	ExecutableFingerprint *ExecutableFingerprint `json:"executable_fingerprint,omitempty"`
+	Ready                 bool                   `json:"ready"`
+	Running               bool                   `json:"running"`
+	Configured            bool                   `json:"configured"`
+	CommandAvailable      bool                   `json:"command_available"`
+	State                 string                 `json:"state"`
+	Summary               string                 `json:"summary"`
+	Checks                []Check                `json:"checks"`
+	CheckedAt             string                 `json:"checked_at,omitempty"`
+	StartedAt             string                 `json:"started_at,omitempty"`
+	LastExitAt            string                 `json:"last_exit_at,omitempty"`
+	LastExitReason        string                 `json:"last_exit_reason,omitempty"`
+}
+
+// ExecutableFingerprint identifies the exact executable observed during a
+// health check without exposing its resolved local path.
+type ExecutableFingerprint struct {
+	Algorithm string `json:"algorithm"`
+	Digest    string `json:"digest"`
 }
 
 // ProbeResult is the sanitized result shape used by health-check probes.
@@ -190,6 +202,15 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 	if status.State != "available" {
 		return m.withLifecycleStatus(status), nil
 	}
+	fingerprint, err := fingerprintExecutable(definition.Command)
+	if err != nil {
+		status.State = "fingerprint_failed"
+		status.Summary = "Airlock could not fingerprint the configured MCP executable."
+		status.Checks = append(status.Checks, Check{Name: "executable_fingerprint", Status: "error", Message: "resolved executable is unavailable, not a regular file, or exceeds the fingerprint size limit"})
+		return m.withLifecycleStatus(status), nil
+	}
+	status.ExecutableFingerprint = &fingerprint
+	status.Checks = append(status.Checks, Check{Name: "executable_fingerprint", Status: "pass", Message: "resolved executable fingerprinted with SHA-256"})
 	args := append([]string{}, definition.Args...)
 	args = append(args, definition.HealthCheckArgs...)
 	if len(args) == 0 {
@@ -438,6 +459,34 @@ func defaultProbe(ctx context.Context, command string, args []string, timeout ti
 		Err:      err,
 		TimedOut: errors.Is(probeCtx.Err(), context.DeadlineExceeded),
 	}
+}
+
+func fingerprintExecutable(command string) (ExecutableFingerprint, error) {
+	path, err := exec.LookPath(command)
+	if err != nil {
+		return ExecutableFingerprint{}, err
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return ExecutableFingerprint{}, err
+	}
+	defer func() { _ = file.Close() }()
+	info, err := file.Stat()
+	if err != nil {
+		return ExecutableFingerprint{}, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > maxExecutableFingerprintBytes {
+		return ExecutableFingerprint{}, errors.New("executable cannot be fingerprinted")
+	}
+	hash := sha256.New()
+	read, err := io.Copy(hash, io.LimitReader(file, maxExecutableFingerprintBytes+1))
+	if err != nil {
+		return ExecutableFingerprint{}, err
+	}
+	if read > maxExecutableFingerprintBytes {
+		return ExecutableFingerprint{}, errors.New("executable exceeds fingerprint size limit")
+	}
+	return ExecutableFingerprint{Algorithm: "sha256", Digest: hex.EncodeToString(hash.Sum(nil))}, nil
 }
 
 func minimalEnv() []string {

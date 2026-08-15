@@ -2,8 +2,12 @@ package mcpairlock
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -245,6 +249,86 @@ func TestCheckRedactsProbeOutput(t *testing.T) {
 	message := status.Checks[len(status.Checks)-1].Message
 	if strings.Contains(message, "super-secret") || strings.Contains(message, "AKIA") {
 		t.Fatalf("probe output leaked sensitive material: %q", message)
+	}
+}
+
+func TestCheckReportsExecutableFingerprint(t *testing.T) {
+	command := testExecutable(t)
+	contents, err := os.ReadFile(command)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := sha256.Sum256(contents)
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         command,
+			HealthCheckArgs: []string{"version"},
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithProbe(func(context.Context, string, []string, time.Duration) ProbeResult {
+			return ProbeResult{}
+		}),
+	)
+
+	status, err := manager.Check(context.Background(), "terraform")
+
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status.ExecutableFingerprint == nil {
+		t.Fatalf("expected executable fingerprint, got %+v", status)
+	}
+	if status.ExecutableFingerprint.Algorithm != "sha256" || status.ExecutableFingerprint.Digest != hex.EncodeToString(want[:]) {
+		t.Fatalf("fingerprint = %+v, want sha256:%x", status.ExecutableFingerprint, want)
+	}
+	if !hasCheck(status.Checks, "executable_fingerprint", "pass") {
+		t.Fatalf("expected executable fingerprint check, got %+v", status.Checks)
+	}
+}
+
+func TestCheckRejectsOversizedExecutableBeforeProbe(t *testing.T) {
+	name := "oversized-mcp"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	command := filepath.Join(t.TempDir(), name)
+	if err := os.WriteFile(command, []byte("x"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(command, maxExecutableFingerprintBytes+1); err != nil {
+		t.Fatal(err)
+	}
+	probes := 0
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         command,
+			HealthCheckArgs: []string{"version"},
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithProbe(func(context.Context, string, []string, time.Duration) ProbeResult {
+			probes++
+			return ProbeResult{}
+		}),
+	)
+
+	status, err := manager.Check(context.Background(), "terraform")
+
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status.State != "fingerprint_failed" || status.ExecutableFingerprint != nil {
+		t.Fatalf("expected fingerprint failure, got %+v", status)
+	}
+	if probes != 0 {
+		t.Fatalf("fingerprint failure invoked %d probes", probes)
 	}
 }
 
