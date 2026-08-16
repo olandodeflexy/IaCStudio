@@ -116,6 +116,31 @@ func TestInvalidVersionConstraintDoesNotExecuteProbe(t *testing.T) {
 	}
 }
 
+func TestCheckFailsClosedWhenVersionConstraintHasNoProbe(t *testing.T) {
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:                "terraform",
+			Name:              "Terraform",
+			Command:           testExecutable(t),
+			VersionConstraint: ">= 1.4.0",
+			Trusted:           true,
+			ReadOnlyDefault:   true,
+			CredentialMode:    "none",
+		}}),
+	)
+
+	status, err := manager.Check(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status.Ready || status.State != "version_unknown" || status.ObservedVersion != "" {
+		t.Fatalf("expected version_unknown when no probe args are configured, got %+v", status)
+	}
+	if !hasCheck(status.Checks, "version_policy", "error") {
+		t.Fatalf("expected failed version policy check, got %+v", status.Checks)
+	}
+}
+
 func versionTestManager(t *testing.T, constraint, output string) *Manager {
 	t.Helper()
 	return NewManager(t.TempDir(),

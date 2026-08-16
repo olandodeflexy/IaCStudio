@@ -226,6 +226,13 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 	args := append([]string{}, definition.Args...)
 	args = append(args, definition.HealthCheckArgs...)
 	if len(args) == 0 {
+		if definition.VersionConstraint != "" {
+			status.Ready = false
+			status.State = "version_unknown"
+			status.Summary = "Airlock could not verify the MCP server version."
+			status.Checks = append(status.Checks, Check{Name: "version_policy", Status: "error", Message: "version constraint is configured but no health probe command is available to extract the server version"})
+			return m.withLifecycleStatus(status), nil
+		}
 		status.Ready = true
 		status.State = "ready"
 		status.Summary = "Command is available. No active health probe is configured for this server."
