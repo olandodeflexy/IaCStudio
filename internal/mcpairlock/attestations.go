@@ -2,7 +2,6 @@ package mcpairlock
 
 import (
 	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -286,16 +285,8 @@ func validateExecutableAttestation(attestation ExecutableAttestation) error {
 	default:
 		return fmt.Errorf("%w: unsupported launch source", ErrInvalidAttestationStore)
 	}
-	if attestation.Fingerprint.Algorithm != "sha256" {
-		return fmt.Errorf("%w: unsupported fingerprint algorithm", ErrInvalidAttestationStore)
-	}
-	if len(attestation.Fingerprint.Digest) != hex.EncodedLen(executableDigestByteLength) ||
-		attestation.Fingerprint.Digest != strings.ToLower(attestation.Fingerprint.Digest) {
-		return fmt.Errorf("%w: invalid fingerprint digest", ErrInvalidAttestationStore)
-	}
-	digest, err := hex.DecodeString(attestation.Fingerprint.Digest)
-	if err != nil || len(digest) != executableDigestByteLength {
-		return fmt.Errorf("%w: invalid fingerprint digest", ErrInvalidAttestationStore)
+	if err := validateExecutableFingerprint(attestation.Fingerprint); err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidAttestationStore, err)
 	}
 	if attestation.ApprovedAt.IsZero() {
 		return fmt.Errorf("%w: approval timestamp is required", ErrInvalidAttestationStore)

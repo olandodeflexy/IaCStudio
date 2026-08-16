@@ -1,7 +1,7 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-import type { MCPAirlockServerStatus } from '../../api';
+import type { MCPAirlockExecutableAttestation, MCPAirlockServerStatus } from '../../api';
 import { MCPAirlockPanel } from './MCPAirlockPanel';
 
 function server(overrides: Partial<MCPAirlockServerStatus> = {}): MCPAirlockServerStatus {
@@ -36,6 +36,16 @@ function server(overrides: Partial<MCPAirlockServerStatus> = {}): MCPAirlockServ
   };
 }
 
+function approval(overrides: Partial<MCPAirlockExecutableAttestation> = {}): MCPAirlockExecutableAttestation {
+  return {
+    server_id: 'terraform-official',
+    launch_source: 'registry',
+    fingerprint: { algorithm: 'sha256', digest: 'ab'.repeat(32) },
+    approved_at: '2026-08-15T20:00:00Z',
+    ...overrides,
+  };
+}
+
 describe('MCPAirlockPanel', () => {
   it('lists trusted servers and runs health checks', async () => {
     const initial = server();
@@ -50,6 +60,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => checked),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => checked),
       stopMCPAirlockServer: vi.fn(async () => checked),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -69,6 +80,120 @@ describe('MCPAirlockPanel', () => {
     });
     expect(await screen.findByText('Ready')).toBeInTheDocument();
     expect(screen.getByText('Health check completed without exposing cloud credentials.')).toBeInTheDocument();
+  });
+
+  it('approves a reviewed executable fingerprint', async () => {
+    const initial = server({
+      ready: true,
+      command_available: true,
+      state: 'ready',
+      summary: 'Health check completed without exposing cloud credentials.',
+      executable_fingerprint: approval().fingerprint,
+      executable_attestation: 'approval_required',
+      checks: [{ name: 'executable_attestation', status: 'warn', message: 'executable has not been approved for this launch source' }],
+    });
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
+      startMCPAirlockServer: vi.fn(async () => initial),
+      stopMCPAirlockServer: vi.fn(async () => initial),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+
+    expect(await screen.findByText('Executable approval required')).toBeInTheDocument();
+    expect(screen.getByText(`SHA-256 ${'ab'.repeat(32)}`)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Approve executable for Terraform MCP Server' }));
+
+    await waitFor(() => {
+      expect(client.approveMCPAirlockExecutable).toHaveBeenCalledWith('terraform-official', approval().fingerprint);
+    });
+    expect(await screen.findByText(/executable matches the approved fingerprint for this launch source/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Approve executable for Terraform MCP Server' })).not.toBeInTheDocument();
+  });
+
+  it('rejects an executable approval response for another server', async () => {
+    const initial = server({
+      command_available: true,
+      state: 'ready',
+      executable_fingerprint: approval().fingerprint,
+      executable_attestation: 'approval_required',
+    });
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval({ server_id: 'aws-official' })),
+      startMCPAirlockServer: vi.fn(async () => initial),
+      stopMCPAirlockServer: vi.fn(async () => initial),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve executable for Terraform MCP Server' }));
+
+    expect(await screen.findByText('Error: MCP executable approval identity mismatch')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve executable for Terraform MCP Server' })).toBeInTheDocument();
+  });
+
+  it('rejects an approval response for a different executable fingerprint', async () => {
+    const initial = server({
+      command_available: true,
+      state: 'ready',
+      executable_fingerprint: approval().fingerprint,
+      executable_attestation: 'approval_required',
+    });
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval({
+        fingerprint: { algorithm: 'sha256', digest: 'cd'.repeat(32) },
+      })),
+      startMCPAirlockServer: vi.fn(async () => initial),
+      stopMCPAirlockServer: vi.fn(async () => initial),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Approve executable for Terraform MCP Server' }));
+
+    expect(await screen.findByText('Error: MCP executable approval fingerprint mismatch')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Approve executable for Terraform MCP Server' })).toBeInTheDocument();
+  });
+
+  it('treats executable drift as an error and allows explicit reapproval', async () => {
+    const initial = server({
+      command_available: true,
+      state: 'ready',
+      executable_fingerprint: approval().fingerprint,
+      executable_attestation: 'executable_changed',
+      checks: [{ name: 'executable_attestation', status: 'error', message: 'executable fingerprint changed after approval' }],
+    });
+    const client = {
+      listMCPAirlockServers: vi.fn(async () => [initial]),
+      checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
+      startMCPAirlockServer: vi.fn(async () => initial),
+      stopMCPAirlockServer: vi.fn(async () => initial),
+      getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+      discoverMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
+    };
+
+    render(<MCPAirlockPanel client={client} />);
+
+    const alert = await screen.findByRole('alert');
+    expect(alert).toHaveTextContent('Executable changed');
+    expect(alert).toHaveClass('border-destructive');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Approve executable for Terraform MCP Server' }));
+    await waitFor(() => {
+      expect(client.approveMCPAirlockExecutable).toHaveBeenCalledWith('terraform-official', approval().fingerprint);
+    });
+    expect(screen.queryByText('Executable changed')).not.toBeInTheDocument();
   });
 
   it('starts and stops configured servers', async () => {
@@ -95,6 +220,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => running),
       stopMCPAirlockServer: vi.fn(async () => stopped),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -170,6 +296,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => initial),
       stopMCPAirlockServer: vi.fn(async () => initial),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -195,6 +322,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => initial),
       stopMCPAirlockServer: vi.fn(async () => initial),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -221,6 +349,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => initial),
       stopMCPAirlockServer: vi.fn(async () => initial),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -249,6 +378,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => initial),
       stopMCPAirlockServer: vi.fn(async () => initial),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -277,6 +407,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => initial),
       stopMCPAirlockServer: vi.fn(async () => initial),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -305,6 +436,7 @@ describe('MCPAirlockPanel', () => {
       checkMCPAirlockServer: vi.fn(() => new Promise<MCPAirlockServerStatus>(resolve => {
         resolveCheck = resolve;
       })),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => initial),
       stopMCPAirlockServer: vi.fn(async () => initial),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -342,6 +474,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => initial),
       stopMCPAirlockServer: vi.fn(async () => initial),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -380,6 +513,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => initial),
       stopMCPAirlockServer: vi.fn(async () => initial),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),
@@ -421,6 +555,7 @@ describe('MCPAirlockPanel', () => {
     const client = {
       listMCPAirlockServers: vi.fn(async () => [initial]),
       checkMCPAirlockServer: vi.fn(async () => initial),
+      approveMCPAirlockExecutable: vi.fn(async () => approval()),
       startMCPAirlockServer: vi.fn(async () => initial),
       stopMCPAirlockServer: vi.fn(async () => initial),
       getMCPAirlockTools: vi.fn(async () => ({ server_id: 'terraform-official', tools: [], checks: [] })),

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -69,11 +70,12 @@ func TestMCPAirlockHealthUnknownServerFailsClosed(t *testing.T) {
 
 func TestMCPAirlockApproveExecutableRoute(t *testing.T) {
 	root := t.TempDir()
+	command := apiTestExecutable(t)
 	manager := mcpairlock.NewManager(root,
 		mcpairlock.WithDefinitions([]mcpairlock.ServerDefinition{{
 			ID:              "terraform",
 			Name:            "Terraform",
-			Command:         apiTestExecutable(t),
+			Command:         command,
 			Transport:       "stdio",
 			Trusted:         true,
 			ReadOnlyDefault: true,
@@ -83,7 +85,44 @@ func TestMCPAirlockApproveExecutableRoute(t *testing.T) {
 	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
 	defer srv.Close()
 
-	resp, err := http.Post(srv.URL+"/api/mcp-airlock/servers/terraform/approve-executable", "application/json", nil)
+	status, err := manager.Check(context.Background(), "terraform")
+	if err != nil || status.ExecutableFingerprint == nil {
+		t.Fatalf("observe executable fingerprint: status=%+v err=%v", status, err)
+	}
+	expected := *status.ExecutableFingerprint
+	changed := expected
+	replacement := "0"
+	if changed.Digest[0] == '0' {
+		replacement = "1"
+	}
+	changed.Digest = replacement + changed.Digest[1:]
+	mismatchResp, err := postMCPExecutableApproval(
+		srv.URL+"/api/mcp-airlock/servers/terraform/approve-executable",
+		changed,
+	)
+	if err != nil {
+		t.Fatalf("POST changed executable approval: %v", err)
+	}
+	mismatchBody, readErr := io.ReadAll(mismatchResp.Body)
+	_ = mismatchResp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("read changed executable response: %v", readErr)
+	}
+	if mismatchResp.StatusCode != http.StatusConflict || strings.TrimSpace(string(mismatchBody)) != "mcp executable changed before approval" {
+		t.Fatalf("changed executable response = (%d, %q)", mismatchResp.StatusCode, mismatchBody)
+	}
+	store, err := mcpairlock.NewExecutableAttestationStore(root)
+	if err != nil {
+		t.Fatalf("load executable approval store: %v", err)
+	}
+	if _, ok := store.Get("terraform", mcpairlock.LaunchSourceExplicitDefinition); ok {
+		t.Fatal("changed executable fingerprint was persisted")
+	}
+
+	resp, err := postMCPExecutableApproval(
+		srv.URL+"/api/mcp-airlock/servers/terraform/approve-executable",
+		expected,
+	)
 	if err != nil {
 		t.Fatalf("POST approve executable: %v", err)
 	}
@@ -104,9 +143,9 @@ func TestMCPAirlockApproveExecutableRoute(t *testing.T) {
 		t.Fatalf("incomplete executable approval: %+v", attestation)
 	}
 
-	store, err := mcpairlock.NewExecutableAttestationStore(root)
+	store, err = mcpairlock.NewExecutableAttestationStore(root)
 	if err != nil {
-		t.Fatalf("load executable approval store: %v", err)
+		t.Fatalf("reload executable approval store: %v", err)
 	}
 	if stored, ok := store.Get(attestation.ServerID, attestation.LaunchSource); !ok || stored != attestation {
 		t.Fatalf("persisted executable approval = (%+v, %t), want %+v", stored, ok, attestation)
@@ -128,19 +167,25 @@ func TestMCPAirlockApproveExecutableRouteFailsClosed(t *testing.T) {
 	)
 	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
 	defer srv.Close()
+	expected := mcpairlock.ExecutableFingerprint{Algorithm: "sha256", Digest: strings.Repeat("ab", 32)}
 
 	tests := []struct {
-		name       string
-		serverID   string
-		wantStatus int
-		wantBody   string
+		name                string
+		serverID            string
+		expectedFingerprint mcpairlock.ExecutableFingerprint
+		wantStatus          int
+		wantBody            string
 	}{
-		{name: "unknown server", serverID: "unknown", wantStatus: http.StatusNotFound, wantBody: "mcp airlock server not found"},
-		{name: "unavailable executable", serverID: "terraform", wantStatus: http.StatusConflict, wantBody: "mcp executable approval unavailable"},
+		{name: "unknown server", serverID: "unknown", expectedFingerprint: expected, wantStatus: http.StatusNotFound, wantBody: "mcp airlock server not found"},
+		{name: "invalid expected fingerprint", serverID: "terraform", wantStatus: http.StatusBadRequest, wantBody: "invalid expected executable fingerprint"},
+		{name: "unavailable executable", serverID: "terraform", expectedFingerprint: expected, wantStatus: http.StatusConflict, wantBody: "mcp executable approval unavailable"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			resp, err := http.Post(srv.URL+"/api/mcp-airlock/servers/"+test.serverID+"/approve-executable", "application/json", nil)
+			resp, err := postMCPExecutableApproval(
+				srv.URL+"/api/mcp-airlock/servers/"+test.serverID+"/approve-executable",
+				test.expectedFingerprint,
+			)
 			if err != nil {
 				t.Fatalf("POST approve executable: %v", err)
 			}
@@ -157,6 +202,16 @@ func TestMCPAirlockApproveExecutableRouteFailsClosed(t *testing.T) {
 			}
 		})
 	}
+}
+
+func postMCPExecutableApproval(url string, fingerprint mcpairlock.ExecutableFingerprint) (*http.Response, error) {
+	payload, err := json.Marshal(map[string]mcpairlock.ExecutableFingerprint{
+		"expected_fingerprint": fingerprint,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return http.Post(url, "application/json", bytes.NewReader(payload))
 }
 
 func TestMCPAirlockStartStopRoutesUseLifecycle(t *testing.T) {
