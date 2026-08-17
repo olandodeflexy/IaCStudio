@@ -134,6 +134,7 @@ describe('api.mcpAirlock', () => {
       },
       executable_fingerprint: { algorithm: 'sha256', digest: 'ab'.repeat(32) },
       executable_attestation: 'executable_changed',
+      observed_version: '1.4.2',
       ready: true,
       running: false,
       configured: true,

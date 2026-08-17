@@ -20,6 +20,10 @@ const stateLabels: Record<string, string> = {
   unhealthy: 'Unhealthy',
   timeout: 'Timeout',
   blocked: 'Blocked',
+  outdated: 'Outdated',
+  version_unknown: 'Version unknown',
+  version_mismatch: 'Version mismatch',
+  output_too_large: 'Output too large',
 };
 
 function stateClass(state: string) {
@@ -337,6 +341,11 @@ export function MCPAirlockPanel({ client = api }: MCPAirlockPanelProps) {
                 <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                   credentials: {status.server.credential_mode}
                 </span>
+                {status.observed_version && (
+                  <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    version {status.observed_version}
+                  </span>
+                )}
               </div>
 
               {toolsByServer[status.server.id] && (

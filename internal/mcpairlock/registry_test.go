@@ -256,6 +256,73 @@ func TestCheckRedactsProbeOutput(t *testing.T) {
 	}
 }
 
+func TestCheckRejectsProbeOutputOverflow(t *testing.T) {
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:              "terraform",
+			Name:            "Terraform",
+			Command:         testExecutable(t),
+			HealthCheckArgs: []string{"--version"},
+			Trusted:         true,
+			ReadOnlyDefault: true,
+			CredentialMode:  "none",
+		}}),
+		WithProbe(func(context.Context, string, []string, time.Duration) ProbeResult {
+			return ProbeResult{Output: "discarded diagnostic output", OutputOverflow: true}
+		}),
+	)
+
+	status, err := manager.Check(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if status.Ready || status.State != "output_too_large" {
+		t.Fatalf("expected output_too_large status, got %+v", status)
+	}
+	if !hasCheck(status.Checks, "health_probe", "error") {
+		t.Fatalf("expected failed health probe, got %+v", status.Checks)
+	}
+}
+
+func TestBoundedProbeOutputCapsStorageWithoutShortWrites(t *testing.T) {
+	output := newBoundedProbeOutput(4)
+
+	written, err := output.Write([]byte("abcdef"))
+	if err != nil || written != 6 {
+		t.Fatalf("Write: written=%d err=%v", written, err)
+	}
+	captured, overflow := output.snapshot()
+	if captured != "abcd" || !overflow {
+		t.Fatalf("snapshot = %q overflow=%t, want %q true", captured, overflow, "abcd")
+	}
+}
+
+func TestDefaultProbeBoundsOutputDuringExecution(t *testing.T) {
+	result := defaultProbe(
+		context.Background(),
+		testExecutable(t),
+		[]string{"-test.run=^TestProbeOutputHelperProcess$", "--", "mcp-probe-output-helper"},
+		5*time.Second,
+	)
+
+	if result.Err != nil || result.TimedOut {
+		t.Fatalf("defaultProbe: err=%v timed_out=%t", result.Err, result.TimedOut)
+	}
+	if !result.OutputOverflow {
+		t.Fatal("expected probe output overflow")
+	}
+	if result.Output != strings.Repeat("x", maxProbeOutputBytes) {
+		t.Fatalf("captured output length = %d, want %d", len(result.Output), maxProbeOutputBytes)
+	}
+}
+
+func TestProbeOutputHelperProcess(t *testing.T) {
+	if len(os.Args) == 0 || os.Args[len(os.Args)-1] != "mcp-probe-output-helper" {
+		return
+	}
+	_, _ = os.Stdout.WriteString(strings.Repeat("x", maxProbeOutputBytes+1))
+}
+
 func TestCheckReportsExecutableFingerprint(t *testing.T) {
 	root := t.TempDir()
 	command := testExecutable(t)

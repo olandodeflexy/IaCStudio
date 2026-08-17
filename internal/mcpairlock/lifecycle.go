@@ -212,11 +212,15 @@ func (m *Manager) withLifecycleStatusLocked(status ServerStatus, record *process
 	}
 	if record != nil {
 		status.Running = true
-		status.Ready = true
-		status.State = "running"
 		status.StartedAt = record.startedAt.Format(time.RFC3339)
-		status.Summary = "MCP server process is running with cloud credentials withheld."
-		status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "pass", Message: "server process is running"})
+		if status.State == "available" || status.Ready {
+			status.Ready = true
+			status.State = "running"
+			status.Summary = "MCP server process is running with cloud credentials withheld."
+			status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "pass", Message: "server process is running"})
+		} else {
+			status.Checks = append(status.Checks, Check{Name: "lifecycle", Status: "warn", Message: "server process is running, but current checks do not consider it ready"})
+		}
 		return status
 	}
 	if startedAt, ok := m.lifecycle.starting[status.Server.ID]; ok {

@@ -21,6 +21,7 @@ import (
 const (
 	defaultHealthTimeout          = 2 * time.Second
 	maxExecutableFingerprintBytes = int64(512 << 20)
+	maxProbeOutputBytes           = 4096
 
 	LaunchSourceRegistry            = "registry"
 	LaunchSourceExplicitDefinition  = "explicit_definition"
@@ -86,6 +87,7 @@ type ServerStatus struct {
 	StartedAt             string                       `json:"started_at,omitempty"`
 	LastExitAt            string                       `json:"last_exit_at,omitempty"`
 	LastExitReason        string                       `json:"last_exit_reason,omitempty"`
+	ObservedVersion       string                       `json:"observed_version,omitempty"`
 }
 
 // ExecutableFingerprint identifies the exact executable observed during a
@@ -97,9 +99,10 @@ type ExecutableFingerprint struct {
 
 // ProbeResult is the sanitized result shape used by health-check probes.
 type ProbeResult struct {
-	Output   string
-	Err      error
-	TimedOut bool
+	Output         string
+	OutputOverflow bool
+	Err            error
+	TimedOut       bool
 }
 
 // ProbeFunc lets tests replace process execution. Production uses exec.Command
@@ -225,6 +228,13 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 	args := append([]string{}, definition.Args...)
 	args = append(args, definition.HealthCheckArgs...)
 	if len(args) == 0 {
+		if definition.VersionConstraint != "" {
+			status.Ready = false
+			status.State = "version_unknown"
+			status.Summary = "Airlock could not verify the MCP server version."
+			status.Checks = append(status.Checks, Check{Name: "version_policy", Status: "error", Message: "version constraint is configured but no health probe command is available to extract the server version"})
+			return m.withLifecycleStatus(status), nil
+		}
 		status.Ready = true
 		status.State = "ready"
 		status.Summary = "Command is available. No active health probe is configured for this server."
@@ -239,6 +249,13 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 		status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "error", Message: "probe timed out"})
 		return m.withLifecycleStatus(status), nil
 	}
+	if result.OutputOverflow {
+		status.Ready = false
+		status.State = "output_too_large"
+		status.Summary = "Health check output exceeded the Airlock inspection limit."
+		status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "error", Message: fmt.Sprintf("probe output exceeded the %d-byte inspection limit", maxProbeOutputBytes)})
+		return m.withLifecycleStatus(status), nil
+	}
 	if result.Err != nil {
 		status.Ready = false
 		status.State = "unhealthy"
@@ -250,14 +267,38 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 		status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "error", Message: message})
 		return m.withLifecycleStatus(status), nil
 	}
-	status.Ready = true
-	status.State = "ready"
-	status.Summary = "Health check completed without exposing cloud credentials."
 	message := "probe succeeded"
 	if output := redactOutput(result.Output); output != "" {
 		message = output
 	}
 	status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "pass", Message: message})
+	if definition.VersionConstraint != "" {
+		evaluation, err := evaluateVersionConstraint(result.Output, definition.VersionConstraint)
+		if err != nil {
+			status.Ready = false
+			status.State = "version_unknown"
+			status.Summary = "Airlock could not verify the MCP server version."
+			status.Checks = append(status.Checks, Check{Name: "version_policy", Status: "error", Message: "probe output did not provide one unambiguous valid semantic version"})
+			return m.withLifecycleStatus(status), nil
+		}
+		status.ObservedVersion = evaluation.Observed
+		policyMessage := fmt.Sprintf("observed version %s satisfies %s %s", evaluation.Observed, evaluation.Operator, evaluation.Required)
+		if !evaluation.Satisfied {
+			status.Ready = false
+			status.State = "version_mismatch"
+			if evaluation.Operator == ">=" {
+				status.State = "outdated"
+			}
+			status.Summary = "MCP server version does not satisfy the configured Airlock policy."
+			policyMessage = fmt.Sprintf("observed version %s does not satisfy %s %s", evaluation.Observed, evaluation.Operator, evaluation.Required)
+			status.Checks = append(status.Checks, Check{Name: "version_policy", Status: "error", Message: policyMessage})
+			return m.withLifecycleStatus(status), nil
+		}
+		status.Checks = append(status.Checks, Check{Name: "version_policy", Status: "pass", Message: policyMessage})
+	}
+	status.Ready = true
+	status.State = "ready"
+	status.Summary = "Health check completed without exposing cloud credentials."
 	return m.withLifecycleStatus(status), nil
 }
 
@@ -333,6 +374,14 @@ func (m *Manager) passiveStatus(definition ServerDefinition) ServerStatus {
 	} else {
 		status.Checks = append(status.Checks, Check{Name: "default_mode", Status: "pass", Message: "server starts in read-only review mode"})
 	}
+	if definition.VersionConstraint != "" {
+		if _, err := parseVersionConstraint(definition.VersionConstraint); err != nil {
+			status.State = "invalid_config"
+			status.Summary = "Configured MCP version policy is invalid."
+			status.Checks = append(status.Checks, Check{Name: "version_policy", Status: "error", Message: "version constraint must be an exact semantic version or a >= minimum"})
+			return status
+		}
+	}
 	if definition.Transport != "stdio" {
 		status.State = "unsupported_transport"
 		status.Summary = "Only stdio MCP servers are supported by this Airlock launcher."
@@ -407,6 +456,7 @@ func normalizeDefinitions(definitions []ServerDefinition) []ServerDefinition {
 	for i := range out {
 		out[i].ID = strings.TrimSpace(out[i].ID)
 		out[i].Command = strings.TrimSpace(out[i].Command)
+		out[i].VersionConstraint = strings.TrimSpace(out[i].VersionConstraint)
 		out[i] = applyEnvOverrides(out[i])
 		if out[i].LaunchSource == "" {
 			out[i].LaunchSource = LaunchSourceExplicitDefinition
@@ -496,12 +546,50 @@ func defaultProbe(ctx context.Context, command string, args []string, timeout ti
 	cmd := exec.CommandContext(probeCtx, command, args...)
 	cmd.Dir = os.TempDir()
 	cmd.Env = minimalEnv()
-	output, err := cmd.CombinedOutput()
+	output := newBoundedProbeOutput(maxProbeOutputBytes)
+	cmd.Stdout = output
+	cmd.Stderr = output
+	err := cmd.Run()
+	captured, overflow := output.snapshot()
 	return ProbeResult{
-		Output:   string(output),
-		Err:      err,
-		TimedOut: errors.Is(probeCtx.Err(), context.DeadlineExceeded),
+		Output:         captured,
+		OutputOverflow: overflow,
+		Err:            err,
+		TimedOut:       errors.Is(probeCtx.Err(), context.DeadlineExceeded),
 	}
+}
+
+type boundedProbeOutput struct {
+	mu       sync.Mutex
+	data     []byte
+	limit    int
+	overflow bool
+}
+
+func newBoundedProbeOutput(limit int) *boundedProbeOutput {
+	return &boundedProbeOutput{data: make([]byte, 0, limit), limit: limit}
+}
+
+func (b *boundedProbeOutput) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	written := len(value)
+	remaining := b.limit - len(b.data)
+	if remaining > 0 {
+		keep := min(written, remaining)
+		b.data = append(b.data, value[:keep]...)
+	}
+	if written > remaining {
+		b.overflow = true
+	}
+	return written, nil
+}
+
+func (b *boundedProbeOutput) snapshot() (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.data), b.overflow
 }
 
 func resolveExecutable(command string) (string, error) {
