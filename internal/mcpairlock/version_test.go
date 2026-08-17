@@ -56,7 +56,7 @@ func TestEvaluateVersionConstraintRejectsAmbiguousVersions(t *testing.T) {
 }
 
 func TestEvaluateVersionConstraintRejectsOversizedOutput(t *testing.T) {
-	output := "terraform-mcp-server 1.4.2\n" + strings.Repeat("x", maxVersionProbeBytes)
+	output := "terraform-mcp-server 1.4.2\n" + strings.Repeat("x", maxProbeOutputBytes)
 
 	_, err := evaluateVersionConstraint(output, ">= 1.4.0")
 	if !errors.Is(err, errVersionOutputTooLarge) {

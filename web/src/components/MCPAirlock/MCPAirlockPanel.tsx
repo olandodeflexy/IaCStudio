@@ -23,6 +23,7 @@ const stateLabels: Record<string, string> = {
   outdated: 'Outdated',
   version_unknown: 'Version unknown',
   version_mismatch: 'Version mismatch',
+  output_too_large: 'Output too large',
 };
 
 function stateClass(state: string) {

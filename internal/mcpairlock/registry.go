@@ -21,6 +21,7 @@ import (
 const (
 	defaultHealthTimeout          = 2 * time.Second
 	maxExecutableFingerprintBytes = int64(512 << 20)
+	maxProbeOutputBytes           = 4096
 
 	LaunchSourceRegistry            = "registry"
 	LaunchSourceExplicitDefinition  = "explicit_definition"
@@ -98,9 +99,10 @@ type ExecutableFingerprint struct {
 
 // ProbeResult is the sanitized result shape used by health-check probes.
 type ProbeResult struct {
-	Output   string
-	Err      error
-	TimedOut bool
+	Output         string
+	OutputOverflow bool
+	Err            error
+	TimedOut       bool
 }
 
 // ProbeFunc lets tests replace process execution. Production uses exec.Command
@@ -245,6 +247,13 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 		status.State = "timeout"
 		status.Summary = "Health check timed out before the MCP server responded."
 		status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "error", Message: "probe timed out"})
+		return m.withLifecycleStatus(status), nil
+	}
+	if result.OutputOverflow {
+		status.Ready = false
+		status.State = "output_too_large"
+		status.Summary = "Health check output exceeded the Airlock inspection limit."
+		status.Checks = append(status.Checks, Check{Name: "health_probe", Status: "error", Message: fmt.Sprintf("probe output exceeded the %d-byte inspection limit", maxProbeOutputBytes)})
 		return m.withLifecycleStatus(status), nil
 	}
 	if result.Err != nil {
@@ -537,12 +546,50 @@ func defaultProbe(ctx context.Context, command string, args []string, timeout ti
 	cmd := exec.CommandContext(probeCtx, command, args...)
 	cmd.Dir = os.TempDir()
 	cmd.Env = minimalEnv()
-	output, err := cmd.CombinedOutput()
+	output := newBoundedProbeOutput(maxProbeOutputBytes)
+	cmd.Stdout = output
+	cmd.Stderr = output
+	err := cmd.Run()
+	captured, overflow := output.snapshot()
 	return ProbeResult{
-		Output:   string(output),
-		Err:      err,
-		TimedOut: errors.Is(probeCtx.Err(), context.DeadlineExceeded),
+		Output:         captured,
+		OutputOverflow: overflow,
+		Err:            err,
+		TimedOut:       errors.Is(probeCtx.Err(), context.DeadlineExceeded),
 	}
+}
+
+type boundedProbeOutput struct {
+	mu       sync.Mutex
+	data     []byte
+	limit    int
+	overflow bool
+}
+
+func newBoundedProbeOutput(limit int) *boundedProbeOutput {
+	return &boundedProbeOutput{data: make([]byte, 0, limit), limit: limit}
+}
+
+func (b *boundedProbeOutput) Write(value []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	written := len(value)
+	remaining := b.limit - len(b.data)
+	if remaining > 0 {
+		keep := min(written, remaining)
+		b.data = append(b.data, value[:keep]...)
+	}
+	if written > remaining {
+		b.overflow = true
+	}
+	return written, nil
+}
+
+func (b *boundedProbeOutput) snapshot() (string, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return string(b.data), b.overflow
 }
 
 func resolveExecutable(command string) (string, error) {

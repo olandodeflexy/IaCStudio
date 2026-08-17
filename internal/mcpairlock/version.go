@@ -9,8 +9,6 @@ import (
 	"golang.org/x/mod/semver"
 )
 
-const maxVersionProbeBytes = 4096
-
 var (
 	errVersionNotFound       = errors.New("semantic version not found in probe output")
 	errVersionAmbiguous      = errors.New("multiple semantic versions found in probe output")
@@ -81,7 +79,7 @@ func evaluateVersionConstraint(output, constraint string) (versionPolicyEvaluati
 }
 
 func extractSemanticVersion(output string) (string, error) {
-	if len(output) > maxVersionProbeBytes {
+	if len(output) > maxProbeOutputBytes {
 		return "", errVersionOutputTooLarge
 	}
 	observed := ""
