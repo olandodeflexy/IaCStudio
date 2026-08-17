@@ -54,6 +54,7 @@ describe('MCPAirlockPanel', () => {
       command_available: true,
       state: 'ready',
       summary: 'Health check completed without exposing cloud credentials.',
+      observed_version: '1.4.2',
       checked_at: '2026-06-13T10:00:00Z',
       checks: [{ name: 'health_probe', status: 'pass', message: 'probe succeeded' }],
     });
@@ -80,6 +81,7 @@ describe('MCPAirlockPanel', () => {
     });
     expect(await screen.findByText('Ready')).toBeInTheDocument();
     expect(screen.getByText('Health check completed without exposing cloud credentials.')).toBeInTheDocument();
+    expect(screen.getByText('version 1.4.2')).toBeInTheDocument();
   });
 
   it('approves a reviewed executable fingerprint', async () => {

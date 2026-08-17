@@ -202,6 +202,7 @@ export interface MCPAirlockServerStatus {
   started_at?: string;
   last_exit_at?: string;
   last_exit_reason?: string;
+  observed_version?: string;
 }
 
 export type MCPAirlockToolRisk =

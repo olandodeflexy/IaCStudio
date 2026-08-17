@@ -3,6 +3,7 @@ package mcpairlock
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -51,6 +52,15 @@ func TestEvaluateVersionConstraintRejectsAmbiguousVersions(t *testing.T) {
 
 	if !errors.Is(err, errVersionAmbiguous) {
 		t.Fatalf("expected errVersionAmbiguous, got %v", err)
+	}
+}
+
+func TestEvaluateVersionConstraintRejectsOversizedOutput(t *testing.T) {
+	output := "terraform-mcp-server 1.4.2\n" + strings.Repeat("x", maxVersionProbeBytes)
+
+	_, err := evaluateVersionConstraint(output, ">= 1.4.0")
+	if !errors.Is(err, errVersionOutputTooLarge) {
+		t.Fatalf("expected errVersionOutputTooLarge, got %v", err)
 	}
 }
 
@@ -154,6 +164,44 @@ func TestCheckFailsClosedWhenVersionConstraintHasNoProbe(t *testing.T) {
 	}
 	if !hasCheck(status.Checks, "version_policy", "error") {
 		t.Fatalf("expected failed version policy check, got %+v", status.Checks)
+	}
+}
+
+func TestCheckPreservesVersionFailureForRunningServer(t *testing.T) {
+	handle := newFakeProcess()
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{{
+			ID:                "terraform",
+			Name:              "Terraform",
+			Command:           testExecutable(t),
+			HealthCheckArgs:   []string{"--version"},
+			VersionConstraint: ">= 1.4.0",
+			Trusted:           true,
+			ReadOnlyDefault:   true,
+			CredentialMode:    "none",
+		}}),
+		WithProbe(func(context.Context, string, []string, time.Duration) ProbeResult {
+			return ProbeResult{Output: "terraform-mcp-server 1.3.9"}
+		}),
+		WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
+			return handle, nil
+		}),
+	)
+	t.Cleanup(func() { _ = manager.Close() })
+
+	started, err := manager.Start(context.Background(), "terraform")
+	if err != nil || !started.Running {
+		t.Fatalf("Start: status=%+v err=%v", started, err)
+	}
+	status, err := manager.Check(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("Check: %v", err)
+	}
+	if !status.Running || status.Ready || status.State != "outdated" {
+		t.Fatalf("expected running process with failed readiness, got %+v", status)
+	}
+	if !hasCheck(status.Checks, "version_policy", "error") || !hasCheck(status.Checks, "lifecycle", "warn") {
+		t.Fatalf("expected version failure and lifecycle warning, got %+v", status.Checks)
 	}
 }
 

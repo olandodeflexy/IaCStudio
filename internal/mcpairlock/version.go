@@ -12,10 +12,11 @@ import (
 const maxVersionProbeBytes = 4096
 
 var (
-	errVersionNotFound  = errors.New("semantic version not found in probe output")
-	errVersionAmbiguous = errors.New("multiple semantic versions found in probe output")
-	strictSemVer        = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
-	semVerCandidate     = regexp.MustCompile(`v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?`)
+	errVersionNotFound       = errors.New("semantic version not found in probe output")
+	errVersionAmbiguous      = errors.New("multiple semantic versions found in probe output")
+	errVersionOutputTooLarge = errors.New("version probe output exceeds the inspection limit")
+	strictSemVer             = regexp.MustCompile(`^v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$`)
+	semVerCandidate          = regexp.MustCompile(`v?[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?`)
 )
 
 type versionPolicy struct {
@@ -81,7 +82,7 @@ func evaluateVersionConstraint(output, constraint string) (versionPolicyEvaluati
 
 func extractSemanticVersion(output string) (string, error) {
 	if len(output) > maxVersionProbeBytes {
-		output = output[:maxVersionProbeBytes]
+		return "", errVersionOutputTooLarge
 	}
 	observed := ""
 	for _, bounds := range semVerCandidate.FindAllStringIndex(output, -1) {
