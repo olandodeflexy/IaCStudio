@@ -269,7 +269,7 @@ func (m *Manager) Check(ctx context.Context, id string) (ServerStatus, error) {
 			status.Ready = false
 			status.State = "version_unknown"
 			status.Summary = "Airlock could not verify the MCP server version."
-			status.Checks = append(status.Checks, Check{Name: "version_policy", Status: "error", Message: "probe output did not contain a valid semantic version"})
+			status.Checks = append(status.Checks, Check{Name: "version_policy", Status: "error", Message: "probe output did not provide one unambiguous valid semantic version"})
 			return m.withLifecycleStatus(status), nil
 		}
 		status.ObservedVersion = evaluation.Observed

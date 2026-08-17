@@ -20,6 +20,7 @@ func TestEvaluateVersionConstraint(t *testing.T) {
 		{name: "exact match", output: "version: 2.0.0+build.7", constraint: "= 2.0.0", observed: "2.0.0+build.7", satisfied: true},
 		{name: "prerelease precedes release", output: "version 2.0.0-rc.1", constraint: ">= 2.0.0", observed: "2.0.0-rc.1", satisfied: false},
 		{name: "valid hyphenated prerelease", output: "version 2.0.0-alpha--preview", constraint: ">= 2.0.0-alpha", observed: "2.0.0-alpha--preview", satisfied: true},
+		{name: "repeated version", output: "terraform-mcp-server v1.4.2 (version 1.4.2)", constraint: ">= 1.4.0", observed: "1.4.2", satisfied: true},
 	}
 
 	for _, test := range tests {
@@ -40,6 +41,14 @@ func TestEvaluateVersionConstraintRejectsMissingVersion(t *testing.T) {
 
 	if !errors.Is(err, errVersionNotFound) {
 		t.Fatalf("expected errVersionNotFound, got %v", err)
+	}
+}
+
+func TestEvaluateVersionConstraintRejectsAmbiguousVersions(t *testing.T) {
+	_, err := evaluateVersionConstraint("build 2026.8.16, terraform-mcp-server 1.4.2", ">= 1.4.0")
+
+	if !errors.Is(err, errVersionAmbiguous) {
+		t.Fatalf("expected errVersionAmbiguous, got %v", err)
 	}
 }
 
@@ -85,6 +94,11 @@ func TestCheckFailsClosedWhenVersionIsMissing(t *testing.T) {
 	}
 	if !hasCheck(status.Checks, "version_policy", "error") {
 		t.Fatalf("expected failed version policy, got %+v", status.Checks)
+	}
+	for _, check := range status.Checks {
+		if check.Name == "version_policy" && check.Message != "probe output did not provide one unambiguous valid semantic version" {
+			t.Fatalf("unexpected version policy message: %q", check.Message)
+		}
 	}
 }
 
