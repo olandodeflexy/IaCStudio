@@ -66,7 +66,9 @@ func evaluateVersionConstraint(output, constraint string) (versionPolicyEvaluati
 
 	comparison := semver.Compare("v"+observed, "v"+policy.required)
 	satisfied := comparison == 0
-	if policy.operator == ">=" {
+	if policy.operator == "=" && strings.Contains(policy.required, "+") {
+		satisfied = observed == policy.required
+	} else if policy.operator == ">=" {
 		satisfied = comparison >= 0
 	}
 	return versionPolicyEvaluation{

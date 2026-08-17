@@ -17,7 +17,9 @@ func TestEvaluateVersionConstraint(t *testing.T) {
 	}{
 		{name: "minimum met", output: "terraform-mcp-server v1.4.2", constraint: ">= 1.4.0", observed: "1.4.2", satisfied: true},
 		{name: "minimum not met", output: "terraform-mcp-server 1.3.9", constraint: ">=1.4.0", observed: "1.3.9", satisfied: false},
-		{name: "exact match", output: "version: 2.0.0+build.7", constraint: "= 2.0.0", observed: "2.0.0+build.7", satisfied: true},
+		{name: "exact precedence ignores observed build", output: "version: 2.0.0+build.7", constraint: "= 2.0.0", observed: "2.0.0+build.7", satisfied: true},
+		{name: "exact build pin matches", output: "version: 2.0.0+build.7", constraint: "= 2.0.0+build.7", observed: "2.0.0+build.7", satisfied: true},
+		{name: "exact build pin detects drift", output: "version: 2.0.0+build.8", constraint: "= 2.0.0+build.7", observed: "2.0.0+build.8", satisfied: false},
 		{name: "prerelease precedes release", output: "version 2.0.0-rc.1", constraint: ">= 2.0.0", observed: "2.0.0-rc.1", satisfied: false},
 		{name: "valid hyphenated prerelease", output: "version 2.0.0-alpha--preview", constraint: ">= 2.0.0-alpha", observed: "2.0.0-alpha--preview", satisfied: true},
 		{name: "repeated version", output: "terraform-mcp-server v1.4.2 (version 1.4.2)", constraint: ">= 1.4.0", observed: "1.4.2", satisfied: true},
