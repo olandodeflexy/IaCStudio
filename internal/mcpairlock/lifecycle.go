@@ -61,35 +61,31 @@ func WithLauncher(launcher LauncherFunc) Option {
 
 // Start launches one configured stdio MCP server with a sanitized environment.
 func (m *Manager) Start(ctx context.Context, id string) (ServerStatus, error) {
+	definition, ok := m.lookup(id)
+	if !ok {
+		return ServerStatus{}, ErrUnknownServer
+	}
+	status := m.passiveStatus(definition)
+	m.lifecycle.mu.Lock()
+	m.reapLocked(id, time.Now().UTC())
+	if active, found := m.activeStartStatusLocked(id, status); found {
+		m.lifecycle.mu.Unlock()
+		return active, nil
+	}
+	m.lifecycle.mu.Unlock()
+
 	status, err := m.Check(ctx, id)
 	if err != nil {
 		return ServerStatus{}, err
 	}
-	definition := status.Server
+	definition = status.Server
 
 	now := time.Now().UTC()
 	m.lifecycle.mu.Lock()
 	m.reapLocked(id, now)
-	if startedAt, ok := m.lifecycle.starting[id]; ok {
-		status.Checks = removeCheck(status.Checks, "lifecycle")
-		status = m.withStartingStatusLocked(status, startedAt)
-		status.Checks = append(status.Checks, Check{Name: "start", Status: "warn", Message: "server launch is already in progress"})
+	if active, found := m.activeStartStatusLocked(id, status); found {
 		m.lifecycle.mu.Unlock()
-		return status, nil
-	}
-	if record, ok := m.lifecycle.running[id]; ok {
-		status.Checks = removeCheck(status.Checks, "lifecycle")
-		status = m.withLifecycleStatusLocked(status, record)
-		status.Checks = append(status.Checks, Check{Name: "start", Status: "pass", Message: "server is already running"})
-		m.lifecycle.mu.Unlock()
-		return status, nil
-	}
-	if record, ok := m.lifecycle.stopping[id]; ok {
-		status.Checks = removeCheck(status.Checks, "lifecycle")
-		status = m.withStoppingStatusLocked(status, record)
-		status.Checks = append(status.Checks, Check{Name: "start", Status: "warn", Message: "server stop is in progress"})
-		m.lifecycle.mu.Unlock()
-		return status, nil
+		return active, nil
 	}
 	if !status.Ready {
 		status.Checks = append(status.Checks, Check{Name: "start", Status: "error", Message: "launch blocked because Airlock readiness checks failed"})
@@ -112,7 +108,8 @@ func (m *Manager) Start(ctx context.Context, id string) (ServerStatus, error) {
 	m.lifecycle.starting[id] = now
 	m.lifecycle.mu.Unlock()
 
-	verifiedDefinition, fingerprint, verdict, attestationCheck, verifyErr := m.verifyLaunchExecutable(definition, status.ExecutableFingerprint)
+	expectedFingerprint := status.ExecutableFingerprint
+	verifiedDefinition, fingerprint, verdict, attestationCheck, verifyErr := m.verifyLaunchExecutable(definition, expectedFingerprint)
 	if attestationCheck.Name != "" {
 		status.Checks = removeCheck(status.Checks, attestationCheck.Name)
 		status.Checks = append(status.Checks, attestationCheck)
@@ -124,19 +121,29 @@ func (m *Manager) Start(ctx context.Context, id string) (ServerStatus, error) {
 		m.lifecycle.mu.Unlock()
 		status.Ready = false
 		status.State = "blocked"
-		status.Summary = "MCP server executable identity could not be revalidated after the launch preflight."
 		status.Checks = removeCheck(status.Checks, "executable_fingerprint")
-		status.Checks = append(status.Checks, Check{Name: "executable_fingerprint", Status: "error", Message: "launch executable fingerprint changed or became unavailable after preflight"})
-		if fingerprint.Algorithm != "" {
+		fingerprintMatches := expectedFingerprint != nil && fingerprint.Algorithm != "" && sameExecutableFingerprint(*expectedFingerprint, fingerprint)
+		if fingerprintMatches {
+			status.Summary = "MCP server executable approval could not be revalidated after the launch preflight."
 			status.ExecutableFingerprint = &fingerprint
+			status.Checks = append(status.Checks, Check{Name: "executable_fingerprint", Status: "pass", Message: "launch executable fingerprint matched the preflight"})
 		} else {
+			status.Summary = "MCP server executable identity could not be revalidated after the launch preflight."
 			status.ExecutableFingerprint = nil
+			if fingerprint.Algorithm != "" {
+				status.ExecutableFingerprint = &fingerprint
+			}
+			status.Checks = append(status.Checks, Check{Name: "executable_fingerprint", Status: "error", Message: "launch executable fingerprint changed or became unavailable after preflight"})
 		}
 		if attestationCheck.Name == "" {
 			status.Checks = removeCheck(status.Checks, "executable_attestation")
 			status.Checks = append(status.Checks, Check{Name: "executable_attestation", Status: "error", Message: "launch executable approval could not be revalidated"})
 		}
-		status.Checks = append(status.Checks, Check{Name: "start", Status: "error", Message: "launch blocked because executable identity could not be revalidated"})
+		startMessage := "launch blocked because executable identity could not be revalidated"
+		if fingerprintMatches {
+			startMessage = "launch blocked because executable approval changed or became unavailable after preflight"
+		}
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "error", Message: startMessage})
 		return status, nil
 	}
 
@@ -157,6 +164,26 @@ func (m *Manager) Start(ctx context.Context, id string) (ServerStatus, error) {
 	status = m.withLifecycleStatusLocked(status, record)
 	status.Checks = append(status.Checks, Check{Name: "start", Status: "pass", Message: "server process started with a sanitized environment"})
 	return status, nil
+}
+
+func (m *Manager) activeStartStatusLocked(id string, status ServerStatus) (ServerStatus, bool) {
+	status.Checks = removeCheck(status.Checks, "lifecycle")
+	if startedAt, ok := m.lifecycle.starting[id]; ok {
+		status = m.withStartingStatusLocked(status, startedAt)
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "warn", Message: "server launch is already in progress"})
+		return status, true
+	}
+	if record, ok := m.lifecycle.running[id]; ok {
+		status = m.withLifecycleStatusLocked(status, record)
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "pass", Message: "server is already running"})
+		return status, true
+	}
+	if record, ok := m.lifecycle.stopping[id]; ok {
+		status = m.withStoppingStatusLocked(status, record)
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "warn", Message: "server stop is in progress"})
+		return status, true
+	}
+	return status, false
 }
 
 func (m *Manager) verifyLaunchExecutable(definition ServerDefinition, expected *ExecutableFingerprint) (ServerDefinition, ExecutableFingerprint, ExecutableAttestationVerdict, Check, error) {

@@ -85,6 +85,39 @@ func TestStartLaunchesApprovedCurrentVersion(t *testing.T) {
 	}
 }
 
+func TestStartAlreadyRunningSkipsPreflight(t *testing.T) {
+	probes := 0
+	launches := 0
+	handle := newFakeProcess()
+	manager := NewManager(t.TempDir(),
+		WithDefinitions([]ServerDefinition{launchGateDefinition(t)}),
+		WithProbe(func(context.Context, string, []string, time.Duration) ProbeResult {
+			probes++
+			return ProbeResult{Output: "terraform-mcp-server 1.4.1"}
+		}),
+		WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
+			launches++
+			return handle, nil
+		}),
+	)
+	t.Cleanup(func() { _ = manager.Close() })
+	approveExecutableForLaunchTest(t, manager, "terraform")
+
+	if status, err := manager.Start(context.Background(), "terraform"); err != nil || !status.Running {
+		t.Fatalf("first Start: status=%+v err=%v", status, err)
+	}
+	status, err := manager.Start(context.Background(), "terraform")
+	if err != nil {
+		t.Fatalf("second Start: %v", err)
+	}
+	if !status.Running || status.State != "running" || !hasCheck(status.Checks, "start", "pass") {
+		t.Fatalf("expected already-running status, got %+v", status)
+	}
+	if probes != 1 || launches != 1 {
+		t.Fatalf("probes=%d launches=%d, want one each", probes, launches)
+	}
+}
+
 func TestStartRevalidatesApprovalAfterHealthProbe(t *testing.T) {
 	root := t.TempDir()
 	launches := 0
@@ -129,6 +162,9 @@ func TestStartRevalidatesApprovalAfterHealthProbe(t *testing.T) {
 	}
 	if !hasCheck(status.Checks, "executable_attestation", "error") || !hasCheck(status.Checks, "start", "error") {
 		t.Fatalf("expected revalidation failures, got %+v", status.Checks)
+	}
+	if !hasCheck(status.Checks, "executable_fingerprint", "pass") || hasCheck(status.Checks, "executable_fingerprint", "error") {
+		t.Fatalf("expected matching fingerprint evidence, got %+v", status.Checks)
 	}
 }
 
