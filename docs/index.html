@@ -42,6 +42,7 @@
           <a href="#semantic-plan-gate">Semantic Plan Gate</a>
           <a href="#ai">AI Setup</a>
           <a href="#agent-hub-runs">Agent Hub Runs</a>
+          <a href="#mcp-airlock-trust">MCP Airlock Trust</a>
           <a href="#mcp-server">MCP Server</a>
           <a href="#policy-security">Policy and Security</a>
           <a href="#api-reference">API Reference</a>
@@ -819,6 +820,130 @@ ANTHROPIC_MODEL=claude-opus-4-7 \
             by a bounded preview and HMAC fingerprint, and proposed file changes are surfaced as
             diffs before any apply path should be considered.
           </div>
+        </section>
+
+        <section id="mcp-airlock-trust" class="doc-section" data-title="mcp airlock trust executable approval fingerprint attestation version schema drift install update custom server troubleshooting">
+          <h2>MCP Airlock Trust</h2>
+          <p>
+            Airlock does not trust an MCP process merely because its command appears in
+            configuration. It evaluates the server definition, the executable installed
+            on this machine, its version, and its advertised tools as separate trust
+            boundaries. Passing one boundary never bypasses the others.
+          </p>
+
+          <div class="feature-grid compact">
+            <article>
+              <h3>Registry identity</h3>
+              <p>A trusted definition identifies the vendor source, expected <code>stdio</code> transport, launch source, credential mode, and any minimum version policy.</p>
+            </article>
+            <article>
+              <h3>Executable identity</h3>
+              <p>Airlock hashes the resolved executable with SHA-256. Launch remains blocked until you approve that exact fingerprint for the server and launch source.</p>
+            </article>
+            <article>
+              <h3>Version policy</h3>
+              <p>A bounded health probe checks the observed version. Unknown, outdated, or mismatched versions are not ready to launch.</p>
+            </article>
+            <article>
+              <h3>Tool schema</h3>
+              <p>Discovered tool input schemas are fingerprinted and risk-classified. A new, changed, or unknown schema fails closed for that discovery.</p>
+            </article>
+          </div>
+
+          <div class="callout">
+            <strong>What trusted means:</strong>
+            the registry recognizes the server definition. It does not mean that every
+            local binary, tool, argument, or future update from that vendor is approved.
+            Airlock still requires local executable attestation and tool-policy checks.
+          </div>
+
+          <h3>Install and approve a trusted server</h3>
+          <ol class="steps">
+            <li><strong>Start from the vendor source.</strong> Follow the source and documentation links shown in the MCP tab. Avoid binaries or install commands copied from an unrelated mirror.</li>
+            <li><strong>Install without cloud credentials.</strong> Terraform MCP Server must be <code>v1.0.0</code> or newer and available as <code>terraform-mcp-server</code> on <code>PATH</code>. Airlock health checks run with a minimal environment.</li>
+            <li><strong>Open MCP Airlock.</strong> Enter a workspace, open the right-side <strong>MCP</strong> tab, and select <strong>Check</strong> for the server. Checking never starts the long-running MCP process.</li>
+            <li><strong>Verify before approving.</strong> Review the vendor, source, version result, launch source, and SHA-256 fingerprint. Select <strong>Approve</strong> only when they describe the executable you intended to install.</li>
+            <li><strong>Review the tool surface.</strong> Select <strong>Tools</strong>. Inspect names, risk levels, and schema states. Newly observed or changed schemas remain blocked in that discovery; after review, repeat discovery to confirm the same schema is now reported as known.</li>
+            <li><strong>Start only when ready.</strong> A start request repeats readiness and executable checks immediately before launch to detect replacement between approval and execution.</li>
+          </ol>
+
+          <p>
+            The AWS registry entry points to the official
+            <a href="https://github.com/awslabs/mcp" rel="noreferrer">AWS MCP collection</a>.
+            Because that collection contains multiple servers, IaC Studio does not
+            currently choose one AWS executable on the user's behalf. It remains
+            <code>not_configured</code> until a concrete executable is added to the
+            controlled registry. An environment command override is treated as an
+            untrusted manual definition, not as the official built-in.
+          </p>
+
+          <h3>Update without carrying trust forward</h3>
+          <ol class="steps">
+            <li><strong>Stop the server</strong> before replacing its executable.</li>
+            <li><strong>Install the new vendor release</strong> and review its release notes and source.</li>
+            <li><strong>Select Check.</strong> Airlock should report <code>executable_changed</code> when the SHA-256 digest differs and will keep launch blocked.</li>
+            <li><strong>Review the new version and fingerprint</strong>, then explicitly approve the replacement executable.</li>
+            <li><strong>Discover tools again</strong> and review every new or changed schema before routing an Agent Hub run through the server.</li>
+          </ol>
+
+          <div class="callout secondary">
+            Do not edit <code>.iac-studio/mcp-airlock-attestations.json</code> or
+            <code>.iac-studio/mcp-airlock-tools.json</code> to suppress a warning.
+            They are local trust records, not configuration shortcuts. A malformed or
+            replaced record fails closed.
+          </div>
+
+          <h3>Understand Airlock states</h3>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Signal</th>
+                  <th>Meaning</th>
+                  <th>Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td><code>not_configured</code> or <code>command_missing</code></td>
+                  <td>No controlled executable is configured or available.</td>
+                  <td>Install from the linked vendor source, then run Check again.</td>
+                </tr>
+                <tr>
+                  <td><code>approval_required</code></td>
+                  <td>The executable was fingerprinted but has no matching local approval.</td>
+                  <td>Verify its origin and fingerprint before selecting Approve.</td>
+                </tr>
+                <tr>
+                  <td><code>executable_changed</code></td>
+                  <td>The executable no longer matches the approved fingerprint.</td>
+                  <td>Treat it as a new install; investigate, check the version, and re-approve deliberately.</td>
+                </tr>
+                <tr>
+                  <td><code>outdated</code>, <code>version_unknown</code>, or <code>version_mismatch</code></td>
+                  <td>The server does not satisfy its version policy.</td>
+                  <td>Install a supported release or fix the controlled health probe.</td>
+                </tr>
+                <tr>
+                  <td>Schema <code>new</code>, <code>changed</code>, or <code>unknown</code></td>
+                  <td>The advertised tool contract is not yet stable against local inventory.</td>
+                  <td>Review the schema and risk classification; do not route the tool until a repeat discovery reports it as known.</td>
+                </tr>
+                <tr>
+                  <td><code>blocked</code></td>
+                  <td>A trust, configuration, or launch gate failed closed.</td>
+                  <td>Read the individual checks. Do not bypass the block with an environment override.</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <p>
+            Even after a server is ready, tool routing still applies project, provider,
+            Cloud Connection, run-mode, risk, allowlist, and approval-gate checks. Airlock
+            withholds ambient cloud profiles and raw Cloud Connection secrets throughout
+            this workflow.
+          </p>
         </section>
 
         <section id="mcp-server" class="doc-section" data-title="mcp server ai clients claude cursor codex tools approval audit">

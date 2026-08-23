@@ -177,6 +177,33 @@ Typical modes are `read_only` for inventory and explanation tools,
 explicitly gated infrastructure changes. Every accepted or denied route is
 recorded on the Agent Run before invocation.
 
+### MCP Airlock trust model
+
+Airlock treats registry metadata, the installed executable, and the tools it
+exposes as separate trust decisions. A server marked `trusted` is a recognized
+vendor definition with an expected source, transport, and version policy; that
+label does not automatically trust the binary found on your machine.
+
+Before starting an external MCP server:
+
+1. Open the workspace **MCP** tab and select **Check**.
+2. Review the vendor source, observed version, checks, and SHA-256 executable
+   fingerprint. Select **Approve** only when they match the installation you
+   intended to use.
+3. Select **Tools** and review discovered tool names, risk classifications, and
+   schema state. New or changed schemas fail closed until observed consistently.
+4. Re-run this review after every MCP server upgrade. A changed executable
+   fingerprint invalidates the previous approval.
+
+Terraform MCP Server must be `v1.0.0` or newer and available as
+`terraform-mcp-server` on `PATH`. The AWS entry currently records the official
+AWS MCP collection as trusted source metadata but does not select one executable
+from that collection. Command or argument environment overrides enter untrusted
+manual mode and remain blocked.
+
+See the [MCP Airlock trust and update guide](https://olandodeflexy.github.io/IaCStudio/#mcp-airlock-trust)
+for the complete install, upgrade, schema-review, and troubleshooting workflow.
+
 `connection_id` is currently an authorization scope, not a credential export.
 Airlock withholds ambient cloud profiles and raw Cloud Connection secrets from
 external MCP processes. Scoped, short-lived credential delivery is tracked
