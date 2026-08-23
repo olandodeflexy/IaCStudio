@@ -46,6 +46,27 @@ func TestListIncludesTrustedBuiltinsWithoutHealthProbe(t *testing.T) {
 	}
 }
 
+func TestOfficialTerraformDefinitionRequiresStableVersion(t *testing.T) {
+	manager := NewManager(t.TempDir())
+	definition, ok := manager.lookup("terraform-official")
+	if !ok {
+		t.Fatal("terraform-official definition not found")
+	}
+	policy, err := parseVersionConstraint(definition.VersionConstraint)
+	if err != nil {
+		t.Fatalf("parse version constraint: %v", err)
+	}
+	if policy.operator != ">=" || policy.required != "1.0.0" {
+		t.Fatalf("version policy = %+v, want operator >= and required version 1.0.0", policy)
+	}
+	if len(definition.HealthCheckArgs) == 0 {
+		t.Fatal("version-constrained definition must include a health probe")
+	}
+	if !strings.Contains(definition.InstallHint, "v1.0.0 or newer") {
+		t.Fatalf("install hint does not explain the minimum version: %q", definition.InstallHint)
+	}
+}
+
 func TestEnvironmentCommandOverrideDoesNotInheritRegistryTrust(t *testing.T) {
 	t.Setenv("IAC_STUDIO_MCP_TERRAFORM_OFFICIAL_COMMAND", testExecutable(t))
 	launches := 0
