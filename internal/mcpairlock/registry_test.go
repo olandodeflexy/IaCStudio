@@ -52,8 +52,12 @@ func TestOfficialTerraformDefinitionRequiresStableVersion(t *testing.T) {
 	if !ok {
 		t.Fatal("terraform-official definition not found")
 	}
-	if definition.VersionConstraint != ">= 1.0.0" {
-		t.Fatalf("version constraint = %q, want %q", definition.VersionConstraint, ">= 1.0.0")
+	policy, err := parseVersionConstraint(definition.VersionConstraint)
+	if err != nil {
+		t.Fatalf("parse version constraint: %v", err)
+	}
+	if policy.operator != ">=" || policy.required != "1.0.0" {
+		t.Fatalf("version policy = %+v, want operator >= and required version 1.0.0", policy)
 	}
 	if len(definition.HealthCheckArgs) == 0 {
 		t.Fatal("version-constrained definition must include a health probe")
