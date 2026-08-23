@@ -162,6 +162,7 @@ export interface MCPAirlockServerDefinition {
   vendor: string;
   description: string;
   source_url: string;
+  package_source?: string;
   docs_url?: string;
   install_hint?: string;
   transport: string;

@@ -33,12 +33,19 @@ func TestListIncludesTrustedBuiltinsWithoutHealthProbe(t *testing.T) {
 	if !containsStatus(statuses, "aws-official") || !containsStatus(statuses, "terraform-official") {
 		t.Fatalf("missing built-in server statuses: %+v", statuses)
 	}
+	wantPackageSources := map[string]string{
+		"aws-official":       "pkg:github/awslabs/mcp",
+		"terraform-official": "pkg:github/hashicorp/terraform-mcp-server",
+	}
 	for _, status := range statuses {
 		if !status.Server.Trusted || !status.Server.ReadOnlyDefault || status.Server.CredentialMode != "none" {
 			t.Fatalf("built-in server is not locked down by default: %+v", status.Server)
 		}
 		if status.Server.LaunchSource != LaunchSourceRegistry {
 			t.Fatalf("built-in server launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceRegistry)
+		}
+		if status.Server.PackageSource != wantPackageSources[status.Server.ID] {
+			t.Fatalf("built-in server package source = %q, want %q", status.Server.PackageSource, wantPackageSources[status.Server.ID])
 		}
 		if strings.Contains(status.Server.InstallHint, "IAC_STUDIO_MCP_") {
 			t.Fatalf("built-in install hint recommends blocked environment overrides: %q", status.Server.InstallHint)
@@ -89,6 +96,9 @@ func TestEnvironmentCommandOverrideDoesNotInheritRegistryTrust(t *testing.T) {
 	if status.Server.LaunchSource != LaunchSourceEnvironmentOverride {
 		t.Fatalf("launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceEnvironmentOverride)
 	}
+	if status.Server.PackageSource != "" {
+		t.Fatalf("environment override inherited package source %q", status.Server.PackageSource)
+	}
 	if !hasCheck(status.Checks, "launch_provenance", "error") {
 		t.Fatalf("expected failed launch provenance check, got %+v", status.Checks)
 	}
@@ -105,6 +115,9 @@ func TestEnvironmentArgumentsOverrideDoesNotInheritRegistryTrust(t *testing.T) {
 	}
 	if status.Server.LaunchSource != LaunchSourceEnvironmentOverride {
 		t.Fatalf("launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceEnvironmentOverride)
+	}
+	if status.Server.PackageSource != "" {
+		t.Fatalf("environment override inherited package source %q", status.Server.PackageSource)
 	}
 }
 
@@ -126,6 +139,9 @@ func TestEnvironmentHealthArgumentsOverrideDoesNotRunProbe(t *testing.T) {
 	}
 	if status.Server.LaunchSource != LaunchSourceEnvironmentOverride {
 		t.Fatalf("launch source = %q, want %q", status.Server.LaunchSource, LaunchSourceEnvironmentOverride)
+	}
+	if status.Server.PackageSource != "" {
+		t.Fatalf("environment override inherited package source %q", status.Server.PackageSource)
 	}
 	if probes != 0 {
 		t.Fatalf("blocked health arguments override invoked %d probes", probes)

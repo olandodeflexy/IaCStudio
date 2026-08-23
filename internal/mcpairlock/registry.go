@@ -56,6 +56,7 @@ type ServerDefinition struct {
 	Vendor            string   `json:"vendor"`
 	Description       string   `json:"description"`
 	SourceURL         string   `json:"source_url"`
+	PackageSource     string   `json:"package_source,omitempty"`
 	DocsURL           string   `json:"docs_url,omitempty"`
 	InstallHint       string   `json:"install_hint,omitempty"`
 	Transport         string   `json:"transport"`
@@ -422,6 +423,7 @@ func builtInDefinitions() []ServerDefinition {
 			Vendor:          "AWS",
 			Description:     "Official AWS MCP entry point for cloud inventory and operational context.",
 			SourceURL:       "https://github.com/awslabs/mcp",
+			PackageSource:   "pkg:github/awslabs/mcp",
 			DocsURL:         "https://github.com/awslabs/mcp",
 			InstallHint:     "Install the official AWS MCP server locally. Environment command and argument overrides remain blocked until executable attestation is configured.",
 			Transport:       "stdio",
@@ -437,6 +439,7 @@ func builtInDefinitions() []ServerDefinition {
 			Vendor:            "HashiCorp",
 			Description:       "Official Terraform MCP server for registry, module, provider, and Terraform workflow context.",
 			SourceURL:         "https://github.com/hashicorp/terraform-mcp-server",
+			PackageSource:     "pkg:github/hashicorp/terraform-mcp-server",
 			DocsURL:           "https://developer.hashicorp.com/terraform/mcp-server",
 			InstallHint:       "Install terraform-mcp-server v1.0.0 or newer on PATH. Environment command and argument overrides remain blocked until executable attestation is configured.",
 			Transport:         "stdio",
@@ -457,6 +460,7 @@ func normalizeDefinitions(definitions []ServerDefinition) []ServerDefinition {
 	for i := range out {
 		out[i].ID = strings.TrimSpace(out[i].ID)
 		out[i].Command = strings.TrimSpace(out[i].Command)
+		out[i].PackageSource = strings.TrimSpace(out[i].PackageSource)
 		out[i].VersionConstraint = strings.TrimSpace(out[i].VersionConstraint)
 		out[i] = applyEnvOverrides(out[i])
 		if out[i].LaunchSource == "" {
@@ -502,6 +506,7 @@ func applyEnvOverrides(definition ServerDefinition) ServerDefinition {
 	if launchOverridden {
 		definition.LaunchSource = LaunchSourceEnvironmentOverride
 		definition.Trusted = false
+		definition.PackageSource = ""
 	}
 	return definition
 }
