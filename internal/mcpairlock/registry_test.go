@@ -501,6 +501,7 @@ func TestStartStopLifecycleUsesLauncherAndReportsRunning(t *testing.T) {
 			return handle, nil
 		}),
 	)
+	approveExecutableForLaunchTest(t, manager, "terraform")
 
 	status, err := manager.Start(context.Background(), "terraform")
 	if err != nil {
@@ -554,6 +555,7 @@ func TestStartDoesNotBlockLifecycleStatusDuringLaunch(t *testing.T) {
 			return newFakeProcess(), nil
 		}),
 	)
+	approveExecutableForLaunchTest(t, manager, "terraform")
 
 	startDone := make(chan error, 1)
 	go func() {
@@ -605,6 +607,7 @@ func TestConcurrentStopClaimsProcessOnce(t *testing.T) {
 			return handle, nil
 		}),
 	)
+	approveExecutableForLaunchTest(t, manager, "terraform")
 
 	if _, err := manager.Start(context.Background(), "terraform"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -661,6 +664,7 @@ func TestStopAfterProcessExitUsesDistinctStopCheck(t *testing.T) {
 			return handle, nil
 		}),
 	)
+	approveExecutableForLaunchTest(t, manager, "terraform")
 
 	if _, err := manager.Start(context.Background(), "terraform"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -724,6 +728,7 @@ func TestExitedProcessIsReapedIntoStatus(t *testing.T) {
 			return handle, nil
 		}),
 	)
+	approveExecutableForLaunchTest(t, manager, "terraform")
 
 	if _, err := manager.Start(context.Background(), "terraform"); err != nil {
 		t.Fatalf("Start: %v", err)
@@ -771,6 +776,21 @@ func assertUniqueCheckNames(t *testing.T, status ServerStatus) {
 			t.Fatalf("duplicate check name %q in %+v", check.Name, status.Checks)
 		}
 		seen[check.Name] = struct{}{}
+	}
+}
+
+func approveExecutableForLaunchTest(t *testing.T, manager *Manager, id string) {
+	t.Helper()
+	definition, ok := manager.lookup(id)
+	if !ok {
+		t.Fatalf("definition %q not found", id)
+	}
+	command, err := resolveExecutable(definition.Command)
+	if err != nil {
+		t.Fatalf("resolve executable: %v", err)
+	}
+	if _, err := manager.ApproveExecutable(context.Background(), id, executableFingerprintForTest(t, command)); err != nil {
+		t.Fatalf("ApproveExecutable: %v", err)
 	}
 }
 

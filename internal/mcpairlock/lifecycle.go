@@ -61,44 +61,91 @@ func WithLauncher(launcher LauncherFunc) Option {
 
 // Start launches one configured stdio MCP server with a sanitized environment.
 func (m *Manager) Start(ctx context.Context, id string) (ServerStatus, error) {
-	definition, ok := m.lookup(id)
-	if !ok {
-		return ServerStatus{}, ErrUnknownServer
+	status, err := m.Check(ctx, id)
+	if err != nil {
+		return ServerStatus{}, err
 	}
-	status := m.passiveStatus(definition)
-	if status.State != "available" {
-		return m.withLifecycleStatus(status), nil
-	}
+	definition := status.Server
 
 	now := time.Now().UTC()
 	m.lifecycle.mu.Lock()
 	m.reapLocked(id, now)
 	if startedAt, ok := m.lifecycle.starting[id]; ok {
+		status.Checks = removeCheck(status.Checks, "lifecycle")
 		status = m.withStartingStatusLocked(status, startedAt)
 		status.Checks = append(status.Checks, Check{Name: "start", Status: "warn", Message: "server launch is already in progress"})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
 	if record, ok := m.lifecycle.running[id]; ok {
+		status.Checks = removeCheck(status.Checks, "lifecycle")
 		status = m.withLifecycleStatusLocked(status, record)
 		status.Checks = append(status.Checks, Check{Name: "start", Status: "pass", Message: "server is already running"})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
 	if record, ok := m.lifecycle.stopping[id]; ok {
+		status.Checks = removeCheck(status.Checks, "lifecycle")
 		status = m.withStoppingStatusLocked(status, record)
 		status.Checks = append(status.Checks, Check{Name: "start", Status: "warn", Message: "server stop is in progress"})
 		m.lifecycle.mu.Unlock()
 		return status, nil
 	}
+	if !status.Ready {
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "error", Message: "launch blocked because Airlock readiness checks failed"})
+		m.lifecycle.mu.Unlock()
+		return status, nil
+	}
+	if status.ExecutableAttestation != ExecutableAttestationApproved {
+		status.Ready = false
+		status.State = "blocked"
+		status.Summary = "MCP server launch requires an approved executable fingerprint."
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "error", Message: "launch blocked until the observed executable fingerprint is approved"})
+		m.lifecycle.mu.Unlock()
+		return status, nil
+	}
+	status.Running = false
+	status.StartedAt = ""
+	status.State = "ready"
+	status.Summary = "Airlock launch preflight passed."
+	status.Checks = removeCheck(status.Checks, "lifecycle")
 	m.lifecycle.starting[id] = now
 	m.lifecycle.mu.Unlock()
 
-	handle, err := m.launcher(ctx, definition, m.timeout)
+	verifiedDefinition, fingerprint, verdict, attestationCheck, verifyErr := m.verifyLaunchExecutable(definition, status.ExecutableFingerprint)
+	if attestationCheck.Name != "" {
+		status.Checks = removeCheck(status.Checks, attestationCheck.Name)
+		status.Checks = append(status.Checks, attestationCheck)
+	}
+	status.ExecutableAttestation = verdict
+	if verifyErr != nil {
+		m.lifecycle.mu.Lock()
+		delete(m.lifecycle.starting, id)
+		m.lifecycle.mu.Unlock()
+		status.Ready = false
+		status.State = "blocked"
+		status.Summary = "MCP server executable identity could not be revalidated after the launch preflight."
+		status.Checks = removeCheck(status.Checks, "executable_fingerprint")
+		status.Checks = append(status.Checks, Check{Name: "executable_fingerprint", Status: "error", Message: "launch executable fingerprint changed or became unavailable after preflight"})
+		if fingerprint.Algorithm != "" {
+			status.ExecutableFingerprint = &fingerprint
+		} else {
+			status.ExecutableFingerprint = nil
+		}
+		if attestationCheck.Name == "" {
+			status.Checks = removeCheck(status.Checks, "executable_attestation")
+			status.Checks = append(status.Checks, Check{Name: "executable_attestation", Status: "error", Message: "launch executable approval could not be revalidated"})
+		}
+		status.Checks = append(status.Checks, Check{Name: "start", Status: "error", Message: "launch blocked because executable identity could not be revalidated"})
+		return status, nil
+	}
+
+	handle, err := m.launcher(ctx, verifiedDefinition, m.timeout)
 	m.lifecycle.mu.Lock()
 	defer m.lifecycle.mu.Unlock()
 	delete(m.lifecycle.starting, id)
 	if err != nil {
+		status.Ready = false
 		status.State = "launch_failed"
 		status.Summary = "Airlock could not start the MCP server process."
 		status.Checks = append(status.Checks, Check{Name: "start", Status: "error", Message: redactOutput(err.Error())})
@@ -110,6 +157,39 @@ func (m *Manager) Start(ctx context.Context, id string) (ServerStatus, error) {
 	status = m.withLifecycleStatusLocked(status, record)
 	status.Checks = append(status.Checks, Check{Name: "start", Status: "pass", Message: "server process started with a sanitized environment"})
 	return status, nil
+}
+
+func (m *Manager) verifyLaunchExecutable(definition ServerDefinition, expected *ExecutableFingerprint) (ServerDefinition, ExecutableFingerprint, ExecutableAttestationVerdict, Check, error) {
+	if expected == nil {
+		return ServerDefinition{}, ExecutableFingerprint{}, ExecutableAttestationApprovalRequired, Check{}, errors.New("launch preflight did not fingerprint the executable")
+	}
+	resolvedCommand, err := resolveExecutable(definition.Command)
+	if err != nil {
+		return ServerDefinition{}, ExecutableFingerprint{}, ExecutableAttestationApprovalRequired, Check{}, errors.New("launch executable is unavailable")
+	}
+	fingerprint, err := fingerprintExecutable(resolvedCommand)
+	if err != nil {
+		return ServerDefinition{}, ExecutableFingerprint{}, ExecutableAttestationApprovalRequired, Check{}, errors.New("launch executable identity is unavailable")
+	}
+	verdict, attestationCheck := m.executableAttestationStatus(definition, fingerprint)
+	if !sameExecutableFingerprint(*expected, fingerprint) {
+		return ServerDefinition{}, fingerprint, verdict, attestationCheck, errors.New("launch executable changed after preflight")
+	}
+	if verdict != ExecutableAttestationApproved {
+		return ServerDefinition{}, fingerprint, verdict, attestationCheck, errors.New("launch executable approval changed after preflight")
+	}
+	definition.Command = resolvedCommand
+	return definition, fingerprint, verdict, attestationCheck, nil
+}
+
+func removeCheck(checks []Check, name string) []Check {
+	filtered := make([]Check, 0, len(checks))
+	for _, check := range checks {
+		if check.Name != name {
+			filtered = append(filtered, check)
+		}
+	}
+	return filtered
 }
 
 // Stop terminates one running MCP server process. It is safe to call when the

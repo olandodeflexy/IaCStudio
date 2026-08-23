@@ -169,6 +169,7 @@ func TestCheckFailsClosedWhenVersionConstraintHasNoProbe(t *testing.T) {
 
 func TestCheckPreservesVersionFailureForRunningServer(t *testing.T) {
 	handle := newFakeProcess()
+	probeOutput := "terraform-mcp-server 1.4.0"
 	manager := NewManager(t.TempDir(),
 		WithDefinitions([]ServerDefinition{{
 			ID:                "terraform",
@@ -181,18 +182,20 @@ func TestCheckPreservesVersionFailureForRunningServer(t *testing.T) {
 			CredentialMode:    "none",
 		}}),
 		WithProbe(func(context.Context, string, []string, time.Duration) ProbeResult {
-			return ProbeResult{Output: "terraform-mcp-server 1.3.9"}
+			return ProbeResult{Output: probeOutput}
 		}),
 		WithLauncher(func(context.Context, ServerDefinition, time.Duration) (ProcessHandle, error) {
 			return handle, nil
 		}),
 	)
 	t.Cleanup(func() { _ = manager.Close() })
+	approveExecutableForLaunchTest(t, manager, "terraform")
 
 	started, err := manager.Start(context.Background(), "terraform")
 	if err != nil || !started.Running {
 		t.Fatalf("Start: status=%+v err=%v", started, err)
 	}
+	probeOutput = "terraform-mcp-server 1.3.9"
 	status, err := manager.Check(context.Background(), "terraform")
 	if err != nil {
 		t.Fatalf("Check: %v", err)

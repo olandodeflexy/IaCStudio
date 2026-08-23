@@ -231,6 +231,13 @@ func TestMCPAirlockStartStopRoutesUseLifecycle(t *testing.T) {
 			return handle, nil
 		}),
 	)
+	preflight, err := manager.Check(context.Background(), "terraform")
+	if err != nil || preflight.ExecutableFingerprint == nil {
+		t.Fatalf("observe executable fingerprint: status=%+v err=%v", preflight, err)
+	}
+	if _, err := manager.ApproveExecutable(context.Background(), "terraform", *preflight.ExecutableFingerprint); err != nil {
+		t.Fatalf("approve executable: %v", err)
+	}
 	srv := httptest.NewServer(fullRouterForTestWithAirlock(t, root, manager))
 	defer srv.Close()
 
